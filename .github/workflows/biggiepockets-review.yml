@@ -1,0 +1,181 @@
+name: BiggiePockets Code Review (reusable)
+
+# Reusable two-stage AI review (Codex first pass, then Claude verifies and
+# synthesizes) anchored on the PR's JIRA ticket, with the BiggiePockets service
+# account submitting the resulting approve / request-changes decision.
+#
+# Callers own the triggers and gating (e.g. fire on review_requested when
+# BiggiePockets is the requested reviewer) and pass the PR number as `pr`.
+# Secrets are supplied by the caller via `secrets: inherit`:
+#   OPENAI_KEY, CLAUDE_CODE_OAUTH_TOKEN, JIRA_EMAIL, JIRA_API_TOKEN,
+#   BIGGIEPOCKETS_PAT.
+on:
+  workflow_call:
+    inputs:
+      pr:
+        description: 'PR number to review'
+        required: true
+        type: string
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write # claude-code-action authenticates via OIDC
+    env:
+      PR: ${{ inputs.pr }}
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ inputs.pr }}/head
+          fetch-depth: 0
+
+      # Resolve PR context (base ref and title) from the API.
+      - name: Resolve PR context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          base=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json baseRefName -q .baseRefName)
+          title=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json title -q .title)
+          echo "BASE_REF=$base" >> "$GITHUB_ENV"
+          echo "PR_TITLE=$title" >> "$GITHUB_ENV"
+          echo "Reviewing PR #$PR (base $base): $title"
+
+      - name: Compute PR diff
+        run: |
+          git fetch --no-tags origin "$BASE_REF"
+          git diff "origin/$BASE_REF...HEAD" > pr.diff
+          echo "PR diff is $(wc -l < pr.diff) lines"
+
+      # Anchor the review on the work's intent. Always writes ticket.json: either the
+      # ticket fields, or {"available": false} so a missing/unfetchable ticket degrades
+      # to a diff-based review instead of failing the gate.
+      - name: Fetch JIRA ticket for intent
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          key=$(printf '%s' "$PR_TITLE" | grep -oE 'BIG-[0-9]+' | head -1 || true)
+          if [ -z "$key" ]; then
+            echo '{"available": false, "reason": "no BIG-XXXXX key in PR title"}' > ticket.json
+            echo "No JIRA ticket key in PR title; falling back to diff-based review."
+            exit 0
+          fi
+
+          http=$(curl -sS -w '%{http_code}' -o ticket-raw.json \
+            -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H 'Accept: application/json' \
+            "https://biggerpockets.atlassian.net/rest/api/3/issue/$key?fields=summary,description,customfield_11557") \
+            || http="000"
+
+          if [ "$http" = "200" ]; then
+            jq --arg key "$key" '{available: true, key: $key, summary: .fields.summary, description: .fields.description, acceptance_criteria: .fields.customfield_11557}' \
+              ticket-raw.json > ticket.json
+            echo "Wrote ticket.json for $key"
+          else
+            echo "{\"available\": false, \"reason\": \"fetch failed (HTTP $http) for $key\"}" > ticket.json
+            echo "Could not fetch $key (HTTP $http); falling back to diff-based review."
+          fi
+
+      # Gather the existing PR discussion so the review accounts for context that lives
+      # in conversation rather than the diff: general comments, inline review threads, and
+      # prior review bodies. Always writes conversations.json (empty arrays if none).
+      - name: Fetch PR conversations
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          comments=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            -q '[.[] | {author: .user.login, created_at, body}]' | jq -s 'add // []')
+          review_comments=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/pulls/$PR/comments" \
+            -q '[.[] | {author: .user.login, path, line, created_at, body}]' | jq -s 'add // []')
+          reviews=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" \
+            -q '[.[] | select(.body != "") | {author: .user.login, state, submitted_at, body}]' | jq -s 'add // []')
+
+          jq -n \
+            --argjson comments "$comments" \
+            --argjson review_comments "$review_comments" \
+            --argjson reviews "$reviews" \
+            '{issue_comments: $comments, review_comments: $review_comments, reviews: $reviews}' \
+            > conversations.json
+          echo "Wrote conversations.json ($(jq '.issue_comments | length' conversations.json) comments, $(jq '.review_comments | length' conversations.json) review comments, $(jq '.reviews | length' conversations.json) reviews)"
+
+      # Stage 1: Codex reviews the diff against the ticket intent and writes findings.
+      - name: Codex first-pass review
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_KEY }}
+          sandbox: read-only
+          output-file: codex-findings.md
+          prompt: |
+            Run `codex review --base main` and output the findings report.
+
+            First read ticket.json. If "available" is true, use its summary and acceptance_criteria
+            as intent context when reviewing: flag missed requirements and scope creep in addition
+            to the standard diff analysis.
+
+      # Stage 2: Claude verifies Codex's findings, reviews independently, and decides.
+      - name: Claude verify and synthesize
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowedTools "Read,Grep,Glob,Bash,Write"'
+          prompt: |
+            Synthesize a single review decision for pull request #${{ env.PR }}.
+
+            1. Read ticket.json. If "available" is true, treat its summary, description, and
+               acceptance_criteria (Atlassian Document Format JSON) as the intended behavior.
+            2. Read Codex's first-pass findings in codex-findings.md (if missing or empty, proceed
+               with your own review).
+            3. Read conversations.json: the PR's existing discussion (issue_comments, review_comments
+               with file/line, and prior reviews). Factor this context into your review: respect
+               decisions already settled in the thread, don't re-raise concerns the author has already
+               addressed or that were explicitly accepted, and weigh unresolved objections raised by
+               human reviewers.
+            4. Independently review the diff in pr.diff. Do NOT rely on the hunks alone: for changed
+               functions, methods, or signatures, grep for callers and related tests to judge impact.
+               When the diff adds or changes image assets, check that they are provided at retina
+               quality (e.g. a 2x asset or an `srcset`/`@2x` variant); flag raster images that ship
+               only at 1x where a high-DPI version is expected.
+            5. Validate which of Codex's findings are real (discard false positives), add any genuine
+               issues Codex missed, and (when a ticket is available) check for missed acceptance
+               criteria or scope creep.
+            6. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
+               genuine, blocking issue; otherwise "approve".
+
+            Write a file named verdict.json in the current working directory with EXACTLY this shape:
+              {"verdict": "approve" | "request_changes", "summary": "<concise markdown>"}
+            In the summary, note which of Codex's findings you confirmed, anything you added, how the
+            change measures against the ticket, how the existing PR discussion informed your decision,
+            and the rationale for the decision.
+
+      - name: Submit review as BiggiePockets
+        env:
+          # PAT authenticating as the BiggiePockets service account. A bot cannot
+          # approve its own PR, so this never gates BiggiePockets-authored PRs.
+          GH_TOKEN: ${{ secrets.BIGGIEPOCKETS_PAT }}
+        run: |
+          if [ ! -f verdict.json ]; then
+            echo "::error::Review did not produce verdict.json" >&2
+            exit 1
+          fi
+
+          verdict=$(jq -r '.verdict' verdict.json)
+          summary=$(jq -r '.summary' verdict.json)
+
+          case "$verdict" in
+            approve)
+              gh pr review "$PR" --approve --body "$summary"
+              ;;
+            request_changes)
+              gh pr review "$PR" --request-changes --body "$summary"
+              ;;
+            *)
+              echo "::error::Unexpected verdict from review: '$verdict'" >&2
+              exit 1
+              ;;
+          esac
