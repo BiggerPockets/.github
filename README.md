@@ -1,2 +1,103 @@
 # .github
-Org-wide GitHub defaults and shared reusable workflows
+
+Org-wide GitHub defaults and shared reusable workflows.
+
+## Reviews by BiggiePockets
+
+`.github/workflows/biggiepockets-review.yml` is a **reusable** workflow that runs a
+two-stage AI code review on a pull request:
+
+1. **Codex first pass** — reviews the diff against the PR's JIRA ticket and writes findings.
+2. **Claude verify & synthesize** — validates Codex's findings, reviews the diff
+   independently (grepping for callers/tests, factoring in the existing PR discussion),
+   checks the change against the ticket's acceptance criteria, and decides a single verdict.
+
+The **BiggiePockets** service account then submits the resulting `approve` /
+`request_changes` review on the PR. If the PR has no `BIG-XXXXX` key in its title (or the
+ticket can't be fetched), the review degrades gracefully to a diff-based review instead of
+failing.
+
+The review logic lives centrally in this repo. Each consuming repo only adds a thin
+**caller** workflow that owns the triggers and gating and delegates to this one.
+
+### Installing it in a repo
+
+Do this once per repo you want BiggiePockets to review.
+
+#### 1. Install the Claude GitHub app
+
+The Claude verification stage uses [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action),
+which needs the official Claude GitHub app installed on the repo. From a clone of the
+target repo, run the slash command in Claude Code:
+
+```
+/install-github-app
+```
+
+This installs the [Claude GitHub app](https://github.com/apps/claude), grants it the
+required repo permissions, and adds the Claude auth secret to the repo. You need **admin
+access** on the repo and an authenticated `gh` CLI. (If the command fails, install the app
+manually from https://github.com/apps/claude and add the secret by hand — see the secrets
+table below.)
+
+#### 2. Add the caller workflow
+
+Create `.github/workflows/biggiepockets-review.yml` in the target repo:
+
+```yaml
+name: BiggiePockets Code Review
+
+# Thin caller for the org-wide reusable review workflow in BiggerPockets/.github.
+# This file owns the triggers and gating; the review logic lives centrally.
+on:
+  pull_request:
+    types: [review_requested]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number to review'
+        required: true
+        type: string
+
+jobs:
+  review:
+    # React to a manual dispatch, or to BiggiePockets specifically being requested.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.requested_reviewer.login == 'BiggiePockets'
+    uses: BiggerPockets/.github/.github/workflows/biggiepockets-review.yml@main
+    with:
+      pr: ${{ github.event.pull_request.number || inputs.pr }}
+    secrets: inherit
+```
+
+#### 3. Make the secrets available
+
+The reusable workflow consumes the secrets below via `secrets: inherit`. Configure them as
+**organization secrets** (recommended — set once, available to every repo) or as per-repo
+secrets if you prefer to scope them.
+
+| Secret | Used for |
+| --- | --- |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Authenticates the Claude verification stage. Set by `/install-github-app` in step 1. |
+| `OPENAI_KEY` | Authenticates the Codex first-pass review. |
+| `JIRA_EMAIL` | Atlassian account email used to fetch the PR's JIRA ticket for intent. |
+| `JIRA_API_TOKEN` | Atlassian API token paired with `JIRA_EMAIL`. |
+| `BIGGIEPOCKETS_PAT` | Personal access token for the BiggiePockets service account, which submits the review. (A bot can't approve its own PR, so this never gates BiggiePockets-authored PRs.) |
+
+#### 4. Give BiggiePockets access
+
+The **BiggiePockets** service account must have access to the repo so it can be requested
+as a reviewer and post the review. Add it as a collaborator (or via a team) with at least
+write access.
+
+### Using it
+
+Once installed, trigger a review either way:
+
+- **Request a review** — add **BiggiePockets** as a reviewer on the PR. The workflow fires
+  on `review_requested` and only runs when BiggiePockets specifically is the requested
+  reviewer.
+- **On demand** — run the `BiggiePockets Code Review` workflow via **Actions →
+  workflow_dispatch** and pass the PR number. (Available once the caller file is on the
+  repo's default branch.)
