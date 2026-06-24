@@ -24,20 +24,28 @@ The review logic lives centrally in this repo. Each consuming repo only adds a t
 
 Do this once per repo you want BiggiePockets to review.
 
-#### 1. Install the Claude GitHub app
+#### 1. Install the Claude GitHub app and add its auth token
 
 The Claude verification stage uses [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action),
-which needs the official Claude GitHub app installed on the repo. From a clone of the
-target repo, run the slash command in Claude Code:
+which needs two things: the official [Claude GitHub app](https://github.com/apps/claude)
+installed, and a `CLAUDE_CODE_OAUTH_TOKEN` secret it can authenticate with. From a clone of
+the target repo, run the slash command in Claude Code:
 
 ```
 /install-github-app
 ```
 
-This installs the [Claude GitHub app](https://github.com/apps/claude), grants it the
-required repo permissions, and adds the Claude auth secret to the repo. You need **admin
-access** on the repo and an authenticated `gh` CLI. (If the command fails, install the app
-manually from https://github.com/apps/claude and add the auth secret by hand.)
+It walks you through both — but the two halves have very different scopes:
+
+- **App install — once for the whole org.** If the Claude app is already installed
+  org-wide, skip the app-installation step; you do **not** need to reinstall it per repo.
+- **Auth token — per repo.** `/install-github-app` writes `CLAUDE_CODE_OAUTH_TOKEN` as a
+  **repo** secret, not an org secret, so this is the part you actually need on each new repo.
+  If you'd rather set it once, add `CLAUDE_CODE_OAUTH_TOKEN` as an **organization secret** by
+  hand and skip this command entirely.
+
+You need **admin access** on the repo and an authenticated `gh` CLI. (If the command fails,
+install the app manually from https://github.com/apps/claude and add the token by hand.)
 
 #### 2. Add the caller workflow
 
