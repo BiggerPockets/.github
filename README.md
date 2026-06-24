@@ -37,8 +37,7 @@ target repo, run the slash command in Claude Code:
 This installs the [Claude GitHub app](https://github.com/apps/claude), grants it the
 required repo permissions, and adds the Claude auth secret to the repo. You need **admin
 access** on the repo and an authenticated `gh` CLI. (If the command fails, install the app
-manually from https://github.com/apps/claude and add the secret by hand — see the secrets
-table below.)
+manually from https://github.com/apps/claude and add the auth secret by hand.)
 
 #### 2. Add the caller workflow
 
@@ -73,17 +72,15 @@ jobs:
 
 #### 3. Make the secrets available
 
-The reusable workflow consumes the secrets below via `secrets: inherit`. Configure them as
-**organization secrets** (recommended — set once, available to every repo) or as per-repo
-secrets if you prefer to scope them.
+The reusable workflow consumes several secrets via `secrets: inherit`: credentials for the
+two AI review providers, an Atlassian email + API token to fetch the PR's JIRA ticket for
+intent, and a personal access token for the BiggiePockets service account that submits the
+review. (The Claude auth secret is set by `/install-github-app` in step 1; the rest you add
+yourself.) Configure them as **organization secrets** (recommended — set once, available to
+every repo) or as per-repo secrets if you prefer to scope them.
 
-| Secret | Used for |
-| --- | --- |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Authenticates the Claude verification stage. Set by `/install-github-app` in step 1. |
-| `OPENAI_KEY` | Authenticates the Codex first-pass review. |
-| `JIRA_EMAIL` | Atlassian account email used to fetch the PR's JIRA ticket for intent. |
-| `JIRA_API_TOKEN` | Atlassian API token paired with `JIRA_EMAIL`. |
-| `BIGGIEPOCKETS_PAT` | Personal access token for the BiggiePockets service account, which submits the review. (A bot can't approve its own PR, so this never gates BiggiePockets-authored PRs.) |
+The exact secret names each step expects are visible in the `env:` and `with:` blocks of
+[`.github/workflows/biggiepockets-review.yml`](.github/workflows/biggiepockets-review.yml).
 
 #### 4. Give BiggiePockets access
 
