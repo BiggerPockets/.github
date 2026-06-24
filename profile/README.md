@@ -6,7 +6,7 @@ We help people build wealth through real estate investing — connecting million
 
 Our flagship conference is back. Join thousands of investors for networking, world-class education, and the deals that shape the year ahead.
 
-👉 **[Learn more and register for BPCon 2026](https://www.biggerpockets.com/events/bpcon)**
+👉 **[Learn more and register for BPCon 2026](https://get.biggerpockets.com/bpcon-2026/)**
 
 ## Around the web
 
