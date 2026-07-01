@@ -105,7 +105,14 @@ jobs:
           echo "Wrote conversations.json ($(jq '.issue_comments | length' conversations.json) comments, $(jq '.review_comments | length' conversations.json) review comments, $(jq '.reviews | length' conversations.json) reviews)"
 
       # Stage 1: Codex reviews the diff against the ticket intent and writes findings.
+      # continue-on-error keeps a Codex failure from blocking the review: the most common
+      # failure is an OpenAI "Quota exceeded. Check your plan and billing details" error, and
+      # Stage 2 is designed to proceed on its own when codex-findings.md is missing or empty.
+      # The next step still surfaces the failure as a warning so a genuinely broken Codex
+      # (e.g. a bad key) doesn't silently disappear.
       - name: Codex first-pass review
+        id: codex
+        continue-on-error: true
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_KEY }}
@@ -117,6 +124,15 @@ jobs:
             First read ticket.json. If "available" is true, use its summary and acceptance_criteria
             as intent context when reviewing: flag missed requirements and scope creep in addition
             to the standard diff analysis.
+
+      # If Codex failed (it exits nonzero and writes no codex-findings.md — e.g. on a quota
+      # error), leave an empty findings file so Stage 2 cleanly takes its no-findings path,
+      # and record a warning for observability.
+      - name: Note skipped Codex first pass
+        if: steps.codex.outcome == 'failure'
+        run: |
+          echo "::warning::Codex first-pass review failed (commonly an OpenAI quota error); continuing with a Claude-only review."
+          : > codex-findings.md
 
       # Stage 2: Claude verifies Codex's findings, reviews independently, and decides.
       - name: Claude verify and synthesize
