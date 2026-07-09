@@ -139,6 +139,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Allow the `claude` bot to trigger this review. Without this, PRs opened
+          # by the claude bot are rejected with "Workflow initiated by non-human
+          # actor: claude (type: Bot). Add bot to allowed_bots list."
+          allowed_bots: 'claude'
           claude_args: '--allowedTools "Read,Grep,Glob,Bash,Write"'
           prompt: |
             Synthesize a single review decision for pull request #${{ env.PR }}.
