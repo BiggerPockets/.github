@@ -104,11 +104,26 @@ jobs:
             > conversations.json
           echo "Wrote conversations.json ($(jq '.issue_comments | length' conversations.json) comments, $(jq '.review_comments | length' conversations.json) review comments, $(jq '.reviews | length' conversations.json) reviews)"
 
-      # Stage 1: Codex reviews the diff against the ticket intent and writes findings.
-      # continue-on-error keeps a Codex failure from blocking the review: the most common
-      # failure is an OpenAI "Quota exceeded. Check your plan and billing details" error, and
-      # Stage 2 is designed to proceed on its own when codex-findings.md is missing or empty.
-      # The next step still surfaces the failure as a warning so a genuinely broken Codex
+      # Stage 1: Codex reviews the diff against the ticket intent and writes findings to
+      # codex-findings.md (the `output-file`, which captures Codex's final message).
+      #
+      # Codex reviews the diff directly here rather than shelling out to the `codex review`
+      # subcommand. `codex review` starts its own in-process app-server that needs both a
+      # writable runtime home AND a localhost connection to the action's Responses API proxy.
+      # When it was launched as a child of `codex exec`, that child inherited the exec sandbox,
+      # which grants neither by default: under `sandbox: read-only` it died writing runtime
+      # state ("failed to initialize in-process app-server client: Read-only file system
+      # (os error 30)"), and under a writable profile it then died reaching the proxy
+      # ("stream disconnected before completion: error sending request for url
+      # http://127.0.0.1.../v1/responses"), because that profile grants filesystem writes but
+      # no network. Either way Codex produced no findings and every review silently degraded to
+      # a Claude-only pass. Reviewing inline via this step's own `codex exec` model call avoids
+      # the nested subprocess entirely: it needs only to read files, so a read-only sandbox is
+      # sufficient and there is no child process to sandbox.
+      #
+      # continue-on-error keeps a Codex failure (e.g. an OpenAI "Quota exceeded" error) from
+      # blocking the review: Stage 2 proceeds on its own when codex-findings.md is missing or
+      # empty. The next step still surfaces the failure as a warning so a genuinely broken Codex
       # (e.g. a bad key) doesn't silently disappear.
       - name: Codex first-pass review
         id: codex
@@ -119,11 +134,20 @@ jobs:
           sandbox: read-only
           output-file: codex-findings.md
           prompt: |
-            Run `codex review --base main` and output the findings report.
+            Perform a first-pass code review of this pull request and output a concise
+            markdown findings report. Your final message IS the report — it is captured
+            verbatim and handed to a second reviewer, so do not add conversational preamble.
 
-            First read ticket.json. If "available" is true, use its summary and acceptance_criteria
-            as intent context when reviewing: flag missed requirements and scope creep in addition
-            to the standard diff analysis.
+            1. Read ticket.json. If "available" is true, treat its summary and acceptance_criteria
+               as the intended behavior: flag missed requirements and scope creep alongside the
+               standard diff analysis. If it is not available, do a diff-based review.
+            2. Review the diff in pr.diff. Do NOT rely on the hunks alone: for changed functions,
+               methods, or signatures, grep the repository for callers and related tests to judge
+               impact.
+            3. Report concrete issues — bugs, regressions, security problems, and (when a ticket is
+               available) missed acceptance criteria or scope creep — each with a file/line
+               reference and a brief rationale. If nothing is blocking, say so briefly. Be specific
+               and pragmatic; this is a first pass that a second reviewer will independently verify.
 
       # If Codex failed (it exits nonzero and writes no codex-findings.md — e.g. on a quota
       # error), leave an empty findings file so Stage 2 cleanly takes its no-findings path,
