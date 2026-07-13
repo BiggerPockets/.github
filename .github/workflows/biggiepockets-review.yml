@@ -353,8 +353,8 @@ jobs:
                         kind: "llm",
                         model_name: "codex",
                         model_provider: "openai",
-                        input: {value: "pr:\($pr)"},
-                        output: {value: "findings_lines:\($codex_findings_lines)"}
+                        input: {messages: [{role: "user", content: "Review pr:\($pr)"}]},
+                        output: {messages: [{role: "assistant", content: "findings_lines:\($codex_findings_lines)"}]}
                       }
                     },
                     {
@@ -369,8 +369,8 @@ jobs:
                         kind: "llm",
                         model_name: "claude-code",
                         model_provider: "anthropic",
-                        input: {value: "codex_findings_lines:\($codex_findings_lines)"},
-                        output: {value: "verdict:\($verdict)"}
+                        input: {messages: [{role: "user", content: "codex_findings_lines:\($codex_findings_lines)"}]},
+                        output: {messages: [{role: "assistant", content: "verdict:\($verdict)"}]}
                       }
                     }
                   ]
