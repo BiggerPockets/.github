@@ -87,6 +87,11 @@ review. (The Claude auth secret is set by `/install-github-app` in step 1; the r
 yourself.) Configure them as **organization secrets** (recommended — set once, available to
 every repo) or as per-repo secrets if you prefer to scope them.
 
+It also reports per-review quality metrics (verdict, timing, prompt version) to the
+`biggiepockets-review` app in Datadog LLM Observability via `secrets.DATADOG_API_KEY`. This
+secret is optional — reviews still run and post normally without it, but no metrics are
+reported.
+
 The exact secret names each step expects are visible in the `env:` and `with:` blocks of
 [`.github/workflows/biggiepockets-review.yml`](.github/workflows/biggiepockets-review.yml).
 
