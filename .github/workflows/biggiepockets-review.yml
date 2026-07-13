@@ -8,7 +8,8 @@ name: BiggiePockets Code Review (reusable)
 # BiggiePockets is the requested reviewer) and pass the PR number as `pr`.
 # Secrets are supplied by the caller via `secrets: inherit`:
 #   OPENAI_KEY, CLAUDE_CODE_OAUTH_TOKEN, JIRA_EMAIL, JIRA_API_TOKEN,
-#   BIGGIEPOCKETS_PAT.
+#   BIGGIEPOCKETS_PAT, DATADOG_API_KEY (optional; enables review-quality
+#   metrics in Datadog LLM Obs).
 on:
   workflow_call:
     inputs:
@@ -26,12 +27,18 @@ jobs:
       id-token: write # claude-code-action authenticates via OIDC
     env:
       PR: ${{ inputs.pr }}
+      # Bump this whenever the Codex or Claude prompt text below changes, so
+      # Datadog LLM Obs can separate before/after quality by prompt_version.
+      PROMPT_VERSION: "1"
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
         with:
           ref: refs/pull/${{ inputs.pr }}/head
           fetch-depth: 0
+
+      - name: Record review start time
+        run: echo "REVIEW_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
 
       # Resolve PR context (base ref and title) from the API.
       - name: Resolve PR context
@@ -125,6 +132,9 @@ jobs:
       # blocking the review: Stage 2 proceeds on its own when codex-findings.md is missing or
       # empty. The next step still surfaces the failure as a warning so a genuinely broken Codex
       # (e.g. a bad key) doesn't silently disappear.
+      - name: Record codex start time
+        run: echo "CODEX_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+
       - name: Codex first-pass review
         id: codex
         continue-on-error: true
@@ -158,8 +168,14 @@ jobs:
           echo "::warning::Codex first-pass review failed (commonly an OpenAI quota error); continuing with a Claude-only review."
           : > codex-findings.md
 
+      - name: Record codex end / claude start time
+        run: |
+          echo "CODEX_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+          echo "CLAUDE_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+
       # Stage 2: Claude verifies Codex's findings, reviews independently, and decides.
       - name: Claude verify and synthesize
+        id: claude
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -197,7 +213,12 @@ jobs:
             change measures against the ticket, how the existing PR discussion informed your decision,
             and the rationale for the decision.
 
+      - name: Record claude end time
+        if: always()
+        run: echo "CLAUDE_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+
       - name: Submit review as BiggiePockets
+        id: submit
         env:
           # PAT authenticating as the BiggiePockets service account. A bot cannot
           # approve its own PR, so this never gates BiggiePockets-authored PRs.
@@ -223,3 +244,148 @@ jobs:
               exit 1
               ;;
           esac
+
+      # Reports one LLM Obs trace per review run (root "workflow" span plus a
+      # child "llm" span for each stage) so review quality is measurable over
+      # time and attributable to the exact prompt_version that produced it.
+      # Never blocks/fails/delays the review itself: runs even if a prior step
+      # failed (if: always()), no-ops without a Datadog key, and any submission
+      # error is a warning, not a job failure.
+      - name: Report review metrics to Datadog LLM Obs
+        if: always()
+        continue-on-error: true
+        env:
+          DD_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+        run: |
+          if [ -z "$DD_API_KEY" ]; then
+            echo "Skipping Datadog LLM Obs submission: DATADOG_API_KEY not configured"
+            exit 0
+          fi
+
+          now_ns=$(date +%s%N)
+          review_start_ns="${REVIEW_START_NS:-$now_ns}"
+          codex_start_ns="${CODEX_START_NS:-$review_start_ns}"
+          codex_end_ns="${CODEX_END_NS:-$codex_start_ns}"
+          claude_start_ns="${CLAUDE_START_NS:-$codex_end_ns}"
+          claude_end_ns="${CLAUDE_END_NS:-$claude_start_ns}"
+
+          verdict="unknown"
+          summary_chars=0
+          if [ -f verdict.json ]; then
+            verdict=$(jq -r '.verdict // "unknown"' verdict.json)
+            summary_chars=$(jq -r '(.summary // "") | length' verdict.json)
+          fi
+
+          codex_status="ok"
+          [ "${{ steps.codex.outcome }}" = "failure" ] && codex_status="error"
+          codex_findings_lines=$(wc -l < codex-findings.md 2>/dev/null || echo 0)
+
+          claude_status="ok"
+          if [ "${{ steps.claude.outcome }}" != "success" ] || [ "$verdict" = "unknown" ]; then
+            claude_status="error"
+          fi
+
+          root_status="ok"
+          [ "${{ steps.submit.outcome }}" != "success" ] && root_status="error"
+
+          trace_id=$(openssl rand -hex 16)
+          root_span_id=$(openssl rand -hex 8)
+          codex_span_id=$(openssl rand -hex 8)
+          claude_span_id=$(openssl rand -hex 8)
+
+          payload=$(jq -n \
+            --arg ml_app "biggiepockets-review" \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg pr "$PR" \
+            --arg prompt_version "$PROMPT_VERSION" \
+            --arg verdict "$verdict" \
+            --arg base_ref "${BASE_REF:-unknown}" \
+            --arg trace_id "$trace_id" \
+            --arg root_span_id "$root_span_id" \
+            --arg codex_span_id "$codex_span_id" \
+            --arg claude_span_id "$claude_span_id" \
+            --argjson review_start_ns "$review_start_ns" \
+            --argjson root_duration "$((now_ns - review_start_ns))" \
+            --argjson codex_start_ns "$codex_start_ns" \
+            --argjson codex_duration "$((codex_end_ns - codex_start_ns))" \
+            --argjson claude_start_ns "$claude_start_ns" \
+            --argjson claude_duration "$((claude_end_ns - claude_start_ns))" \
+            --arg codex_status "$codex_status" \
+            --arg claude_status "$claude_status" \
+            --arg root_status "$root_status" \
+            --argjson codex_findings_lines "$codex_findings_lines" \
+            --argjson summary_chars "$summary_chars" \
+            '{
+              data: {
+                type: "span",
+                attributes: {
+                  ml_app: $ml_app,
+                  tags: [
+                    "repo:\($repo)",
+                    "pr:\($pr)",
+                    "prompt_version:\($prompt_version)",
+                    "verdict:\($verdict)"
+                  ],
+                  spans: [
+                    {
+                      parent_id: "undefined",
+                      trace_id: $trace_id,
+                      span_id: $root_span_id,
+                      name: "biggiepockets.review",
+                      start_ns: $review_start_ns,
+                      duration: $root_duration,
+                      status: $root_status,
+                      meta: {
+                        kind: "workflow",
+                        input: {value: "repo:\($repo) pr:\($pr) base_ref:\($base_ref)"},
+                        output: {value: "verdict:\($verdict) summary_chars:\($summary_chars)"}
+                      }
+                    },
+                    {
+                      parent_id: $root_span_id,
+                      trace_id: $trace_id,
+                      span_id: $codex_span_id,
+                      name: "codex.review",
+                      start_ns: $codex_start_ns,
+                      duration: $codex_duration,
+                      status: $codex_status,
+                      meta: {
+                        kind: "llm",
+                        model_name: "codex",
+                        model_provider: "openai",
+                        input: {value: "pr:\($pr)"},
+                        output: {value: "findings_lines:\($codex_findings_lines)"}
+                      }
+                    },
+                    {
+                      parent_id: $root_span_id,
+                      trace_id: $trace_id,
+                      span_id: $claude_span_id,
+                      name: "claude.synthesize",
+                      start_ns: $claude_start_ns,
+                      duration: $claude_duration,
+                      status: $claude_status,
+                      meta: {
+                        kind: "llm",
+                        model_name: "claude-code",
+                        model_provider: "anthropic",
+                        input: {value: "codex_findings_lines:\($codex_findings_lines)"},
+                        output: {value: "verdict:\($verdict)"}
+                      }
+                    }
+                  ]
+                }
+              }
+            }')
+
+          http_code=$(curl -sS -o /tmp/dd_response.json -w '%{http_code}' \
+            -X POST "https://api.datadoghq.com/api/intake/llm-obs/v1/trace/spans" \
+            -H "Content-Type: application/json" \
+            -H "DD-API-KEY: $DD_API_KEY" \
+            -d "$payload") || http_code="000"
+
+          if [ "$http_code" -ge 300 ] 2>/dev/null || [ "$http_code" = "000" ]; then
+            echo "::warning::Datadog LLM Obs submission failed (HTTP $http_code): $(cat /tmp/dd_response.json 2>/dev/null)"
+          else
+            echo "Reported review metrics to Datadog LLM Obs (trace $trace_id, verdict $verdict, prompt_version $PROMPT_VERSION)"
+          fi
