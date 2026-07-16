@@ -37,6 +37,25 @@ jobs:
       # pointed at a non-default model — instead of an implicit, untracked default.
       CODEX_MODEL: ""
       CLAUDE_MODEL: ""
+      # Shared BiggerPockets member-privacy rules, enforced by both the Codex and Claude
+      # prompts below. Defined once here so the two prompts can't drift out of sync.
+      PRIVACY_RULES: |
+        a. Last-name privacy: members can choose to show only the initial of their last name
+           across the site, so a member's full name must never be presented without honoring that
+           choice. The canonical helper is SocialUser#display_name (aliased #name), which respects
+           the member's hide_last_name preference. Note #full_name and #first_name_last_initial do
+           NOT check that preference, so rendering a member's name to others through them (or by
+           concatenating first and last name directly) bypasses the privacy logic. Flag any such
+           code in views, serializers, mailers, exports, or JSON. API responses are in scope too:
+           any endpoint returning a member's name must go through #display_name.
+        b. Investment-address privacy: when a member adds an investment address for a property
+           they own, worked on, or showed interest in, that address must never be shown to other
+           members. Precise location data such as latitude/longitude and the street address must
+           be anonymized first. The canonical utilities are
+           Api::V3::Dashboard::Map::LocationObfuscator.obfuscate (coordinates) and
+           Api::V3::Dashboard::Map::StreetAddressMasker.mask (street address), designed to be used
+           together. Flag any code that exposes such an address or its coordinates to other
+           members or in API responses without anonymizing it.
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
@@ -164,25 +183,7 @@ jobs:
                impact.
             3. Enforce these BiggerPockets member-privacy rules and flag any violation with a
                file/line reference:
-               a. Last-name privacy: members can choose to show only the initial of their last name
-                  across the site, so a member's full name must never be presented without honoring
-                  that choice. The canonical helper is SocialUser#display_name (aliased #name), which
-                  respects the member's hide_last_name preference; it lives in
-                  app/models/concerns/user_concern/profile_info.rb. Note #full_name and
-                  #first_name_last_initial do NOT check that preference, so rendering a member's name
-                  to others through them (or by concatenating first and last name directly) bypasses
-                  the privacy logic. Flag any such code in views, serializers, mailers, exports, or
-                  JSON. API responses are in scope too: any endpoint returning a member's name must
-                  go through #display_name.
-               b. Investment-address privacy: when a member adds an investment address for a property
-                  they own, worked on, or showed interest in, that address must never be shown to
-                  other members. Precise location data such as latitude/longitude and the street
-                  address must be anonymized first. The canonical utilities are
-                  Api::V3::Dashboard::Map::LocationObfuscator.obfuscate (coordinates) and
-                  Api::V3::Dashboard::Map::StreetAddressMasker.mask (street address), both under
-                  app/serializers/api/v3/dashboard/map/ and designed to be used together. Flag any
-                  code that exposes such an address or its coordinates to other members or in API
-                  responses without anonymizing it.
+               ${{ env.PRIVACY_RULES }}
             4. Report concrete issues — bugs, regressions, security problems, member-privacy
                violations, and (when a ticket is available) missed acceptance criteria or scope
                creep — each with a file/line reference and a brief rationale. If nothing is blocking,
@@ -233,25 +234,7 @@ jobs:
                only at 1x where a high-DPI version is expected.
             5. Enforce these BiggerPockets member-privacy rules and treat a genuine violation as a
                blocking issue:
-               a. Last-name privacy: members can choose to show only the initial of their last name
-                  across the site, so a member's full name must never be presented without honoring
-                  that choice. The canonical helper is SocialUser#display_name (aliased #name), which
-                  respects the member's hide_last_name preference; it lives in
-                  app/models/concerns/user_concern/profile_info.rb. Note #full_name and
-                  #first_name_last_initial do NOT check that preference, so rendering a member's name
-                  to others through them (or by concatenating first and last name directly) bypasses
-                  the privacy logic. Flag any such code in views, serializers, mailers, exports, or
-                  JSON. API responses are in scope too: any endpoint returning a member's name must
-                  go through #display_name.
-               b. Investment-address privacy: when a member adds an investment address for a property
-                  they own, worked on, or showed interest in, that address must never be shown to
-                  other members. Precise location data such as latitude/longitude and the street
-                  address must be anonymized first. The canonical utilities are
-                  Api::V3::Dashboard::Map::LocationObfuscator.obfuscate (coordinates) and
-                  Api::V3::Dashboard::Map::StreetAddressMasker.mask (street address), both under
-                  app/serializers/api/v3/dashboard/map/ and designed to be used together. Flag any
-                  code that exposes such an address or its coordinates to other members or in API
-                  responses without anonymizing it.
+               ${{ env.PRIVACY_RULES }}
             6. Validate which of Codex's findings are real (discard false positives), add any genuine
                issues Codex missed, and (when a ticket is available) check for missed acceptance
                criteria or scope creep.
