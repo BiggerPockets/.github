@@ -29,7 +29,7 @@ jobs:
       PR: ${{ inputs.pr }}
       # Bump this whenever the Codex or Claude prompt text below changes, so
       # Datadog LLM Obs can separate before/after quality by prompt_version.
-      PROMPT_VERSION: "1"
+      PROMPT_VERSION: "2"
       # Explicit model per stage, threaded into both the actual invocation below and the
       # Datadog LLM Obs tags/spans at the bottom of this job. Empty means "let the tool
       # use its own default" (today's behavior, unchanged). Set these once you want a
@@ -162,10 +162,25 @@ jobs:
             2. Review the diff in pr.diff. Do NOT rely on the hunks alone: for changed functions,
                methods, or signatures, grep the repository for callers and related tests to judge
                impact.
-            3. Report concrete issues — bugs, regressions, security problems, and (when a ticket is
-               available) missed acceptance criteria or scope creep — each with a file/line
-               reference and a brief rationale. If nothing is blocking, say so briefly. Be specific
-               and pragmatic; this is a first pass that a second reviewer will independently verify.
+            3. Enforce these BiggerPockets member-privacy rules and flag any violation with a
+               file/line reference:
+               a. Last-name privacy: members can choose to show only the initial of their last name
+                  across the site, so a member's full name must never be presented without honoring
+                  that choice. The Rails app has a display-name helper for this — flag any code that
+                  builds a member's name by concatenating first and last name (or otherwise bypasses
+                  the helper) in views, serializers, mailers, exports, or JSON. API responses are in
+                  scope too: any endpoint returning a member's name must go through the display-name
+                  helper.
+               b. Investment-address privacy: when a member adds an investment address for a property
+                  they own, worked on, or showed interest in, that address must never be shown to
+                  other members. Flag any code that exposes such an address — including precise
+                  location data such as latitude/longitude — to other members or in API responses
+                  without anonymizing it.
+            4. Report concrete issues — bugs, regressions, security problems, member-privacy
+               violations, and (when a ticket is available) missed acceptance criteria or scope
+               creep — each with a file/line reference and a brief rationale. If nothing is blocking,
+               say so briefly. Be specific and pragmatic; this is a first pass that a second reviewer
+               will independently verify.
 
       # If Codex failed (it exits nonzero and writes no codex-findings.md — e.g. on a quota
       # error), leave an empty findings file so Stage 2 cleanly takes its no-findings path,
@@ -209,10 +224,24 @@ jobs:
                When the diff adds or changes image assets, check that they are provided at retina
                quality (e.g. a 2x asset or an `srcset`/`@2x` variant); flag raster images that ship
                only at 1x where a high-DPI version is expected.
-            5. Validate which of Codex's findings are real (discard false positives), add any genuine
+            5. Enforce these BiggerPockets member-privacy rules and treat a genuine violation as a
+               blocking issue:
+               a. Last-name privacy: members can choose to show only the initial of their last name
+                  across the site, so a member's full name must never be presented without honoring
+                  that choice. The Rails app has a display-name helper for this — flag any code that
+                  builds a member's name by concatenating first and last name (or otherwise bypasses
+                  the helper) in views, serializers, mailers, exports, or JSON. API responses are in
+                  scope too: any endpoint returning a member's name must go through the display-name
+                  helper.
+               b. Investment-address privacy: when a member adds an investment address for a property
+                  they own, worked on, or showed interest in, that address must never be shown to
+                  other members. Flag any code that exposes such an address — including precise
+                  location data such as latitude/longitude — to other members or in API responses
+                  without anonymizing it.
+            6. Validate which of Codex's findings are real (discard false positives), add any genuine
                issues Codex missed, and (when a ticket is available) check for missed acceptance
                criteria or scope creep.
-            6. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
+            7. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
                genuine, blocking issue; otherwise "approve".
 
             Write a file named verdict.json in the current working directory with EXACTLY this shape:
