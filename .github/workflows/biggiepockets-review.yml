@@ -29,7 +29,7 @@ jobs:
       PR: ${{ inputs.pr }}
       # Bump this whenever the Codex or Claude prompt text below changes, so
       # Datadog LLM Obs can separate before/after quality by prompt_version.
-      PROMPT_VERSION: "2"
+      PROMPT_VERSION: "3"
       # Explicit model per stage, threaded into both the actual invocation below and the
       # Datadog LLM Obs tags/spans at the bottom of this job. Empty means "let the tool
       # use its own default" (today's behavior, unchanged). Set these once you want a
@@ -184,7 +184,12 @@ jobs:
             3. Enforce these BiggerPockets member-privacy rules and flag any violation with a
                file/line reference:
                ${{ env.PRIVACY_RULES }}
-            4. Report concrete issues — bugs, regressions, security problems, member-privacy
+            4. If the diff includes a schema migration, check whether it also updates data rather
+               than only structure — e.g. enabling/disabling/renaming a feature flag, backfilling
+               a column, or other one-time data changes. Flag these: that kind of change belongs in
+               a one-off rake task, done directly via the console/UI, or another one-time
+               maintenance mechanism, not baked into a schema migration.
+            5. Report concrete issues — bugs, regressions, security problems, member-privacy
                violations, and (when a ticket is available) missed acceptance criteria or scope
                creep — each with a file/line reference and a brief rationale. If nothing is blocking,
                say so briefly. Be specific and pragmatic; this is a first pass that a second reviewer
@@ -231,7 +236,12 @@ jobs:
                functions, methods, or signatures, grep for callers and related tests to judge impact.
                When the diff adds or changes image assets, check that they are provided at retina
                quality (e.g. a 2x asset or an `srcset`/`@2x` variant); flag raster images that ship
-               only at 1x where a high-DPI version is expected.
+               only at 1x where a high-DPI version is expected. When the diff includes a schema
+               migration, check whether it also updates data rather than only structure — e.g.
+               enabling/disabling/renaming a feature flag, backfilling a column, or other one-time
+               data changes. Flag these: that kind of change belongs in a one-off rake task, done
+               directly via the console/UI, or another one-time maintenance mechanism, not baked
+               into a schema migration.
             5. Enforce these BiggerPockets member-privacy rules and treat a genuine violation as a
                blocking issue:
                ${{ env.PRIVACY_RULES }}
