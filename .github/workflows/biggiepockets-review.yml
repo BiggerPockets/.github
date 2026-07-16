@@ -56,6 +56,14 @@ jobs:
            Api::V3::Dashboard::Map::StreetAddressMasker.mask (street address), designed to be used
            together. Flag any code that exposes such an address or its coordinates to other
            members or in API responses without anonymizing it.
+      # Shared rule on data-only migrations, enforced by both the Codex and Claude prompts
+      # below. Defined once here so the two prompts can't drift out of sync.
+      MIGRATION_DATA_RULE: |
+        If the diff includes a schema migration, check whether it also updates data rather than
+        only structure — e.g. enabling/disabling/renaming a feature flag, backfilling a column, or
+        other one-time data changes. Flag these: that kind of change belongs in a one-off rake
+        task, done directly via the console/UI, or another one-time maintenance mechanism, not
+        baked into a schema migration.
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
@@ -184,11 +192,7 @@ jobs:
             3. Enforce these BiggerPockets member-privacy rules and flag any violation with a
                file/line reference:
                ${{ env.PRIVACY_RULES }}
-            4. If the diff includes a schema migration, check whether it also updates data rather
-               than only structure — e.g. enabling/disabling/renaming a feature flag, backfilling
-               a column, or other one-time data changes. Flag these: that kind of change belongs in
-               a one-off rake task, done directly via the console/UI, or another one-time
-               maintenance mechanism, not baked into a schema migration.
+            4. ${{ env.MIGRATION_DATA_RULE }}
             5. Report concrete issues — bugs, regressions, security problems, member-privacy
                violations, and (when a ticket is available) missed acceptance criteria or scope
                creep — each with a file/line reference and a brief rationale. If nothing is blocking,
@@ -236,12 +240,7 @@ jobs:
                functions, methods, or signatures, grep for callers and related tests to judge impact.
                When the diff adds or changes image assets, check that they are provided at retina
                quality (e.g. a 2x asset or an `srcset`/`@2x` variant); flag raster images that ship
-               only at 1x where a high-DPI version is expected. When the diff includes a schema
-               migration, check whether it also updates data rather than only structure — e.g.
-               enabling/disabling/renaming a feature flag, backfilling a column, or other one-time
-               data changes. Flag these: that kind of change belongs in a one-off rake task, done
-               directly via the console/UI, or another one-time maintenance mechanism, not baked
-               into a schema migration.
+               only at 1x where a high-DPI version is expected. ${{ env.MIGRATION_DATA_RULE }}
             5. Enforce these BiggerPockets member-privacy rules and treat a genuine violation as a
                blocking issue:
                ${{ env.PRIVACY_RULES }}
