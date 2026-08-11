@@ -75,6 +75,9 @@ jobs:
     uses: BiggerPockets/.github/.github/workflows/biggiepockets-review.yml@main
     with:
       pr: ${{ github.event.pull_request.number || inputs.pr }}
+      # Required: the BiggerPockets/.github ref to resolve review prompts from. It must
+      # match the ref after `@` above (here `main`). Keep the two in sync when you pin.
+      registry_ref: main
     secrets: inherit
 ```
 
@@ -135,13 +138,14 @@ prompts/
   shared blocks it includes — it changes only when that prompt's text changes, not per PR
   or per arm, so Datadog LLM Obs can attribute quality to the exact prompt text that ran.
 - **Dual-arm, within-PR comparison (opt-in).** Add the **`biggiepockets-dual-arm`** label to a
-  PR to run two independent Claude passes over the same Codex findings — one per arm in
-  `registry.json` (`control`, `thesis-first`). Both summaries are posted in a single review
-  comment labeled **Variant A** / **Variant B** in a per-PR-randomized order (deterministic
-  hash of the PR number, so it is balanced across PRs and stable across re-reviews). The arms
-  are not disclosed in the comment. The official approve / request-changes gate always comes
-  from `gate_arm` (`control`) — the experiment only changes presentation, never the decision.
-  PRs **without** the label get the single control-arm review (one summary, no A/B), i.e. the
+  PR to run an experiment arm (`thesis-first`) in addition to the gate arm — two independent
+  Claude passes over the same Codex findings (arms and their prompts live in `registry.json`;
+  one non-gate arm today). Both summaries are posted in a single review comment labeled
+  **Variant A** / **Variant B** in a per-PR-randomized order (deterministic hash of the PR
+  number, so it is balanced across PRs and stable across re-reviews). The arms are not
+  disclosed in the comment. The official approve / request-changes gate always comes from
+  `gate_arm` (`control`) — the experiment only changes presentation, never the decision.
+  PRs **without** the label get the single gate-arm review (one summary, no A/B), i.e. the
   pre-experiment behavior. The label is also the gradual-rollout switch: enable/disable per PR
   with no code change.
 - **Datadog.** Each LLM run is a separate span tagged with its `prompt_name`/`prompt_version`
@@ -154,8 +158,9 @@ production prompt):
 
 - **Roll** — edit a prompt or shared-rule file; its content-derived `prompt_version` bumps.
 - **Apply** — point an arm or `gate_arm` at a different stored prompt in `registry.json`
-  (no version change). Reaching PRs also requires consumers to re-pin the ref they `uses:`
-  for this reusable workflow — a ref-bump is part of Apply and owned explicitly.
+  (no version change). Rolling a change out to PRs always means bumping BOTH the `@ref` in
+  each caller's `uses:` AND that caller's `registry_ref` input, in lockstep — Apply owns that
+  ref-bump explicitly.
 - **Split** — add a new arm entry in `registry.json` + its prompt file.
 - **Merge** — fold a variant's content into another prompt and remove the arm.
 

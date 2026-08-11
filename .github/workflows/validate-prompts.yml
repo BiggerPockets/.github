@@ -83,8 +83,8 @@ jobs:
           for f in prompts/_shared/*.md; do printf '\n# probe\n' >> "$f"; done
           GITHUB_OUTPUT=/tmp/after.txt scripts/resolve-prompts.sh >/dev/null
           for f in prompts/_shared/*.md; do git checkout -- "$f"; done
-          before=$(sed -n '/^thesis_first_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/before.txt | sed '1d;$d')
-          after=$(sed -n '/^thesis_first_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/after.txt | sed '1d;$d')
+          before=$(sed -n '/^experiment_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/before.txt | sed '1d;$d')
+          after=$(sed -n '/^experiment_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/after.txt | sed '1d;$d')
           if [ "$before" = "$after" ]; then
             echo "editing a shared rule did not bump prompt_version" >&2
             exit 1
