@@ -149,15 +149,24 @@ prompts/
   PRs **without** the label get the single gate-arm review (one summary, no A/B), i.e. the
   pre-experiment behavior. The label is also the gradual-rollout switch: enable/disable per PR
   with no code change.
-- **Datadog.** Each LLM run is a separate span, tagged with the arm and prompt that produced
-  it under role-prefixed keys — `gate_arm`/`gate_prompt_name`/`gate_prompt_version` on the
-  gate span, `experiment_*` on the experiment span. The prefixes are required: Datadog
-  resolves a tag key at trace scope, so two sibling spans sharing one key (`arm:`) collapse
-  to a single value and misattribute an arm's review to the other's prompt. Select a single
-  arm's spans by span name (`claude.synthesize.gate` / `claude.synthesize.experiment`). The
-  root span carries a stable `run_id` (`repo-pr-runid`), `verdict`, `arm_agreement`
+- **Datadog.** Each arm is reported as **its own trace**, so every trace holds exactly one
+  arm and carries unambiguous `arm`/`prompt_name`/`prompt_version` tags you can group and
+  aggregate on. One trace per arm is required, not stylistic: Datadog resolves a tag key at
+  trace scope, so putting both arms in one trace collapses those keys onto whichever span
+  was written last and credits one arm's review to the other's prompt.
+
+  ```
+  gate trace        biggiepockets.review → codex.review, claude.synthesize.gate
+  experiment trace  biggiepockets.review → claude.synthesize.experiment
+  ```
+
+  Codex runs once and feeds both arms, so it sits in the gate trace rather than being
+  duplicated (which would double-count its latency and tokens); its findings are still the
+  recorded input of both arms' spans. Compare arms at the `claude.synthesize.*` spans, which
+  are like-for-like — the gate trace's root also spans codex, so root durations are not.
+  Both traces share a stable `run_id` (`repo-pr-runid`) and carry `verdict`, `arm_agreement`
   (agree/disagree between the arms), and `label_assignment` (`A=control|B=thesis-first` or
-  the reverse) so offline evals and panel ratings can be joined to the exact review.
+  the reverse), so offline evals and panel ratings join to the exact review.
 
 **Registry operations** (kept distinct so a formatting experiment can't silently change the
 production prompt):

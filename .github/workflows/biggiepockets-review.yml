@@ -379,20 +379,28 @@ jobs:
             echo "ARM_AGREEMENT=single" >> "$GITHUB_ENV"
           fi
 
-      # Reports one LLM Obs trace per review run: a root "workflow" span plus a
-      # child "llm" span for each stage (codex, gate arm, experiment arm), plus a
-      # stable run_id (repo + pr + review attempt) so offline evals and panel
-      # ratings can be joined per review. Never blocks/fails/delays the review.
+      # Reports ONE LLM OBS TRACE PER ARM, joined by a stable run_id (repo + pr +
+      # review attempt) so offline evals and panel ratings line up per review.
+      # Never blocks/fails/delays the review itself.
       #
-      # Each arm's per-span tags are ROLE-PREFIXED (gate_* / experiment_*) rather
-      # than sharing one uniform key. Datadog resolves a tag key at trace scope, so
-      # two sibling spans emitting the same key with different values collapse to
-      # whichever was submitted last: tagging both arms `arm:`/`prompt_name:` made
-      # the gate span report the EXPERIMENT's arm and prompt on every dual-arm run,
-      # silently attributing the gate arm's review to the wrong prompt. Single-arm
-      # runs looked fine, so it only corrupted the runs the experiment depends on.
-      # Keep these keys distinct per arm. To select one arm's spans, filter on the
-      # span name (claude.synthesize.gate / claude.synthesize.experiment).
+      # Why per-arm rather than one trace per review: Datadog resolves a tag key at
+      # trace scope, so two sibling spans emitting the same key with different values
+      # collapse to whichever was submitted last. With both arms in one trace, tagging
+      # them `arm:`/`prompt_name:` made the gate span report the EXPERIMENT's arm and
+      # prompt on every dual-arm run — silently crediting the gate arm's review to the
+      # wrong prompt, and only ever on the runs the experiment exists to measure.
+      # Giving each arm its own trace means each trace holds exactly one arm, so the
+      # uniform `arm`/`prompt_name`/`prompt_version` keys are unambiguous and can be
+      # grouped and aggregated on. Do not merge the arms back into one trace.
+      #
+      #   gate trace       root biggiepockets.review -> codex.review, claude.synthesize.gate
+      #   experiment trace root biggiepockets.review -> claude.synthesize.experiment
+      #
+      # Codex runs once and feeds both arms, so it lives in the gate trace (the
+      # production pipeline) rather than being duplicated, which would double-count its
+      # latency and tokens. Its findings are still the recorded input of BOTH arms'
+      # spans. Compare arms at the claude.synthesize.* spans, which are like-for-like;
+      # the gate trace's root also spans codex, so root durations are not comparable.
       - name: Report review metrics to Datadog LLM Obs
         if: always()
         continue-on-error: true
@@ -475,8 +483,15 @@ jobs:
 
           run_id="$GITHUB_REPOSITORY-pr$PR-${{ github.run_id }}"
 
+          # One trace per arm. Datadog resolves a tag key at trace scope, so an arm's
+          # identity can only live on a uniform `arm`/`prompt_name`/`prompt_version` key
+          # if that trace contains exactly one arm — which is what makes grouping and
+          # eval aggregation by arm possible. Sharing a trace collapses the two arms onto
+          # whichever span was submitted last.
           trace_id=$(openssl rand -hex 16)
           root_span_id=$(openssl rand -hex 8)
+          experiment_trace_id=$(openssl rand -hex 16)
+          experiment_root_span_id=$(openssl rand -hex 8)
           codex_span_id=$(openssl rand -hex 8)
           gate_span_id=$(openssl rand -hex 8)
           experiment_span_id=$(openssl rand -hex 8)
@@ -503,6 +518,8 @@ jobs:
             --argjson dual_arms "$dual_arms" \
             --arg trace_id "$trace_id" \
             --arg root_span_id "$root_span_id" \
+            --arg experiment_trace_id "$experiment_trace_id" \
+            --arg experiment_root_span_id "$experiment_root_span_id" \
             --arg codex_span_id "$codex_span_id" \
             --arg gate_span_id "$gate_span_id" \
             --arg experiment_span_id "$experiment_span_id" \
@@ -557,6 +574,7 @@ jobs:
                         start_ns: $review_start_ns,
                         duration: $root_duration,
                         status: $root_status,
+                        tags: ["arm:\($gate_arm)", "prompt_name:\($gate_prompt_name)", "prompt_version:\($gate_prompt_version)"],
                         meta: {
                           kind: "workflow",
                           input: {value: "repo:\($repo) pr:\($pr) base_ref:\($base_ref)"},
@@ -587,7 +605,7 @@ jobs:
                         start_ns: $gate_start_ns,
                         duration: $gate_duration,
                         status: $gate_status,
-                        tags: ["gate_arm:\($gate_arm)", "gate_prompt_name:\($gate_prompt_name)", "gate_prompt_version:\($gate_prompt_version)"],
+                        tags: ["arm:\($gate_arm)", "prompt_name:\($gate_prompt_name)", "prompt_version:\($gate_prompt_version)"],
                         meta: {
                           kind: "llm",
                           model_name: $claude_model,
@@ -599,14 +617,29 @@ jobs:
                     ]
                     + (if $dual_arms and ($experiment_arm != "") then [
                       {
-                        parent_id: $root_span_id,
-                        trace_id: $trace_id,
+                        parent_id: "undefined",
+                        trace_id: $experiment_trace_id,
+                        span_id: $experiment_root_span_id,
+                        name: "biggiepockets.review",
+                        start_ns: $experiment_start_ns,
+                        duration: $experiment_duration,
+                        status: $experiment_status,
+                        tags: ["arm:\($experiment_arm)", "prompt_name:\($experiment_prompt_name)", "prompt_version:\($experiment_prompt_version)"],
+                        meta: {
+                          kind: "workflow",
+                          input: {value: "repo:\($repo) pr:\($pr) base_ref:\($base_ref)"},
+                          output: {value: $experiment_summary_excerpt}
+                        }
+                      },
+                      {
+                        parent_id: $experiment_root_span_id,
+                        trace_id: $experiment_trace_id,
                         span_id: $experiment_span_id,
                         name: "claude.synthesize.experiment",
                         start_ns: $experiment_start_ns,
                         duration: $experiment_duration,
                         status: $experiment_status,
-                        tags: ["experiment_arm:\($experiment_arm)", "experiment_prompt_name:\($experiment_prompt_name)", "experiment_prompt_version:\($experiment_prompt_version)"],
+                        tags: ["arm:\($experiment_arm)", "prompt_name:\($experiment_prompt_name)", "prompt_version:\($experiment_prompt_version)"],
                         meta: {
                           kind: "llm",
                           model_name: $claude_model,
@@ -630,5 +663,9 @@ jobs:
           if [ "$http_code" -ge 300 ] 2>/dev/null || [ "$http_code" = "000" ]; then
             echo "::warning::Datadog LLM Obs submission failed (HTTP $http_code): $(cat /tmp/dd_response.json 2>/dev/null)"
           else
-            echo "Reported review metrics to Datadog LLM Obs (trace $trace_id, gate $gate_verdict, arms ${gate_prompt_name}@${gate_prompt_version} / ${experiment_prompt_name}@${experiment_prompt_version}, run_id $run_id)"
+            msg="Reported review metrics to Datadog LLM Obs (gate trace $trace_id, arm ${gate_arm}, prompt ${gate_prompt_name}@${gate_prompt_version}, verdict $gate_verdict"
+            if [ "$dual_arms" = "true" ] && [ -n "$experiment_arm" ]; then
+              msg="$msg; experiment trace $experiment_trace_id, arm ${experiment_arm}, prompt ${experiment_prompt_name}@${experiment_prompt_version}"
+            fi
+            echo "$msg; run_id $run_id)"
           fi
