@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # resolve-prompts.sh — resolve the BiggiePockets review prompts from the registry.
 #
-# Every review runs BOTH arms of the summary-format experiment as independent Claude
-# passes over the same Codex findings. Each arm's prompt is a versioned template in
-# prompts/<name>.md; prompts/registry.json names the codex prompt, the arms, and which
-# arm supplies the official gate verdict.
+# prompts/registry.json declares the codex prompt, one or more arms (each a stored
+# prompt template), and which arm supplies the official gate verdict. Every review
+# runs the GATE arm's prompt; PRs opted into the dual-arm experiment additionally run
+# each EXperiment arm (arms other than the gate arm, one today) over the same Codex
+# findings so summary formats can be compared side by side.
 #
 # Shared rule blocks (privacy, migration-data, perf) are stored once in
 # prompts/_shared/ and injected into every prompt that references them via {{@path}}
 # markers, so the Codex and Claude prompts can never drift out of sync.
 #
 # The resolved text substitutes late-binding placeholders used for provenance only:
-#   {{PR}}, {{PROMPT_NAME}}, {{PROMPT_VERSION}}, {{ARM}}
+#   {{PR}}, {{PROMPT_NAME}}, {{PROMPT_VERSION}}
 #
 # prompt_version is DERIVED from content, never hand-set: a hash of the template file
 # plus every shared block it includes. It changes if and only if that prompt's text
@@ -20,8 +21,9 @@
 # of truth for the text; the arm = the test condition).
 #
 # Inputs (env): REGISTRY_DIR, PR.
-# Outputs: codex_prompt{,_name,_version}; gate_arm; one triple per arm:
-#   <arm>_prompt, <arm>_prompt_name, <arm>_prompt_version.
+# Outputs: codex_prompt{,_name,_version}; gate_arm (arm key); gate_prompt{,_name,_version};
+# experiment_arm_key (first non-gate arm key, or empty); experiment_prompt{,_name,_version}
+# (the non-gate arm's prompt, or empty when there is only the gate arm).
 
 set -euo pipefail
 
@@ -67,14 +69,19 @@ if ! printf '%s\n' "${ARMS[@]}" | grep -qx -- "$GATE_ARM"; then
 fi
 
 # Expand {{@path}} includes (path relative to REGISTRY_DIR), recording each included
-# file on _INCLUDED (de-duplicated). Shared blocks do not nest today; if they ever do,
-# switch to a recursive resolver.
+# file on _INCLUDED (de-duplicated). A marker may appear inline within a line: text
+# before/after the marker is preserved and the included content is always followed by
+# a newline so the next line of the template can't be concatenated onto it. Shared
+# blocks do not reference other shared blocks today; if they ever do, switch to a
+# recursive resolver.
 _INCLUDED=()
 expand_template() {
-  local file="$1" out="" line rel incfile f seen
+  local file="$1" out="" line rest pre rel post
   while IFS= read -r line || [ -n "$line" ]; do
-    if [[ "$line" =~ \{\{@([^}]+)\}\} ]]; then
-      rel="${BASH_REMATCH[1]}"
+    rest="$line"
+    while [[ "$rest" == *'{{@'* ]]; do
+      pre="${rest%%\{\{@*}"
+      rel="${rest#*\{\{@}"; rel="${rel%%\}*}"
       incfile="$REGISTRY_DIR/$rel"
       if [ ! -f "$incfile" ]; then
         echo "::error::Include '$rel' (referenced by $(basename "$file")) not found in registry" >&2
@@ -85,10 +92,12 @@ expand_template() {
         if [ "$f" = "$incfile" ]; then seen=1; break; fi
       done
       if [ "$seen" -eq 0 ]; then _INCLUDED+=("$incfile"); fi
+      out+="$pre"
       out+="$(cat "$incfile")"
-    else
-      out+="$line"$'\n'
-    fi
+      rest="${rest#*\{\{@${rel}\}\}}"
+      if [ -n "$rest" ]; then out+=$'\n'; fi
+    done
+    out+="$rest"$'\n'
   done < "$file"
   printf '%s' "$out"
 }
@@ -110,36 +119,40 @@ prompt_text() { # name version -> resolved text
   text="${text//\{\{PR\}\}/$PR}"
   text="${text//\{\{PROMPT_NAME\}\}/$name}"
   text="${text//\{\{PROMPT_VERSION\}\}/$version}"
-  text="${text//\{\{ARM\}\}/$name}"
   printf '%s' "$text"
 }
 
+emit_prompt() { # emit_prompt <output prefix> <prompt name> — writes text/name/version
+  local prefix="$1" name="$2" version
+  version="$(prompt_version "$name")"
+  write_output "${prefix}_prompt" "$(prompt_text "$name" "$version")"
+  write_output "${prefix}_prompt_name" "$name"
+  write_output "${prefix}_prompt_version" "$version"
+}
+
 write_output() { # name value — multiline-safe via GITHUB_OUTPUT heredoc; fixed
-   # delimiter keeps the whole output file byte-for-byte reproducible.
+  # delimiter keeps the whole output file byte-for-byte reproducible.
   local name="$1" value="$2"
   printf '%s<<_BIGGIEPOCKETS_PROMPT_EOF_\n%s\n_BIGGIEPOCKETS_PROMPT_EOF_\n' "$name" "$value" >> "$GITHUB_OUTPUT"
 }
 
-codex_version="$(prompt_version "$CODEX_NAME")"
-codex_text="$(prompt_text "$CODEX_NAME" "$codex_version")"
-write_output "codex_prompt" "$codex_text"
-write_output "codex_prompt_name" "$CODEX_NAME"
-write_output "codex_prompt_version" "$codex_version"
-
+emit_prompt "codex" "$CODEX_NAME"
 write_output "gate_arm" "$GATE_ARM"
+emit_prompt "gate" "$(jq -r --arg a "$GATE_ARM" '.arms[$a]' "$REGISTRY_FILE")"
 
-outputs="codex=$CODEX_NAME@$codex_version gate=$GATE_ARM"
+# Experiment arm = the first arm that is not the gate arm; there may be none (a
+# single-arm registry, e.g. after the experiment is merged away).
+EXPERIMENT_ARM=""
 for arm in "${ARMS[@]}"; do
-  prompt=$(jq -r --arg a "$arm" '.arms[$a]' "$REGISTRY_FILE")
-  version="$(prompt_version "$prompt")"
-  text="$(prompt_text "$prompt" "$version")"
-  # Output names are used in ${{ steps.resolve.outputs.<name> }} GitHub expressions,
-  # which cannot carry hyphens, so arm-key hyphens map to underscores.
-  outname="${arm//-/_}"
-  write_output "${outname}_prompt" "$text"
-  write_output "${outname}_prompt_name" "$prompt"
-  write_output "${outname}_prompt_version" "$version"
-  outputs+=" $arm=$prompt@$version"
+  if [ "$arm" != "$GATE_ARM" ]; then EXPERIMENT_ARM="$arm"; break; fi
 done
+write_output "experiment_arm_key" "$EXPERIMENT_ARM"
+if [ -n "$EXPERIMENT_ARM" ]; then
+  emit_prompt "experiment" "$(jq -r --arg a "$EXPERIMENT_ARM" '.arms[$a]' "$REGISTRY_FILE")"
+else
+  write_output "experiment_prompt" ""
+  write_output "experiment_prompt_name" ""
+  write_output "experiment_prompt_version" ""
+fi
 
-echo "Resolved $MAP_VERSION prompts: $outputs"
+echo "Resolved $MAP_VERSION prompts: codex=$CODEX_NAME gate=$GATE_ARM experiment=${EXPERIMENT_ARM:-none}"
