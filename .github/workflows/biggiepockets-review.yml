@@ -36,11 +36,14 @@ on:
         type: string
       registry_ref:
         description: >-
-          Ref of BiggerPockets/.github to resolve review prompts/resolver from. MUST
-          match the ref this workflow was called at (the value after `@` in
-          `uses: BiggerPockets/.github/.github/workflows/...@<ref>`), so a pinned caller
-          always runs the exact prompt/resolver text that shipped with that workflow.
-        required: true
+          Ref of BiggerPockets/.github to resolve review prompts/resolver from. Set it to
+          the ref this workflow was called at (the value after `@` in
+          `uses: BiggerPockets/.github/.github/workflows/...@<ref>`) so a caller pinned to
+          a tag or SHA runs the exact prompt/resolver text that shipped with that workflow.
+          Defaults to `main`, which is correct for callers that track `@main`; a caller that
+          pins `uses:` MUST pass this explicitly or its prompts will silently drift to main.
+        required: false
+        default: main
         type: string
 
 jobs:
@@ -70,13 +73,16 @@ jobs:
           fetch-depth: 0
 
       # Prompt templates live in BiggerPockets/.github. Check out that repo at the ref the
-      # caller passed via the registry_ref input (keep it in sync with the ref this
-      # workflow was called at), so a caller pinning @main or a commit SHA always runs
-      # the prompt text that shipped with that workflow. GITHUB_TOKEN is scoped to the
-      # caller's repo, so use the BiggiePockets PAT. persist-credentials is off so the
-      # PAT is never left in registry/.git/config where the later Codex/Claude steps
-      # (which act on untrusted PR diffs and can read files/run Bash) could read it —
-      # read-only prompts only need the checkout itself, not the stored credentials.
+      # caller passed via the registry_ref input, which defaults to main so a caller that
+      # tracks @main works without setting it; a caller pinning a tag or SHA passes the
+      # matching ref to run the prompt text that shipped with that workflow. Resolve the
+      # ref from this input only — never from github.workflow_sha, which points at a commit
+      # in the CALLER's repo and so is not a valid ref here.
+      # GITHUB_TOKEN is scoped to the caller's repo, so use the BiggiePockets PAT.
+      # persist-credentials is off so the PAT is never left in registry/.git/config where
+      # the later Codex/Claude steps (which act on untrusted PR diffs and can read files/run
+      # Bash) could read it — read-only prompts only need the checkout itself, not the
+      # stored credentials.
       - name: Checkout prompt registry
         uses: actions/checkout@v4
         with:
