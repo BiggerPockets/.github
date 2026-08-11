@@ -10,12 +10,40 @@ name: BiggiePockets Code Review (reusable)
 #   OPENAI_KEY, CLAUDE_CODE_OAUTH_TOKEN, JIRA_EMAIL, JIRA_API_TOKEN,
 #   BIGGIEPOCKETS_PAT, DATADOG_API_KEY (optional; enables review-quality
 #   metrics in Datadog LLM Obs).
+#
+# Prompt versioning: every review-stage prompt lives in this repo's prompts/
+# registry (BiggerPockets/.github) as a versioned template, plus one shared rule
+# block per concern under prompts/_shared/ injected via {{@path}}.
+# Prompts are resolved by scripts/resolve-prompts.sh into step outputs; a derived
+# prompt_version (content hash) identifies each prompt in Datadog LLM Obs.
+#
+# Dual-arm summary experiment (BIG-21717): when the PR carries the opt-in label
+# DUAL_ARM_LABEL, the review runs an independent Claude pass for each EXPERIMENT arm
+# named in prompts/registry.json (the `thesis-first` arm today) in addition to the
+# GATE arm, all over the same Codex findings. The two summaries are posted together in
+# a single review comment, in a deterministic-but-randomized order (A/B labels swapped
+# per PR number) so neither position is favored and the arms are not disclosed to
+# reviewers. The GATE verdict — the official approve / request-changes review — ALWAYS
+# comes from prompts/registry.json `gate_arm`; the experiment only changes
+# presentation, never the decision. PRs without the label get the single gate-arm
+# review (one summary, no A/B), which is byte-for-byte the pre-experiment behavior.
 on:
   workflow_call:
     inputs:
       pr:
         description: 'PR number to review'
         required: true
+        type: string
+      registry_ref:
+        description: >-
+          Ref of BiggerPockets/.github to resolve review prompts/resolver from. Set it to
+          the ref this workflow was called at (the value after `@` in
+          `uses: BiggerPockets/.github/.github/workflows/...@<ref>`) so a caller pinned to
+          a tag or SHA runs the exact prompt/resolver text that shipped with that workflow.
+          Defaults to `main`, which is correct for callers that track `@main`; a caller that
+          pins `uses:` MUST pass this explicitly or its prompts will silently drift to main.
+        required: false
+        default: main
         type: string
 
 jobs:
@@ -27,9 +55,9 @@ jobs:
       id-token: write # claude-code-action authenticates via OIDC
     env:
       PR: ${{ inputs.pr }}
-      # Bump this whenever the Codex or Claude prompt text below changes, so
-      # Datadog LLM Obs can separate before/after quality by prompt_version.
-      PROMPT_VERSION: "4"
+      # Apply this label to a PR to opt into the dual-arm (control + thesis-first)
+      # summary experiment. Its absence keeps the single control-arm review.
+      DUAL_ARM_LABEL: biggiepockets-dual-arm
       # Explicit model per stage, threaded into both the actual invocation below and the
       # Datadog LLM Obs tags/spans at the bottom of this job. Empty means "let the tool
       # use its own default" (today's behavior, unchanged). Set these once you want a
@@ -37,39 +65,32 @@ jobs:
       # pointed at a non-default model — instead of an implicit, untracked default.
       CODEX_MODEL: ""
       CLAUDE_MODEL: ""
-      # Shared BiggerPockets member-privacy rules, enforced by both the Codex and Claude
-      # prompts below. Defined once here so the two prompts can't drift out of sync.
-      PRIVACY_RULES: |
-        a. Last-name privacy: members can choose to show only the initial of their last name
-           across the site, so a member's full name must never be presented without honoring that
-           choice. The canonical helper is SocialUser#display_name (aliased #name), which respects
-           the member's hide_last_name preference. Note #full_name and #first_name_last_initial do
-           NOT check that preference, so rendering a member's name to others through them (or by
-           concatenating first and last name directly) bypasses the privacy logic. Flag any such
-           code in views, serializers, mailers, exports, or JSON. API responses are in scope too:
-           any endpoint returning a member's name must go through #display_name.
-        b. Investment-address privacy: when a member adds an investment address for a property
-           they own, worked on, or showed interest in, that address must never be shown to other
-           members. Precise location data such as latitude/longitude and the street address must
-           be anonymized first. The canonical utilities are
-           Api::V3::Dashboard::Map::LocationObfuscator.obfuscate (coordinates) and
-           Api::V3::Dashboard::Map::StreetAddressMasker.mask (street address), designed to be used
-           together. Flag any code that exposes such an address or its coordinates to other
-           members or in API responses without anonymizing it.
-      # Shared rule on data-only migrations, enforced by both the Codex and Claude prompts
-      # below. Defined once here so the two prompts can't drift out of sync.
-      MIGRATION_DATA_RULE: |
-        If the diff includes a schema migration, check whether it also updates data rather than
-        only structure — e.g. enabling/disabling/renaming a feature flag, backfilling a column, or
-        other one-time data changes. Flag these: that kind of change belongs in a one-off rake
-        task, done directly via the console/UI, or another one-time maintenance mechanism, not
-        baked into a schema migration.
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
         with:
           ref: refs/pull/${{ inputs.pr }}/head
           fetch-depth: 0
+
+      # Prompt templates live in BiggerPockets/.github. Check out that repo at the ref the
+      # caller passed via the registry_ref input, which defaults to main so a caller that
+      # tracks @main works without setting it; a caller pinning a tag or SHA passes the
+      # matching ref to run the prompt text that shipped with that workflow. Resolve the
+      # ref from this input only — never from github.workflow_sha, which points at a commit
+      # in the CALLER's repo and so is not a valid ref here.
+      # GITHUB_TOKEN is scoped to the caller's repo, so use the BiggiePockets PAT.
+      # persist-credentials is off so the PAT is never left in registry/.git/config where
+      # the later Codex/Claude steps (which act on untrusted PR diffs and can read files/run
+      # Bash) could read it — read-only prompts only need the checkout itself, not the
+      # stored credentials.
+      - name: Checkout prompt registry
+        uses: actions/checkout@v4
+        with:
+          repository: BiggerPockets/.github
+          ref: ${{ inputs.registry_ref }}
+          token: ${{ secrets.BIGGIEPOCKETS_PAT }}
+          persist-credentials: false
+          path: registry
 
       - name: Record review start time
         run: echo "REVIEW_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
@@ -84,6 +105,23 @@ jobs:
           echo "BASE_REF=$base" >> "$GITHUB_ENV"
           echo "PR_TITLE=$title" >> "$GITHUB_ENV"
           echo "Reviewing PR #$PR (base $base): $title"
+
+      # The dual-arm experiment is opt-in per PR: label DUAL_ARM_LABEL to run the
+      # control + thesis-first comparison; its absence keeps the single control-arm
+      # review. Also the natural gradual-rollout switch — no code change needed to
+      # enable/disable per PR.
+      - name: Check dual-arm opt-in label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          labels=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels -q '.labels[].name' 2>/dev/null || true)
+          if printf '%s\n' "$labels" | grep -qx "$DUAL_ARM_LABEL"; then
+            echo "DUAL_ARMS=true" >> "$GITHUB_ENV"
+            echo "Opted into dual-arm review via label '$DUAL_ARM_LABEL'."
+          else
+            echo "DUAL_ARMS=false" >> "$GITHUB_ENV"
+            echo "Not opted into dual-arm review (label '$DUAL_ARM_LABEL' absent); running the single control-arm review."
+          fi
 
       - name: Compute PR diff
         run: |
@@ -145,6 +183,15 @@ jobs:
             > conversations.json
           echo "Wrote conversations.json ($(jq '.issue_comments | length' conversations.json) comments, $(jq '.review_comments | length' conversations.json) review comments, $(jq '.reviews | length' conversations.json) reviews)"
 
+      # Resolve every review-stage prompt from the registry: the Codex prompt plus one
+      # prompt per arm in prompts/registry.json, each with its shared-rule blocks expanded
+      # and a content-derived prompt_version. The gate arm name (control) is also emitted.
+      - name: Resolve review prompts
+        id: resolve
+        env:
+          REGISTRY_DIR: registry
+        run: registry/scripts/resolve-prompts.sh
+
       # Stage 1: Codex reviews the diff against the ticket intent and writes findings to
       # codex-findings.md (the `output-file`, which captures Codex's final message).
       #
@@ -178,35 +225,7 @@ jobs:
           model: ${{ env.CODEX_MODEL }}
           sandbox: read-only
           output-file: codex-findings.md
-          prompt: |
-            Perform a first-pass code review of this pull request and output a concise
-            markdown findings report. Your final message IS the report — it is captured
-            verbatim and handed to a second reviewer, so do not add conversational preamble.
-
-            1. Read ticket.json. If "available" is true, treat its summary as intended behavior and its
-               acceptance_criteria as GUIDELINES, not a hard contract — they describe the minimum the
-               ticket set out to achieve, not the ceiling on what counts as correct. Do not flag a
-               change just because it doesn't match the acceptance criteria verbatim: first judge
-               whether the change actually satisfies the ticket's intent, and give particular credit
-               when the author went beyond the literal criteria (see step 2 for how to weigh that
-               against history/context). Only treat a deviation as a blocker if it genuinely fails the
-               ticket's purpose. If the ticket is not available, do a diff-based review.
-            2. Review the diff in pr.diff. Do NOT rely on the hunks alone: use `git log` / `git show`
-               on the branch and grep the repository for callers and related tests to judge impact and
-               intent. Git history and the PR's context are usually more reliable evidence of what was
-               meant than the ticket's literal acceptance criteria: when a commit, the diff, or the
-               conversation shows the work was refined or extended beyond the AC in a sound way, treat
-               that as an improvement rather than scope creep.
-            3. Enforce these BiggerPockets member-privacy rules and flag any violation with a
-               file/line reference:
-               ${{ env.PRIVACY_RULES }}
-            4. ${{ env.MIGRATION_DATA_RULE }}
-            5. Report concrete issues — bugs, regressions, security problems, member-privacy
-               violations, and genuine misses of the ticket's intent or clear scope creep — each with a
-               file/line reference and a brief rationale. Do not list "doesn't match acceptance
-               criteria" as an issue by itself; only raise it when the deviation harms the intent. If
-               nothing is blocking, say so briefly. Be specific and pragmatic; this is a first pass that
-               a second reviewer will independently verify.
+          prompt: ${{ steps.resolve.outputs.codex_prompt }}
 
       # If Codex failed (it exits nonzero and writes no codex-findings.md — e.g. on a quota
       # error), leave an empty findings file so Stage 2 cleanly takes its no-findings path,
@@ -217,14 +236,18 @@ jobs:
           echo "::warning::Codex first-pass review failed (commonly an OpenAI quota error); continuing with a Claude-only review."
           : > codex-findings.md
 
-      - name: Record codex end / claude start time
+      # Stage 2: Claude verifies Codex's findings, reviews independently, and decides.
+      # The GATE arm (prompts/registry.json gate_arm) runs on every review and supplies
+      # the official verdict. PRs opted into the dual-arm experiment (DUAL_ARM_LABEL)
+      # also run each experiment arm (arms other than the gate arm) over the same Codex
+      # findings, so the summary formats can be compared side by side.
+      - name: Record codex end / claude gate start time
         run: |
           echo "CODEX_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
-          echo "CLAUDE_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+          echo "GATE_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
 
-      # Stage 2: Claude verifies Codex's findings, reviews independently, and decides.
-      - name: Claude verify and synthesize
-        id: claude
+      - name: Claude verify and synthesize (gate arm)
+        id: claude_gate
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -233,85 +256,151 @@ jobs:
           # actor: claude (type: Bot). Add bot to allowed_bots list."
           allowed_bots: 'claude'
           claude_args: ${{ env.CLAUDE_MODEL != '' && format('--allowedTools "Read,Grep,Glob,Bash,Write" --model {0}', env.CLAUDE_MODEL) || '--allowedTools "Read,Grep,Glob,Bash,Write"' }}
-          prompt: |
-            Synthesize a single review decision for pull request #${{ env.PR }}.
+          prompt: ${{ steps.resolve.outputs.gate_prompt }}
 
-            1. Read ticket.json. If "available" is true, treat its summary and description as the
-               intended behavior, and its acceptance_criteria (Atlassian Document Format JSON) as
-               GUIDELINES rather than a hard contract. The AC describe the minimum the ticket set out
-               to achieve, not the ceiling on what counts as correct: don't reject a change merely for
-               not matching them verbatim. Judge whether the change satisfies the ticket's intent, and
-               weigh git history and the PR discussion (steps 2–3) as more authoritative evidence of
-               what was actually meant.
-            2. Read Codex's first-pass findings in codex-findings.md (if missing or empty, proceed
-               with your own review).
-            3. Read conversations.json: the PR's existing discussion (issue_comments, review_comments
-               with file/line, and prior reviews). Factor this context into your review: respect
-               decisions already settled in the thread, don't re-raise concerns the author has already
-               addressed or that were explicitly accepted, and weigh unresolved objections raised by
-               human reviewers. Treat the conversation as more reliable than the ticket's literal
-               acceptance criteria: if the thread shows the work was refined or explicitly accepted
-               beyond the AC in a sound way, honor that.
-            4. Independently review the diff in pr.diff. Do NOT rely on the hunks alone: use `git log`
-               / `git show` on the branch to inspect commit history and grep for callers and related
-               tests to judge impact. When the diff adds or changes image assets, check that they are
-               provided at retina quality (e.g. a 2x asset or an `srcset`/`@2x` variant); flag raster
-               images that ship only at 1x where a high-DPI version is expected. ${{ env.MIGRATION_DATA_RULE }}
-            5. Enforce these BiggerPockets member-privacy rules and treat a genuine violation as a
-               blocking issue:
-               ${{ env.PRIVACY_RULES }}
-            6. Validate which of Codex's findings are real (discard false positives), add any genuine
-               issues Codex missed, and (when a ticket is available) judge genuine misses of the
-               ticket's intent or clear scope creep — but give credit when the author went beyond the
-               literal acceptance criteria in a sound way rather than flagging it as non-compliant.
-            7. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
-               genuine, blocking issue; otherwise "approve". A change that exceeds the AC without
-               breaking the ticket's intent is a reason to approve, not to block.
-
-            Write a file named verdict.json in the current working directory with EXACTLY this shape:
-              {"verdict": "approve" | "request_changes", "summary": "<concise markdown>"}
-            In the summary, note which of Codex's findings you confirmed, anything you added, how the
-            change measures against the ticket, how the existing PR discussion informed your decision,
-            and the rationale for the decision.
-
-      - name: Record claude end time
+      # The experiment run writes verdict.json back to the same path the gate run used,
+      # so preserve the gate arm's verdict first.
+      - name: Preserve gate verdict
         if: always()
-        run: echo "CLAUDE_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+        run: cp verdict.json verdict-gate.json 2>/dev/null || true
 
+      # Experiment arms only run when the PR opted in via DUAL_ARM_LABEL AND the
+      # registry declares at least one arm other than the gate arm. continue-on-error
+      # keeps an experiment failure (e.g. a quota error) from failing the job and
+      # skipping the gate submission; Datadog records the span as errored.
+      - name: Record claude gate end / experiment start time
+        run: |
+          echo "GATE_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+          echo "EXPERIMENT_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+          # The experiment run writes verdict.json back to the same path the gate run
+          # used; remove the gate arm's output so a failed experiment run can't leave a
+          # stale verdict.json that the preserve step would copy as the experiment arm's.
+          rm -f verdict.json
+
+      - name: Claude verify and synthesize (experiment arm)
+        if: ${{ env.DUAL_ARMS == 'true' && steps.resolve.outputs.experiment_prompt != '' }}
+        id: claude_experiment
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: 'claude'
+          claude_args: ${{ env.CLAUDE_MODEL != '' && format('--allowedTools "Read,Grep,Glob,Bash,Write" --model {0}', env.CLAUDE_MODEL) || '--allowedTools "Read,Grep,Glob,Bash,Write"' }}
+          prompt: ${{ steps.resolve.outputs.experiment_prompt }}
+
+      - name: Preserve experiment verdict
+        if: ${{ always() && env.DUAL_ARMS == 'true' && steps.resolve.outputs.experiment_prompt != '' }}
+        run: cp verdict.json verdict-experiment.json 2>/dev/null || true
+
+      - name: Record claude experiment end time
+        if: ${{ always() && env.DUAL_ARMS == 'true' && steps.resolve.outputs.experiment_prompt != '' }}
+        run: echo "EXPERIMENT_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+
+      # Submit the review. The GATE arm's verdict is the official approve /
+      # request-changes decision, always. Opted-in PRs whose experiment arm produced a
+      # summary get one comment with BOTH summaries (gate + experiment) labeled Variant
+      # A / Variant B; the label order is randomized per PR (deterministic hash of the
+      # PR number) so position bias is balanced across PRs and the same PR keeps the
+      # same labels across re-reviews, and the arms are not disclosed in the comment.
       - name: Submit review as BiggiePockets
         id: submit
         env:
           # PAT authenticating as the BiggiePockets service account. A bot cannot
           # approve its own PR, so this never gates BiggiePockets-authored PRs.
           GH_TOKEN: ${{ secrets.BIGGIEPOCKETS_PAT }}
+          GATE_ARM: ${{ steps.resolve.outputs.gate_arm }}
+          EXPERIMENT_ARM: ${{ steps.resolve.outputs.experiment_arm_key }}
         run: |
-          if [ ! -f verdict.json ]; then
-            echo "::error::Review did not produce verdict.json" >&2
+          if [ ! -f verdict-gate.json ]; then
+            echo "::error::Gate arm review run did not produce verdict.json" >&2
             exit 1
           fi
 
-          verdict=$(jq -r '.verdict' verdict.json)
-          summary=$(jq -r '.summary' verdict.json)
+          gate_verdict=$(jq -r '.verdict' verdict-gate.json)
+          gate_summary=$(jq -r '.summary' verdict-gate.json)
 
-          case "$verdict" in
+          experiment_summary=""
+          if [ -f verdict-experiment.json ]; then
+            experiment_summary=$(jq -r '.summary // ""' verdict-experiment.json 2>/dev/null) || experiment_summary=""
+          fi
+
+          if [ "$DUAL_ARMS" = "true" ] && [ -n "$experiment_summary" ] && [ -n "$EXPERIMENT_ARM" ]; then
+            parity=$(( $(printf '%s' "$PR" | cksum | awk '{print $2}') % 2 ))
+            if [ "$parity" -eq 0 ]; then
+              first_name="Variant A"; first_summary="$gate_summary"
+              second_name="Variant B"; second_summary="$experiment_summary"
+              label_assignment="A=$GATE_ARM|B=$EXPERIMENT_ARM"
+            else
+              first_name="Variant A"; first_summary="$experiment_summary"
+              second_name="Variant B"; second_summary="$gate_summary"
+              label_assignment="A=$EXPERIMENT_ARM|B=$GATE_ARM"
+            fi
+
+            {
+              echo "BiggiePockets assisted review — the same review in two summary formats."
+              echo ""
+              printf '## %s\n\n%s\n' "$first_name" "$first_summary"
+              printf '\n---\n\n## %s\n\n%s\n' "$second_name" "$second_summary"
+            } > review-body.md
+          else
+            # Single-arm mode, or the experiment arm failed and produced no summary —
+            # fall back to the gate-only body rather than posting an empty Variant.
+            label_assignment="n/a"
+            printf '## BiggiePockets assisted review\n\n%s\n' "$gate_summary" > review-body.md
+          fi
+
+          case "$gate_verdict" in
             approve)
-              gh pr review "$PR" --approve --body "$summary"
+              gh pr review "$PR" --approve --body-file review-body.md
               ;;
             request_changes)
-              gh pr review "$PR" --request-changes --body "$summary"
+              gh pr review "$PR" --request-changes --body-file review-body.md
               ;;
             *)
-              echo "::error::Unexpected verdict from review: '$verdict'" >&2
+              echo "::error::Unexpected gate verdict from $GATE_ARM review: '$gate_verdict'" >&2
               exit 1
               ;;
           esac
 
-      # Reports one LLM Obs trace per review run (root "workflow" span plus a
-      # child "llm" span for each stage) so review quality is measurable over
-      # time and attributable to the exact prompt_version that produced it.
-      # Never blocks/fails/delays the review itself: runs even if a prior step
-      # failed (if: always()), no-ops without a Datadog key, and any submission
-      # error is a warning, not a job failure.
+          echo "GATE_VERDICT=$gate_verdict" >> "$GITHUB_ENV"
+          echo "LABEL_ASSIGN=$label_assignment" >> "$GITHUB_ENV"
+          if [ "$DUAL_ARMS" = "true" ] && [ -n "$EXPERIMENT_ARM" ]; then
+            if [ -n "$experiment_summary" ]; then
+              experiment_verdict=$(jq -r '.verdict // "unknown"' verdict-experiment.json 2>/dev/null) || experiment_verdict="unknown"
+              agreement="agree"; [ "$gate_verdict" != "$experiment_verdict" ] && agreement="disagree"
+              echo "EXPERIMENT_VERDICT=$experiment_verdict" >> "$GITHUB_ENV"
+              echo "ARM_AGREEMENT=$agreement" >> "$GITHUB_ENV"
+            else
+              echo "EXPERIMENT_VERDICT=failed" >> "$GITHUB_ENV"
+              echo "ARM_AGREEMENT=gate-only" >> "$GITHUB_ENV"
+            fi
+          else
+            echo "EXPERIMENT_VERDICT=n/a" >> "$GITHUB_ENV"
+            echo "ARM_AGREEMENT=single" >> "$GITHUB_ENV"
+          fi
+
+      # Reports ONE LLM OBS TRACE PER ARM, joined by a stable run_id (repo + pr +
+      # review attempt) so offline evals and panel ratings line up per review.
+      # Never blocks/fails/delays the review itself.
+      #
+      # Each arm is submitted as its OWN REQUEST, and that separation is what makes the
+      # arm tags trustworthy. A tag key resolves to a single value per submitted payload
+      # — NOT per trace, which was measured the hard way: when both arms shared one
+      # request, every span reported the experiment's arm and prompt even after the arms
+      # were split into two distinct trace_ids. So the gate arm's review was credited to
+      # the variant prompt, and only ever on the dual-arm runs the experiment exists to
+      # measure. One payload per arm means each request carries exactly one value for
+      # `arm`/`prompt_name`/`prompt_version`, so they can be grouped and aggregated on.
+      # Do not merge the two submissions back into one request.
+      #
+      #   gate trace       root biggiepockets.review -> codex.review, claude.synthesize.gate
+      #   experiment trace root biggiepockets.review -> claude.synthesize.experiment
+      #
+      # Codex runs once and feeds both arms, so it lives in the gate trace (the
+      # production pipeline) rather than being duplicated, which would double-count its
+      # latency and tokens. Its findings are still the recorded input of BOTH arms'
+      # spans. Compare arms at the claude.synthesize.* spans, which are like-for-like;
+      # the gate trace's root also spans codex, so root durations are not comparable.
       - name: Report review metrics to Datadog LLM Obs
         if: always()
         continue-on-error: true
@@ -327,14 +416,28 @@ jobs:
           review_start_ns="${REVIEW_START_NS:-$now_ns}"
           codex_start_ns="${CODEX_START_NS:-$review_start_ns}"
           codex_end_ns="${CODEX_END_NS:-$codex_start_ns}"
-          claude_start_ns="${CLAUDE_START_NS:-$codex_end_ns}"
-          claude_end_ns="${CLAUDE_END_NS:-$claude_start_ns}"
+          gate_start_ns="${GATE_START_NS:-$codex_end_ns}"
+          gate_end_ns="${GATE_END_NS:-$gate_start_ns}"
+          experiment_start_ns="${EXPERIMENT_START_NS:-$gate_end_ns}"
+          experiment_end_ns="${EXPERIMENT_END_NS:-$experiment_start_ns}"
 
-          verdict="unknown"
-          verdict_summary=""
-          if [ -f verdict.json ]; then
-            verdict=$(jq -r '.verdict // "unknown"' verdict.json)
-            verdict_summary=$(jq -r '.summary // ""' verdict.json)
+          gate_verdict="${GATE_VERDICT:-unknown}"
+          label_assignment="${LABEL_ASSIGN:-unknown}"
+          arm_agreement="${ARM_AGREEMENT:-unknown}"
+          dual_arms="false"
+          [ "$DUAL_ARMS" = "true" ] && dual_arms="true"
+
+          codex_prompt_name="${{ steps.resolve.outputs.codex_prompt_name }}"
+          codex_prompt_version="${{ steps.resolve.outputs.codex_prompt_version }}"
+          gate_prompt_name="${{ steps.resolve.outputs.gate_prompt_name }}"
+          gate_prompt_version="${{ steps.resolve.outputs.gate_prompt_version }}"
+          gate_arm="${{ steps.resolve.outputs.gate_arm }}"
+          experiment_prompt_name="${{ steps.resolve.outputs.experiment_prompt_name }}"
+          experiment_prompt_version="${{ steps.resolve.outputs.experiment_prompt_version }}"
+          experiment_arm="${{ steps.resolve.outputs.experiment_arm_key }}"
+          if [ "$dual_arms" != "true" ] || [ -z "$experiment_arm" ]; then
+            experiment_prompt_name="n/a"
+            experiment_prompt_version="n/a"
           fi
 
           codex_status="ok"
@@ -342,13 +445,23 @@ jobs:
           codex_findings=$(cat codex-findings.md 2>/dev/null || true)
           codex_findings_lines=$(wc -l < codex-findings.md 2>/dev/null || echo 0)
 
-          claude_status="ok"
-          if [ "${{ steps.claude.outcome }}" != "success" ] || [ "$verdict" = "unknown" ]; then
-            claude_status="error"
+          gate_status="ok"
+          [ "${{ steps.claude_gate.outcome }}" != "success" ] && gate_status="error"
+          experiment_status="n/a"
+          if [ "$dual_arms" = "true" ] && [ -n "$experiment_arm" ]; then
+            experiment_status="ok"
+            [ "${{ steps.claude_experiment.outcome }}" != "success" ] && experiment_status="error"
           fi
 
           root_status="ok"
           [ "${{ steps.submit.outcome }}" != "success" ] && root_status="error"
+
+          gate_summary=""
+          [ -f verdict-gate.json ] && gate_summary=$(jq -r '.summary // ""' verdict-gate.json 2>/dev/null) || gate_summary=""
+          experiment_summary=""
+          if [ -f verdict-experiment.json ]; then
+            experiment_summary=$(jq -r '.summary // ""' verdict-experiment.json 2>/dev/null) || experiment_summary=""
+          fi
 
           # Cap free-text fields sent to Datadog so one outsized findings report can't
           # blow past the LLM Obs payload limit; the untruncated text is always still in
@@ -362,115 +475,217 @@ jobs:
             fi
           }
           codex_findings_excerpt=$(truncate "$codex_findings")
-          verdict_summary_excerpt=$(truncate "$verdict_summary")
+          gate_summary_excerpt=$(truncate "$gate_summary")
+          experiment_summary_excerpt=$(truncate "$experiment_summary")
 
           codex_model_tag="${CODEX_MODEL:-unspecified}"
           claude_model_tag="${CLAUDE_MODEL:-unspecified}"
 
+          run_id="$GITHUB_REPOSITORY-pr$PR-${{ github.run_id }}"
+
+          # One trace per arm. Datadog resolves a tag key at trace scope, so an arm's
+          # identity can only live on a uniform `arm`/`prompt_name`/`prompt_version` key
+          # if that trace contains exactly one arm — which is what makes grouping and
+          # eval aggregation by arm possible. Sharing a trace collapses the two arms onto
+          # whichever span was submitted last.
           trace_id=$(openssl rand -hex 16)
           root_span_id=$(openssl rand -hex 8)
+          experiment_trace_id=$(openssl rand -hex 16)
+          experiment_root_span_id=$(openssl rand -hex 8)
           codex_span_id=$(openssl rand -hex 8)
-          claude_span_id=$(openssl rand -hex 8)
+          gate_span_id=$(openssl rand -hex 8)
+          experiment_span_id=$(openssl rand -hex 8)
 
-          payload=$(jq -n \
-            --arg ml_app "biggiepockets-review" \
-            --arg repo "$GITHUB_REPOSITORY" \
-            --arg pr "$PR" \
-            --arg prompt_version "$PROMPT_VERSION" \
-            --arg verdict "$verdict" \
-            --arg base_ref "${BASE_REF:-unknown}" \
-            --arg codex_model "$codex_model_tag" \
-            --arg claude_model "$claude_model_tag" \
+          # Submit ONE PAYLOAD PER ARM. The uniform arm/prompt_name/prompt_version keys
+          # live at payload level, so each request carries exactly one value for them.
+          submit_arm() {
+            arm_name="$1"; arm_prompt_name="$2"; arm_prompt_version="$3"
+            arm_trace_id="$4"; arm_spans="$5"
+
+            payload=$(jq -n \
+              --arg ml_app "biggiepockets-review" \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg pr "$PR" \
+              --arg run_id "$run_id" \
+              --arg verdict "$gate_verdict" \
+              --arg label_assignment "$label_assignment" \
+              --arg arm_agreement "$arm_agreement" \
+              --arg arm "$arm_name" \
+              --arg prompt_name "$arm_prompt_name" \
+              --arg prompt_version "$arm_prompt_version" \
+              --arg gate_arm "$gate_arm" \
+              --arg experiment_arm "$experiment_arm" \
+              --arg codex_model "$codex_model_tag" \
+              --arg claude_model "$claude_model_tag" \
+              --arg codex_prompt_name "$codex_prompt_name" \
+              --arg codex_prompt_version "$codex_prompt_version" \
+              --argjson codex_findings_lines "$codex_findings_lines" \
+              --argjson dual_arms "$dual_arms" \
+              --argjson spans "$arm_spans" \
+              '{
+                data: {
+                  type: "span",
+                  attributes: {
+                    ml_app: $ml_app,
+                    tags: [
+                      "repo:\($repo)",
+                      "pr:\($pr)",
+                      "run_id:\($run_id)",
+                      "arm:\($arm)",
+                      "prompt_name:\($prompt_name)",
+                      "prompt_version:\($prompt_version)",
+                      "verdict:\($verdict)",
+                      "label_assignment:\($label_assignment)",
+                      "arm_agreement:\($arm_agreement)",
+                      "gate_arm:\($gate_arm)",
+                      "experiment_arm:\($experiment_arm)",
+                      "codex_model:\($codex_model)",
+                      "claude_model:\($claude_model)",
+                      "codex_findings_lines:\($codex_findings_lines)",
+                      "codex_prompt_name:\($codex_prompt_name)",
+                      "codex_prompt_version:\($codex_prompt_version)",
+                      "dual_arms:\($dual_arms)"
+                    ],
+                    spans: $spans
+                  }
+                }
+              }')
+
+            http_code=$(curl -sS -o /tmp/dd_response.json -w '%{http_code}' \
+              -X POST "https://api.datadoghq.com/api/intake/llm-obs/v1/trace/spans" \
+              -H "Content-Type: application/json" \
+              -H "DD-API-KEY: $DD_API_KEY" \
+              -d "$payload") || http_code="000"
+
+            if [ "$http_code" -ge 300 ] 2>/dev/null || [ "$http_code" = "000" ]; then
+              echo "::warning::Datadog LLM Obs submission failed for arm ${arm_name} (HTTP $http_code): $(cat /tmp/dd_response.json 2>/dev/null)"
+            else
+              echo "Reported ${arm_name} arm to Datadog LLM Obs (trace ${arm_trace_id}, prompt ${arm_prompt_name}@${arm_prompt_version}, run_id ${run_id})"
+            fi
+          }
+
+          # Gate arm trace: the production review (codex first pass -> gate verdict).
+          gate_spans=$(jq -n \
             --arg trace_id "$trace_id" \
             --arg root_span_id "$root_span_id" \
             --arg codex_span_id "$codex_span_id" \
-            --arg claude_span_id "$claude_span_id" \
+            --arg gate_span_id "$gate_span_id" \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg pr "$PR" \
+            --arg base_ref "${BASE_REF:-unknown}" \
+            --arg codex_model "$codex_model_tag" \
+            --arg claude_model "$claude_model_tag" \
             --argjson review_start_ns "$review_start_ns" \
             --argjson root_duration "$((now_ns - review_start_ns))" \
             --argjson codex_start_ns "$codex_start_ns" \
             --argjson codex_duration "$((codex_end_ns - codex_start_ns))" \
-            --argjson claude_start_ns "$claude_start_ns" \
-            --argjson claude_duration "$((claude_end_ns - claude_start_ns))" \
+            --argjson gate_start_ns "$gate_start_ns" \
+            --argjson gate_duration "$((gate_end_ns - gate_start_ns))" \
             --arg codex_status "$codex_status" \
-            --arg claude_status "$claude_status" \
+            --arg gate_status "$gate_status" \
             --arg root_status "$root_status" \
-            --argjson codex_findings_lines "$codex_findings_lines" \
             --arg codex_findings_excerpt "$codex_findings_excerpt" \
-            --arg verdict_summary_excerpt "$verdict_summary_excerpt" \
-            '{
-              data: {
-                type: "span",
-                attributes: {
-                  ml_app: $ml_app,
-                  tags: [
-                    "repo:\($repo)",
-                    "pr:\($pr)",
-                    "prompt_version:\($prompt_version)",
-                    "verdict:\($verdict)",
-                    "codex_model:\($codex_model)",
-                    "claude_model:\($claude_model)",
-                    "codex_findings_lines:\($codex_findings_lines)"
-                  ],
-                  spans: [
-                    {
-                      parent_id: "undefined",
-                      trace_id: $trace_id,
-                      span_id: $root_span_id,
-                      name: "biggiepockets.review",
-                      start_ns: $review_start_ns,
-                      duration: $root_duration,
-                      status: $root_status,
-                      meta: {
-                        kind: "workflow",
-                        input: {value: "repo:\($repo) pr:\($pr) base_ref:\($base_ref)"},
-                        output: {value: $verdict_summary_excerpt}
-                      }
-                    },
-                    {
-                      parent_id: $root_span_id,
-                      trace_id: $trace_id,
-                      span_id: $codex_span_id,
-                      name: "codex.review",
-                      start_ns: $codex_start_ns,
-                      duration: $codex_duration,
-                      status: $codex_status,
-                      meta: {
-                        kind: "llm",
-                        model_name: $codex_model,
-                        model_provider: "openai",
-                        input: {messages: [{role: "user", content: "Review pr:\($pr) against ticket.json/pr.diff"}]},
-                        output: {messages: [{role: "assistant", content: $codex_findings_excerpt}]}
-                      }
-                    },
-                    {
-                      parent_id: $root_span_id,
-                      trace_id: $trace_id,
-                      span_id: $claude_span_id,
-                      name: "claude.synthesize",
-                      start_ns: $claude_start_ns,
-                      duration: $claude_duration,
-                      status: $claude_status,
-                      meta: {
-                        kind: "llm",
-                        model_name: $claude_model,
-                        model_provider: "anthropic",
-                        input: {messages: [{role: "user", content: $codex_findings_excerpt}]},
-                        output: {messages: [{role: "assistant", content: $verdict_summary_excerpt}]}
-                      }
-                    }
-                  ]
+            --arg gate_summary_excerpt "$gate_summary_excerpt" \
+            '[
+              {
+                parent_id: "undefined",
+                trace_id: $trace_id,
+                span_id: $root_span_id,
+                name: "biggiepockets.review",
+                start_ns: $review_start_ns,
+                duration: $root_duration,
+                status: $root_status,
+                meta: {
+                  kind: "workflow",
+                  input: {value: "repo:\($repo) pr:\($pr) base_ref:\($base_ref)"},
+                  output: {value: $gate_summary_excerpt}
+                }
+              },
+              {
+                parent_id: $root_span_id,
+                trace_id: $trace_id,
+                span_id: $codex_span_id,
+                name: "codex.review",
+                start_ns: $codex_start_ns,
+                duration: $codex_duration,
+                status: $codex_status,
+                meta: {
+                  kind: "llm",
+                  model_name: $codex_model,
+                  model_provider: "openai",
+                  input: {messages: [{role: "user", content: "Review pr:\($pr) against ticket.json/pr.diff"}]},
+                  output: {messages: [{role: "assistant", content: $codex_findings_excerpt}]}
+                }
+              },
+              {
+                parent_id: $root_span_id,
+                trace_id: $trace_id,
+                span_id: $gate_span_id,
+                name: "claude.synthesize.gate",
+                start_ns: $gate_start_ns,
+                duration: $gate_duration,
+                status: $gate_status,
+                meta: {
+                  kind: "llm",
+                  model_name: $claude_model,
+                  model_provider: "anthropic",
+                  input: {messages: [{role: "user", content: $codex_findings_excerpt}]},
+                  output: {messages: [{role: "assistant", content: $gate_summary_excerpt}]}
                 }
               }
-            }')
+            ]')
 
-          http_code=$(curl -sS -o /tmp/dd_response.json -w '%{http_code}' \
-            -X POST "https://api.datadoghq.com/api/intake/llm-obs/v1/trace/spans" \
-            -H "Content-Type: application/json" \
-            -H "DD-API-KEY: $DD_API_KEY" \
-            -d "$payload") || http_code="000"
+          submit_arm "$gate_arm" "$gate_prompt_name" "$gate_prompt_version" "$trace_id" "$gate_spans"
 
-          if [ "$http_code" -ge 300 ] 2>/dev/null || [ "$http_code" = "000" ]; then
-            echo "::warning::Datadog LLM Obs submission failed (HTTP $http_code): $(cat /tmp/dd_response.json 2>/dev/null)"
-          else
-            echo "Reported review metrics to Datadog LLM Obs (trace $trace_id, verdict $verdict, prompt_version $PROMPT_VERSION, codex_model $codex_model_tag, claude_model $claude_model_tag)"
+          # Experiment arm trace: the same codex findings summarized under the variant
+          # prompt. Separate request, so its arm tags cannot overwrite the gate arm's.
+          if [ "$dual_arms" = "true" ] && [ -n "$experiment_arm" ]; then
+            experiment_spans=$(jq -n \
+              --arg trace_id "$experiment_trace_id" \
+              --arg root_span_id "$experiment_root_span_id" \
+              --arg experiment_span_id "$experiment_span_id" \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg pr "$PR" \
+              --arg base_ref "${BASE_REF:-unknown}" \
+              --arg claude_model "$claude_model_tag" \
+              --argjson experiment_start_ns "$experiment_start_ns" \
+              --argjson experiment_duration "$((experiment_end_ns - experiment_start_ns))" \
+              --arg experiment_status "$experiment_status" \
+              --arg codex_findings_excerpt "$codex_findings_excerpt" \
+              --arg experiment_summary_excerpt "$experiment_summary_excerpt" \
+              '[
+                {
+                  parent_id: "undefined",
+                  trace_id: $trace_id,
+                  span_id: $root_span_id,
+                  name: "biggiepockets.review",
+                  start_ns: $experiment_start_ns,
+                  duration: $experiment_duration,
+                  status: $experiment_status,
+                  meta: {
+                    kind: "workflow",
+                    input: {value: "repo:\($repo) pr:\($pr) base_ref:\($base_ref)"},
+                    output: {value: $experiment_summary_excerpt}
+                  }
+                },
+                {
+                  parent_id: $root_span_id,
+                  trace_id: $trace_id,
+                  span_id: $experiment_span_id,
+                  name: "claude.synthesize.experiment",
+                  start_ns: $experiment_start_ns,
+                  duration: $experiment_duration,
+                  status: $experiment_status,
+                  meta: {
+                    kind: "llm",
+                    model_name: $claude_model,
+                    model_provider: "anthropic",
+                    input: {messages: [{role: "user", content: $codex_findings_excerpt}]},
+                    output: {messages: [{role: "assistant", content: $experiment_summary_excerpt}]}
+                  }
+                }
+              ]')
+
+            submit_arm "$experiment_arm" "$experiment_prompt_name" "$experiment_prompt_version" "$experiment_trace_id" "$experiment_spans"
+          fi
           fi

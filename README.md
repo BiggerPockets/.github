@@ -75,6 +75,10 @@ jobs:
     uses: BiggerPockets/.github/.github/workflows/biggiepockets-review.yml@main
     with:
       pr: ${{ github.event.pull_request.number || inputs.pr }}
+      # The BiggerPockets/.github ref to resolve review prompts from. Defaults to `main`,
+      # so callers tracking `@main` can omit it. If you pin the `uses:` ref above to a tag
+      # or SHA, pass the matching ref here too — otherwise prompts silently track main.
+      registry_ref: main
     secrets: inherit
 ```
 
@@ -113,3 +117,68 @@ Once installed, trigger a review either way:
 - **On demand** — run the `BiggiePockets Code Review` workflow via **Actions →
   workflow_dispatch** and pass the PR number. (Available once the caller file is on the
   repo's default branch.)
+
+### Prompt registry and the dual-arm summary experiment
+
+The review-stage prompts are not inline in the workflow. They live in this repo under
+`prompts/` and are resolved at runtime by `scripts/resolve-prompts.sh`:
+
+```
+prompts/
+  registry.json                              # arms + gate_arm + codex prompt name
+  codex-first-pass.md                        # Stage 1 prompt (template)
+  claude-synthesize.md                       # Stage 2 control arm (template)
+  claude-synthesize-thesis-first.md          # Stage 2 thesis-first arm (template)
+  _shared/{privacy,migration-data,perf}-rules.md   # shared rule blocks
+```
+
+- **Templates + shared blocks.** Each prompt references the shared rule blocks via
+  `{{@prompts/_shared/<name>.md}}`, so the Codex and Claude prompts can never drift out of
+  sync. Prompts resolve `{{PR}}`, `{{PROMPT_NAME}}`, `{{PROMPT_VERSION}}` too.
+- **Content-derived versions.** `prompt_version` is a content hash of the template plus the
+  shared blocks it includes — it changes only when that prompt's text changes, not per PR
+  or per arm, so Datadog LLM Obs can attribute quality to the exact prompt text that ran.
+- **Dual-arm, within-PR comparison (opt-in).** Add the **`biggiepockets-dual-arm`** label to a
+  PR to run an experiment arm (`thesis-first`) in addition to the gate arm — two independent
+  Claude passes over the same Codex findings (arms and their prompts live in `registry.json`;
+  one non-gate arm today). Both summaries are posted in a single review comment labeled
+  **Variant A** / **Variant B** in a per-PR-randomized order (deterministic hash of the PR
+  number, so it is balanced across PRs and stable across re-reviews). The arms are not
+  disclosed in the comment. The official approve / request-changes gate always comes from
+  `gate_arm` (`control`) — the experiment only changes presentation, never the decision.
+  PRs **without** the label get the single gate-arm review (one summary, no A/B), i.e. the
+  pre-experiment behavior. The label is also the gradual-rollout switch: enable/disable per PR
+  with no code change.
+- **Datadog.** Each arm is reported as **its own trace**, so every trace holds exactly one
+  arm and carries unambiguous `arm`/`prompt_name`/`prompt_version` tags you can group and
+  aggregate on. One trace per arm is required, not stylistic: Datadog resolves a tag key at
+  trace scope, so putting both arms in one trace collapses those keys onto whichever span
+  was written last and credits one arm's review to the other's prompt.
+
+  ```
+  gate trace        biggiepockets.review → codex.review, claude.synthesize.gate
+  experiment trace  biggiepockets.review → claude.synthesize.experiment
+  ```
+
+  Codex runs once and feeds both arms, so it sits in the gate trace rather than being
+  duplicated (which would double-count its latency and tokens); its findings are still the
+  recorded input of both arms' spans. Compare arms at the `claude.synthesize.*` spans, which
+  are like-for-like — the gate trace's root also spans codex, so root durations are not.
+  Both traces share a stable `run_id` (`repo-pr-runid`) and carry `verdict`, `arm_agreement`
+  (agree/disagree between the arms), and `label_assignment` (`A=control|B=thesis-first` or
+  the reverse), so offline evals and panel ratings join to the exact review.
+
+**Registry operations** (kept distinct so a formatting experiment can't silently change the
+production prompt):
+
+- **Roll** — edit a prompt or shared-rule file; its content-derived `prompt_version` bumps.
+- **Apply** — point an arm or `gate_arm` at a different stored prompt in `registry.json`
+  (no version change). Callers tracking `@main` pick the change up on their next run. A
+  caller that pins `uses:` to a tag or SHA needs BOTH that `@ref` and its `registry_ref`
+  input bumped in lockstep — Apply owns that ref-bump explicitly.
+- **Split** — add a new arm entry in `registry.json` + its prompt file.
+- **Merge** — fold a variant's content into another prompt and remove the arm.
+
+A `validate-prompts.yml` workflow guards the registry: it fails a PR if a template has
+dangling includes, `registry.json` references a missing prompt, the resolver isn't
+deterministic, or a shared-rule edit doesn't bump versions.

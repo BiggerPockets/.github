@@ -1,0 +1,92 @@
+name: Validate prompt registry
+
+# Guard rails for the BiggiePockets review prompt registry (prompts/). Prompt
+# versions are derived from content, so this prevents the failure modes that a
+# hand-bumped version can't: a broken template, a dangling {{@include}}, a
+# registry.json that references a prompt that doesn't exist, or a resolver that
+# is not deterministic for a fixed PR number.
+
+on:
+  pull_request:
+    paths:
+      - 'prompts/**'
+      - 'scripts/resolve-prompts.sh'
+      - '.github/workflows/biggiepockets-review.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate registry config
+        run: |
+          jq -e '.version == 1' prompts/registry.json >/dev/null
+          jq -e '.codex_prompt == "codex-first-pass"' prompts/registry.json >/dev/null
+          jq -e '.gate_arm == "control"' prompts/registry.json >/dev/null
+          for arm in $(jq -r '.arms | keys[]' prompts/registry.json); do
+            prompt=$(jq -r --arg a "$arm" '.arms[$a]' prompts/registry.json)
+            test -f "prompts/$prompt.md" || { echo "prompts/$prompt.md missing for arm $arm"; exit 1; }
+          done
+          echo "registry.json OK"
+
+      - name: Resolver resolves all prompts for e2e PR
+        env:
+          REGISTRY_DIR: ${{ github.workspace }}
+          PR: '12345'
+          GITHUB_OUTPUT: /tmp/o1.txt
+        run: |
+          scripts/resolve-prompts.sh >/dev/null
+          echo "resolve OK"
+
+      - name: Resolver is deterministic for a fixed PR
+        env:
+          REGISTRY_DIR: ${{ github.workspace }}
+          PR: '12345'
+        run: |
+          GITHUB_OUTPUT=/tmp/o2.txt scripts/resolve-prompts.sh >/dev/null
+          # Second run overwrites o2 only; capture a third into o3 and compare.
+          GITHUB_OUTPUT=/tmp/o3.txt scripts/resolve-prompts.sh >/dev/null
+          diff /tmp/o2.txt /tmp/o3.txt
+          echo "deterministic OK"
+
+      - name: No unresolved template markers
+        env:
+          REGISTRY_DIR: ${{ github.workspace }}
+          PR: '12345'
+          GITHUB_OUTPUT: /tmp/o4.txt
+        run: |
+          scripts/resolve-prompts.sh >/dev/null
+          if grep -qE '\{\{@|\{\{' /tmp/o4.txt; then
+            echo "Unresolved template markers remain in a resolved prompt:" >&2
+            grep -nE '\{\{@|\{\{' /tmp/o4.txt >&2
+            exit 1
+          fi
+          echo "no unresolved markers"
+
+      - name: Arms are distinct prompts
+        run: |
+          control=$(jq -r '.arms.control' prompts/registry.json)
+          variant=$(jq -r '.arms["thesis-first"]' prompts/registry.json)
+          test "$control" != "$variant" || { echo "arms resolve to the same prompt"; exit 1; }
+          echo "arms distinct"
+
+      - name: Roll bumps prompt versions (content-derived provenance)
+        env:
+          REGISTRY_DIR: ${{ github.workspace }}
+          PR: '1'
+          GITHUB_OUTPUT: /tmp/before.txt
+        run: |
+          scripts/resolve-prompts.sh >/dev/null
+          for f in prompts/_shared/*.md; do printf '\n# probe\n' >> "$f"; done
+          GITHUB_OUTPUT=/tmp/after.txt scripts/resolve-prompts.sh >/dev/null
+          for f in prompts/_shared/*.md; do git checkout -- "$f"; done
+          before=$(sed -n '/^experiment_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/before.txt | sed '1d;$d')
+          after=$(sed -n '/^experiment_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/after.txt | sed '1d;$d')
+          if [ "$before" = "$after" ]; then
+            echo "editing a shared rule did not bump prompt_version" >&2
+            exit 1
+          fi
+          echo "shared-rule Roll bumps versions ($before -> $after)"
