@@ -149,8 +149,13 @@ prompts/
   PRs **without** the label get the single gate-arm review (one summary, no A/B), i.e. the
   pre-experiment behavior. The label is also the gradual-rollout switch: enable/disable per PR
   with no code change.
-- **Datadog.** Each LLM run is a separate span tagged with its `prompt_name`/`prompt_version`
-  and `arm`, plus a stable `run_id` (`repo-pr-runid`), `verdict`, `arm_agreement`
+- **Datadog.** Each LLM run is a separate span, tagged with the arm and prompt that produced
+  it under role-prefixed keys — `gate_arm`/`gate_prompt_name`/`gate_prompt_version` on the
+  gate span, `experiment_*` on the experiment span. The prefixes are required: Datadog
+  resolves a tag key at trace scope, so two sibling spans sharing one key (`arm:`) collapse
+  to a single value and misattribute an arm's review to the other's prompt. Select a single
+  arm's spans by span name (`claude.synthesize.gate` / `claude.synthesize.experiment`). The
+  root span carries a stable `run_id` (`repo-pr-runid`), `verdict`, `arm_agreement`
   (agree/disagree between the arms), and `label_assignment` (`A=control|B=thesis-first` or
   the reverse) so offline evals and panel ratings can be joined to the exact review.
 
