@@ -36,11 +36,13 @@ on:
         type: string
       registry_ref:
         description: >-
-          Ref of BiggerPockets/.github to resolve review prompts/resolver from. MUST
+          Ref of BiggerPockets/.github to resolve review prompts/resolver from. Should
           match the ref this workflow was called at (the value after `@` in
           `uses: BiggerPockets/.github/.github/workflows/...@<ref>`), so a pinned caller
           always runs the exact prompt/resolver text that shipped with that workflow.
-        required: true
+          Optional — omit to fall back to github.workflow_sha (the pre-existing
+          behavior), so existing callers keep working without passing this input.
+        required: false
         type: string
 
 jobs:
@@ -70,9 +72,10 @@ jobs:
           fetch-depth: 0
 
       # Prompt templates live in BiggerPockets/.github. Check out that repo at the ref the
-      # caller passed via the registry_ref input (keep it in sync with the ref this
-      # workflow was called at), so a caller pinning @main or a commit SHA always runs
-      # the prompt text that shipped with that workflow. GITHUB_TOKEN is scoped to the
+      # caller passed via the registry_ref input, falling back to github.workflow_sha
+      # (the pre-existing behavior) when the caller omits it, so existing callers keep
+      # working unchanged. A caller pinning @main or a commit SHA always runs the
+      # prompt text that shipped with that workflow. GITHUB_TOKEN is scoped to the
       # caller's repo, so use the BiggiePockets PAT. persist-credentials is off so the
       # PAT is never left in registry/.git/config where the later Codex/Claude steps
       # (which act on untrusted PR diffs and can read files/run Bash) could read it —
@@ -81,7 +84,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: BiggerPockets/.github
-          ref: ${{ inputs.registry_ref }}
+          ref: ${{ inputs.registry_ref || github.workflow_sha }}
           token: ${{ secrets.BIGGIEPOCKETS_PAT }}
           persist-credentials: false
           path: registry

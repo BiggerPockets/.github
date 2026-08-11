@@ -75,8 +75,9 @@ jobs:
     uses: BiggerPockets/.github/.github/workflows/biggiepockets-review.yml@main
     with:
       pr: ${{ github.event.pull_request.number || inputs.pr }}
-      # Required: the BiggerPockets/.github ref to resolve review prompts from. It must
-      # match the ref after `@` above (here `main`). Keep the two in sync when you pin.
+      # Optional: the BiggerPockets/.github ref to resolve review prompts from. Defaults
+      # to the workflow's own ref if omitted. Recommended when pinning `uses:` to a
+      # specific ref/SHA above — keep the two in sync so prompts stay pinned too.
       registry_ref: main
     secrets: inherit
 ```
@@ -158,9 +159,10 @@ production prompt):
 
 - **Roll** — edit a prompt or shared-rule file; its content-derived `prompt_version` bumps.
 - **Apply** — point an arm or `gate_arm` at a different stored prompt in `registry.json`
-  (no version change). Rolling a change out to PRs always means bumping BOTH the `@ref` in
-  each caller's `uses:` AND that caller's `registry_ref` input, in lockstep — Apply owns that
-  ref-bump explicitly.
+  (no version change). Rolling a change out to PRs that pin `registry_ref` means bumping
+  BOTH the `@ref` in that caller's `uses:` AND its `registry_ref` input, in lockstep —
+  Apply owns that ref-bump explicitly. Callers that omit `registry_ref` pick up the change
+  as soon as the `@ref` they `uses:` moves.
 - **Split** — add a new arm entry in `registry.json` + its prompt file.
 - **Merge** — fold a variant's content into another prompt and remove the arm.
 
