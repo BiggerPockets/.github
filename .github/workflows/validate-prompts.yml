@@ -69,7 +69,7 @@ jobs:
       - name: Arms are distinct prompts
         run: |
           control=$(jq -r '.arms.control' prompts/registry.json)
-          variant=$(jq -r '.arms.thesis-first' prompts/registry.json)
+          variant=$(jq -r '.arms["thesis-first"]' prompts/registry.json)
           test "$control" != "$variant" || { echo "arms resolve to the same prompt"; exit 1; }
           echo "arms distinct"
 
