@@ -380,11 +380,19 @@ jobs:
           fi
 
       # Reports one LLM Obs trace per review run: a root "workflow" span plus a
-      # child "llm" span for each stage (codex, control arm, thesis-first arm).
-      # Each span is tagged with the prompt_name/prompt_version that produced it
-      # and the arm, plus a stable run_id (repo + pr + review attempt) and the
-      # slot-equivalent (the arm), so offline evals and panel ratings can be
-      # joined per review. Never blocks/fails/delays the review itself.
+      # child "llm" span for each stage (codex, gate arm, experiment arm), plus a
+      # stable run_id (repo + pr + review attempt) so offline evals and panel
+      # ratings can be joined per review. Never blocks/fails/delays the review.
+      #
+      # Each arm's per-span tags are ROLE-PREFIXED (gate_* / experiment_*) rather
+      # than sharing one uniform key. Datadog resolves a tag key at trace scope, so
+      # two sibling spans emitting the same key with different values collapse to
+      # whichever was submitted last: tagging both arms `arm:`/`prompt_name:` made
+      # the gate span report the EXPERIMENT's arm and prompt on every dual-arm run,
+      # silently attributing the gate arm's review to the wrong prompt. Single-arm
+      # runs looked fine, so it only corrupted the runs the experiment depends on.
+      # Keep these keys distinct per arm. To select one arm's spans, filter on the
+      # span name (claude.synthesize.gate / claude.synthesize.experiment).
       - name: Report review metrics to Datadog LLM Obs
         if: always()
         continue-on-error: true
@@ -579,7 +587,7 @@ jobs:
                         start_ns: $gate_start_ns,
                         duration: $gate_duration,
                         status: $gate_status,
-                        tags: ["prompt_name:\($gate_prompt_name)", "prompt_version:\($gate_prompt_version)", "arm:\($gate_arm)"],
+                        tags: ["gate_arm:\($gate_arm)", "gate_prompt_name:\($gate_prompt_name)", "gate_prompt_version:\($gate_prompt_version)"],
                         meta: {
                           kind: "llm",
                           model_name: $claude_model,
@@ -598,7 +606,7 @@ jobs:
                         start_ns: $experiment_start_ns,
                         duration: $experiment_duration,
                         status: $experiment_status,
-                        tags: ["prompt_name:\($experiment_prompt_name)", "prompt_version:\($experiment_prompt_version)", "arm:\($experiment_arm)"],
+                        tags: ["experiment_arm:\($experiment_arm)", "experiment_prompt_name:\($experiment_prompt_name)", "experiment_prompt_version:\($experiment_prompt_version)"],
                         meta: {
                           kind: "llm",
                           model_name: $claude_model,
