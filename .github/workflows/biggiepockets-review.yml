@@ -383,15 +383,15 @@ jobs:
       # review attempt) so offline evals and panel ratings line up per review.
       # Never blocks/fails/delays the review itself.
       #
-      # Why per-arm rather than one trace per review: Datadog resolves a tag key at
-      # trace scope, so two sibling spans emitting the same key with different values
-      # collapse to whichever was submitted last. With both arms in one trace, tagging
-      # them `arm:`/`prompt_name:` made the gate span report the EXPERIMENT's arm and
-      # prompt on every dual-arm run — silently crediting the gate arm's review to the
-      # wrong prompt, and only ever on the runs the experiment exists to measure.
-      # Giving each arm its own trace means each trace holds exactly one arm, so the
-      # uniform `arm`/`prompt_name`/`prompt_version` keys are unambiguous and can be
-      # grouped and aggregated on. Do not merge the arms back into one trace.
+      # Each arm is submitted as its OWN REQUEST, and that separation is what makes the
+      # arm tags trustworthy. A tag key resolves to a single value per submitted payload
+      # — NOT per trace, which was measured the hard way: when both arms shared one
+      # request, every span reported the experiment's arm and prompt even after the arms
+      # were split into two distinct trace_ids. So the gate arm's review was credited to
+      # the variant prompt, and only ever on the dual-arm runs the experiment exists to
+      # measure. One payload per arm means each request carries exactly one value for
+      # `arm`/`prompt_name`/`prompt_version`, so they can be grouped and aggregated on.
+      # Do not merge the two submissions back into one request.
       #
       #   gate trace       root biggiepockets.review -> codex.review, claude.synthesize.gate
       #   experiment trace root biggiepockets.review -> claude.synthesize.experiment
@@ -496,176 +496,196 @@ jobs:
           gate_span_id=$(openssl rand -hex 8)
           experiment_span_id=$(openssl rand -hex 8)
 
-          payload=$(jq -n \
-            --arg ml_app "biggiepockets-review" \
+          # Submit ONE PAYLOAD PER ARM. The uniform arm/prompt_name/prompt_version keys
+          # live at payload level, so each request carries exactly one value for them.
+          submit_arm() {
+            arm_name="$1"; arm_prompt_name="$2"; arm_prompt_version="$3"
+            arm_trace_id="$4"; arm_spans="$5"
+
+            payload=$(jq -n \
+              --arg ml_app "biggiepockets-review" \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg pr "$PR" \
+              --arg run_id "$run_id" \
+              --arg verdict "$gate_verdict" \
+              --arg label_assignment "$label_assignment" \
+              --arg arm_agreement "$arm_agreement" \
+              --arg arm "$arm_name" \
+              --arg prompt_name "$arm_prompt_name" \
+              --arg prompt_version "$arm_prompt_version" \
+              --arg gate_arm "$gate_arm" \
+              --arg experiment_arm "$experiment_arm" \
+              --arg codex_model "$codex_model_tag" \
+              --arg claude_model "$claude_model_tag" \
+              --arg codex_prompt_name "$codex_prompt_name" \
+              --arg codex_prompt_version "$codex_prompt_version" \
+              --argjson codex_findings_lines "$codex_findings_lines" \
+              --argjson dual_arms "$dual_arms" \
+              --argjson spans "$arm_spans" \
+              '{
+                data: {
+                  type: "span",
+                  attributes: {
+                    ml_app: $ml_app,
+                    tags: [
+                      "repo:\($repo)",
+                      "pr:\($pr)",
+                      "run_id:\($run_id)",
+                      "arm:\($arm)",
+                      "prompt_name:\($prompt_name)",
+                      "prompt_version:\($prompt_version)",
+                      "verdict:\($verdict)",
+                      "label_assignment:\($label_assignment)",
+                      "arm_agreement:\($arm_agreement)",
+                      "gate_arm:\($gate_arm)",
+                      "experiment_arm:\($experiment_arm)",
+                      "codex_model:\($codex_model)",
+                      "claude_model:\($claude_model)",
+                      "codex_findings_lines:\($codex_findings_lines)",
+                      "codex_prompt_name:\($codex_prompt_name)",
+                      "codex_prompt_version:\($codex_prompt_version)",
+                      "dual_arms:\($dual_arms)"
+                    ],
+                    spans: $spans
+                  }
+                }
+              }')
+
+            http_code=$(curl -sS -o /tmp/dd_response.json -w '%{http_code}' \
+              -X POST "https://api.datadoghq.com/api/intake/llm-obs/v1/trace/spans" \
+              -H "Content-Type: application/json" \
+              -H "DD-API-KEY: $DD_API_KEY" \
+              -d "$payload") || http_code="000"
+
+            if [ "$http_code" -ge 300 ] 2>/dev/null || [ "$http_code" = "000" ]; then
+              echo "::warning::Datadog LLM Obs submission failed for arm ${arm_name} (HTTP $http_code): $(cat /tmp/dd_response.json 2>/dev/null)"
+            else
+              echo "Reported ${arm_name} arm to Datadog LLM Obs (trace ${arm_trace_id}, prompt ${arm_prompt_name}@${arm_prompt_version}, run_id ${run_id})"
+            fi
+          }
+
+          # Gate arm trace: the production review (codex first pass -> gate verdict).
+          gate_spans=$(jq -n \
+            --arg trace_id "$trace_id" \
+            --arg root_span_id "$root_span_id" \
+            --arg codex_span_id "$codex_span_id" \
+            --arg gate_span_id "$gate_span_id" \
             --arg repo "$GITHUB_REPOSITORY" \
             --arg pr "$PR" \
-            --arg run_id "$run_id" \
-            --arg verdict "$gate_verdict" \
-            --arg label_assignment "$label_assignment" \
-            --arg arm_agreement "$arm_agreement" \
-            --arg gate_arm "$gate_arm" \
-            --arg experiment_arm "$experiment_arm" \
             --arg base_ref "${BASE_REF:-unknown}" \
             --arg codex_model "$codex_model_tag" \
             --arg claude_model "$claude_model_tag" \
-            --arg codex_prompt_name "$codex_prompt_name" \
-            --arg codex_prompt_version "$codex_prompt_version" \
-            --arg gate_prompt_name "$gate_prompt_name" \
-            --arg gate_prompt_version "$gate_prompt_version" \
-            --arg experiment_prompt_name "$experiment_prompt_name" \
-            --arg experiment_prompt_version "$experiment_prompt_version" \
-            --argjson dual_arms "$dual_arms" \
-            --arg trace_id "$trace_id" \
-            --arg root_span_id "$root_span_id" \
-            --arg experiment_trace_id "$experiment_trace_id" \
-            --arg experiment_root_span_id "$experiment_root_span_id" \
-            --arg codex_span_id "$codex_span_id" \
-            --arg gate_span_id "$gate_span_id" \
-            --arg experiment_span_id "$experiment_span_id" \
             --argjson review_start_ns "$review_start_ns" \
             --argjson root_duration "$((now_ns - review_start_ns))" \
             --argjson codex_start_ns "$codex_start_ns" \
             --argjson codex_duration "$((codex_end_ns - codex_start_ns))" \
             --argjson gate_start_ns "$gate_start_ns" \
             --argjson gate_duration "$((gate_end_ns - gate_start_ns))" \
-            --argjson experiment_start_ns "$experiment_start_ns" \
-            --argjson experiment_duration "$((experiment_end_ns - experiment_start_ns))" \
             --arg codex_status "$codex_status" \
             --arg gate_status "$gate_status" \
-            --arg experiment_status "$experiment_status" \
             --arg root_status "$root_status" \
-            --argjson codex_findings_lines "$codex_findings_lines" \
             --arg codex_findings_excerpt "$codex_findings_excerpt" \
             --arg gate_summary_excerpt "$gate_summary_excerpt" \
-            --arg experiment_summary_excerpt "$experiment_summary_excerpt" \
-            '{
-              data: {
-                type: "span",
-                attributes: {
-                  ml_app: $ml_app,
-                  tags: [
-                    "repo:\($repo)",
-                    "pr:\($pr)",
-                    "run_id:\($run_id)",
-                    "verdict:\($verdict)",
-                    "label_assignment:\($label_assignment)",
-                    "arm_agreement:\($arm_agreement)",
-                    "gate_arm:\($gate_arm)",
-                    "experiment_arm:\($experiment_arm)",
-                    "codex_model:\($codex_model)",
-                    "claude_model:\($claude_model)",
-                    "codex_findings_lines:\($codex_findings_lines)",
-                    "codex_prompt_name:\($codex_prompt_name)",
-                    "codex_prompt_version:\($codex_prompt_version)",
-                    "gate_prompt_name:\($gate_prompt_name)",
-                    "gate_prompt_version:\($gate_prompt_version)",
-                    "experiment_prompt_name:\($experiment_prompt_name)",
-                    "experiment_prompt_version:\($experiment_prompt_version)",
-                    "dual_arms:\($dual_arms)"
-                  ],
-                  spans: (
-                    [
-                      {
-                        parent_id: "undefined",
-                        trace_id: $trace_id,
-                        span_id: $root_span_id,
-                        name: "biggiepockets.review",
-                        start_ns: $review_start_ns,
-                        duration: $root_duration,
-                        status: $root_status,
-                        tags: ["arm:\($gate_arm)", "prompt_name:\($gate_prompt_name)", "prompt_version:\($gate_prompt_version)"],
-                        meta: {
-                          kind: "workflow",
-                          input: {value: "repo:\($repo) pr:\($pr) base_ref:\($base_ref)"},
-                          output: {value: $gate_summary_excerpt}
-                        }
-                      },
-                      {
-                        parent_id: $root_span_id,
-                        trace_id: $trace_id,
-                        span_id: $codex_span_id,
-                        name: "codex.review",
-                        start_ns: $codex_start_ns,
-                        duration: $codex_duration,
-                        status: $codex_status,
-                        meta: {
-                          kind: "llm",
-                          model_name: $codex_model,
-                          model_provider: "openai",
-                          input: {messages: [{role: "user", content: "Review pr:\($pr) against ticket.json/pr.diff"}]},
-                          output: {messages: [{role: "assistant", content: $codex_findings_excerpt}]}
-                        }
-                      },
-                      {
-                        parent_id: $root_span_id,
-                        trace_id: $trace_id,
-                        span_id: $gate_span_id,
-                        name: "claude.synthesize.gate",
-                        start_ns: $gate_start_ns,
-                        duration: $gate_duration,
-                        status: $gate_status,
-                        tags: ["arm:\($gate_arm)", "prompt_name:\($gate_prompt_name)", "prompt_version:\($gate_prompt_version)"],
-                        meta: {
-                          kind: "llm",
-                          model_name: $claude_model,
-                          model_provider: "anthropic",
-                          input: {messages: [{role: "user", content: $codex_findings_excerpt}]},
-                          output: {messages: [{role: "assistant", content: $gate_summary_excerpt}]}
-                        }
-                      }
-                    ]
-                    + (if $dual_arms and ($experiment_arm != "") then [
-                      {
-                        parent_id: "undefined",
-                        trace_id: $experiment_trace_id,
-                        span_id: $experiment_root_span_id,
-                        name: "biggiepockets.review",
-                        start_ns: $experiment_start_ns,
-                        duration: $experiment_duration,
-                        status: $experiment_status,
-                        tags: ["arm:\($experiment_arm)", "prompt_name:\($experiment_prompt_name)", "prompt_version:\($experiment_prompt_version)"],
-                        meta: {
-                          kind: "workflow",
-                          input: {value: "repo:\($repo) pr:\($pr) base_ref:\($base_ref)"},
-                          output: {value: $experiment_summary_excerpt}
-                        }
-                      },
-                      {
-                        parent_id: $experiment_root_span_id,
-                        trace_id: $experiment_trace_id,
-                        span_id: $experiment_span_id,
-                        name: "claude.synthesize.experiment",
-                        start_ns: $experiment_start_ns,
-                        duration: $experiment_duration,
-                        status: $experiment_status,
-                        tags: ["arm:\($experiment_arm)", "prompt_name:\($experiment_prompt_name)", "prompt_version:\($experiment_prompt_version)"],
-                        meta: {
-                          kind: "llm",
-                          model_name: $claude_model,
-                          model_provider: "anthropic",
-                          input: {messages: [{role: "user", content: $codex_findings_excerpt}]},
-                          output: {messages: [{role: "assistant", content: $experiment_summary_excerpt}]}
-                        }
-                      }
-                    ] else [] end)
-                  )
+            '[
+              {
+                parent_id: "undefined",
+                trace_id: $trace_id,
+                span_id: $root_span_id,
+                name: "biggiepockets.review",
+                start_ns: $review_start_ns,
+                duration: $root_duration,
+                status: $root_status,
+                meta: {
+                  kind: "workflow",
+                  input: {value: "repo:\($repo) pr:\($pr) base_ref:\($base_ref)"},
+                  output: {value: $gate_summary_excerpt}
+                }
+              },
+              {
+                parent_id: $root_span_id,
+                trace_id: $trace_id,
+                span_id: $codex_span_id,
+                name: "codex.review",
+                start_ns: $codex_start_ns,
+                duration: $codex_duration,
+                status: $codex_status,
+                meta: {
+                  kind: "llm",
+                  model_name: $codex_model,
+                  model_provider: "openai",
+                  input: {messages: [{role: "user", content: "Review pr:\($pr) against ticket.json/pr.diff"}]},
+                  output: {messages: [{role: "assistant", content: $codex_findings_excerpt}]}
+                }
+              },
+              {
+                parent_id: $root_span_id,
+                trace_id: $trace_id,
+                span_id: $gate_span_id,
+                name: "claude.synthesize.gate",
+                start_ns: $gate_start_ns,
+                duration: $gate_duration,
+                status: $gate_status,
+                meta: {
+                  kind: "llm",
+                  model_name: $claude_model,
+                  model_provider: "anthropic",
+                  input: {messages: [{role: "user", content: $codex_findings_excerpt}]},
+                  output: {messages: [{role: "assistant", content: $gate_summary_excerpt}]}
                 }
               }
-            }')
+            ]')
 
-          http_code=$(curl -sS -o /tmp/dd_response.json -w '%{http_code}' \
-            -X POST "https://api.datadoghq.com/api/intake/llm-obs/v1/trace/spans" \
-            -H "Content-Type: application/json" \
-            -H "DD-API-KEY: $DD_API_KEY" \
-            -d "$payload") || http_code="000"
+          submit_arm "$gate_arm" "$gate_prompt_name" "$gate_prompt_version" "$trace_id" "$gate_spans"
 
-          if [ "$http_code" -ge 300 ] 2>/dev/null || [ "$http_code" = "000" ]; then
-            echo "::warning::Datadog LLM Obs submission failed (HTTP $http_code): $(cat /tmp/dd_response.json 2>/dev/null)"
-          else
-            msg="Reported review metrics to Datadog LLM Obs (gate trace $trace_id, arm ${gate_arm}, prompt ${gate_prompt_name}@${gate_prompt_version}, verdict $gate_verdict"
-            if [ "$dual_arms" = "true" ] && [ -n "$experiment_arm" ]; then
-              msg="$msg; experiment trace $experiment_trace_id, arm ${experiment_arm}, prompt ${experiment_prompt_name}@${experiment_prompt_version}"
-            fi
-            echo "$msg; run_id $run_id)"
+          # Experiment arm trace: the same codex findings summarized under the variant
+          # prompt. Separate request, so its arm tags cannot overwrite the gate arm's.
+          if [ "$dual_arms" = "true" ] && [ -n "$experiment_arm" ]; then
+            experiment_spans=$(jq -n \
+              --arg trace_id "$experiment_trace_id" \
+              --arg root_span_id "$experiment_root_span_id" \
+              --arg experiment_span_id "$experiment_span_id" \
+              --arg repo "$GITHUB_REPOSITORY" \
+              --arg pr "$PR" \
+              --arg base_ref "${BASE_REF:-unknown}" \
+              --arg claude_model "$claude_model_tag" \
+              --argjson experiment_start_ns "$experiment_start_ns" \
+              --argjson experiment_duration "$((experiment_end_ns - experiment_start_ns))" \
+              --arg experiment_status "$experiment_status" \
+              --arg codex_findings_excerpt "$codex_findings_excerpt" \
+              --arg experiment_summary_excerpt "$experiment_summary_excerpt" \
+              '[
+                {
+                  parent_id: "undefined",
+                  trace_id: $trace_id,
+                  span_id: $root_span_id,
+                  name: "biggiepockets.review",
+                  start_ns: $experiment_start_ns,
+                  duration: $experiment_duration,
+                  status: $experiment_status,
+                  meta: {
+                    kind: "workflow",
+                    input: {value: "repo:\($repo) pr:\($pr) base_ref:\($base_ref)"},
+                    output: {value: $experiment_summary_excerpt}
+                  }
+                },
+                {
+                  parent_id: $root_span_id,
+                  trace_id: $trace_id,
+                  span_id: $experiment_span_id,
+                  name: "claude.synthesize.experiment",
+                  start_ns: $experiment_start_ns,
+                  duration: $experiment_duration,
+                  status: $experiment_status,
+                  meta: {
+                    kind: "llm",
+                    model_name: $claude_model,
+                    model_provider: "anthropic",
+                    input: {messages: [{role: "user", content: $codex_findings_excerpt}]},
+                    output: {messages: [{role: "assistant", content: $experiment_summary_excerpt}]}
+                  }
+                }
+              ]')
+
+            submit_arm "$experiment_arm" "$experiment_prompt_name" "$experiment_prompt_version" "$experiment_trace_id" "$experiment_spans"
+          fi
           fi
