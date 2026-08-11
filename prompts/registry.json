@@ -1,0 +1,24 @@
+{
+  "//": "Prompt registry config for the BiggiePockets review workflow.",
+  "//": "",
+  "//": "Every review runs BOTH arms as independent Claude passes over the same Codex",
+  "//": "findings, so the two summary formats can be compared side-by-side on the same",
+  "//": "PR. prompts/<name>.md are versioned templates; shared rule blocks live in",
+  "//": "prompts/_shared/ and are injected via {{@path}} markers. Prompt versions are",
+  "//": "derived from file content by scripts/resolve-prompts.sh, never listed here.",
+  "//": "",
+  "//": "gate_arm names the arm whose verdict is posted as the official approve /",
+  "//": "request-changes review (the experiment only changes presentation, never the",
+  "//": "decision); 'control' is the trusted production prompt.",
+  "//": "",
+  "//": "Operations: Roll = edit a prompt file (its derived version bumps). Apply = set",
+  "//": "gate_arm or swap an arm's prompt (no version change). Split = add a new arm",
+  "//": "entry + prompt file. Merge = fold a variant into another prompt file.",
+  "version": 1,
+  "codex_prompt": "codex-first-pass",
+  "gate_arm": "control",
+  "arms": {
+    "control": "claude-synthesize",
+    "thesis-first": "claude-synthesize-thesis-first"
+  }
+}

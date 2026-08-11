@@ -113,3 +113,52 @@ Once installed, trigger a review either way:
 - **On demand** — run the `BiggiePockets Code Review` workflow via **Actions →
   workflow_dispatch** and pass the PR number. (Available once the caller file is on the
   repo's default branch.)
+
+### Prompt registry and the dual-arm summary experiment
+
+The review-stage prompts are not inline in the workflow. They live in this repo under
+`prompts/` and are resolved at runtime by `scripts/resolve-prompts.sh`:
+
+```
+prompts/
+  registry.json                              # arms + gate_arm + codex prompt name
+  codex-first-pass.md                        # Stage 1 prompt (template)
+  claude-synthesize.md                       # Stage 2 control arm (template)
+  claude-synthesize-thesis-first.md          # Stage 2 thesis-first arm (template)
+  _shared/{privacy,migration-data,perf}-rules.md   # shared rule blocks
+```
+
+- **Templates + shared blocks.** Each prompt references the shared rule blocks via
+  `{{@prompts/_shared/<name>.md}}`, so the Codex and Claude prompts can never drift out of
+  sync. Prompts resolve `{{PR}}`, `{{PROMPT_NAME}}`, `{{PROMPT_VERSION}}` too.
+- **Content-derived versions.** `prompt_version` is a content hash of the template plus the
+  shared blocks it includes — it changes only when that prompt's text changes, not per PR
+  or per arm, so Datadog LLM Obs can attribute quality to the exact prompt text that ran.
+- **Dual-arm, within-PR comparison (opt-in).** Add the **`biggiepockets-dual-arm`** label to a
+  PR to run two independent Claude passes over the same Codex findings — one per arm in
+  `registry.json` (`control`, `thesis-first`). Both summaries are posted in a single review
+  comment labeled **Variant A** / **Variant B** in a per-PR-randomized order (deterministic
+  hash of the PR number, so it is balanced across PRs and stable across re-reviews). The arms
+  are not disclosed in the comment. The official approve / request-changes gate always comes
+  from `gate_arm` (`control`) — the experiment only changes presentation, never the decision.
+  PRs **without** the label get the single control-arm review (one summary, no A/B), i.e. the
+  pre-experiment behavior. The label is also the gradual-rollout switch: enable/disable per PR
+  with no code change.
+- **Datadog.** Each LLM run is a separate span tagged with its `prompt_name`/`prompt_version`
+  and `arm`, plus a stable `run_id` (`repo-pr-runid`), `verdict`, `arm_agreement`
+  (agree/disagree between the arms), and `label_assignment` (`A=control|B=thesis-first` or
+  the reverse) so offline evals and panel ratings can be joined to the exact review.
+
+**Registry operations** (kept distinct so a formatting experiment can't silently change the
+production prompt):
+
+- **Roll** — edit a prompt or shared-rule file; its content-derived `prompt_version` bumps.
+- **Apply** — point an arm or `gate_arm` at a different stored prompt in `registry.json`
+  (no version change). Reaching PRs also requires consumers to re-pin the ref they `uses:`
+  for this reusable workflow — a ref-bump is part of Apply and owned explicitly.
+- **Split** — add a new arm entry in `registry.json` + its prompt file.
+- **Merge** — fold a variant's content into another prompt and remove the arm.
+
+A `validate-prompts.yml` workflow guards the registry: it fails a PR if a template has
+dangling includes, `registry.json` references a missing prompt, the resolver isn't
+deterministic, or a shared-rule edit doesn't bump versions.
