@@ -688,4 +688,3 @@ jobs:
 
             submit_arm "$experiment_arm" "$experiment_prompt_name" "$experiment_prompt_version" "$experiment_trace_id" "$experiment_spans"
           fi
-          fi
