@@ -17,6 +17,12 @@ The **BiggiePockets** service account then submits the resulting `approve` /
 ticket can't be fetched), the review degrades gracefully to a diff-based review instead of
 failing.
 
+Codex and Claude run as separate GitHub Actions jobs. Codex uploads the reviewed commit's
+diff, ticket/discussion context, and findings as a short-lived artifact; Claude downloads
+that immutable handoff. If Claude is rate-limited, use **Re-run failed jobs** on the workflow
+run. GitHub reruns only the Claude job, reusing the completed Codex pass instead of invoking
+Codex again.
+
 The review logic lives centrally in this repo. Each consuming repo only adds a thin
 **caller** workflow that owns the triggers and gating and delegates to this one.
 

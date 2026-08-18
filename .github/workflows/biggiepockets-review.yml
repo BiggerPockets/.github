@@ -47,8 +47,14 @@ on:
         type: string
 
 jobs:
-  review:
+  # Codex and Claude intentionally run in separate jobs. GitHub can only re-run a
+  # failed job (not an individual step), so this boundary lets a rate-limited Claude
+  # run be retried without paying for another Codex pass.
+  codex:
     runs-on: ubuntu-latest
+    outputs:
+      head_sha: ${{ steps.pr_head.outputs.sha }}
+      registry_sha: ${{ steps.registry_head.outputs.sha }}
     permissions:
       contents: read
       pull-requests: read
@@ -76,6 +82,12 @@ jobs:
           ref: refs/pull/${{ inputs.pr }}/head
           fetch-depth: 0
 
+      # Pin the Claude job to the exact commit Codex reviewed. This matters when a
+      # failed Claude job is retried after the PR has received another push.
+      - name: Record PR head SHA
+        id: pr_head
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       # Prompt templates live in BiggerPockets/.github. Check out that repo at the ref the
       # caller passed via the registry_ref input, which defaults to main so a caller that
       # tracks @main works without setting it; a caller pinning a tag or SHA passes the
@@ -95,6 +107,10 @@ jobs:
           token: ${{ secrets.BIGGIEPOCKETS_PAT }}
           persist-credentials: false
           path: registry
+
+      - name: Record prompt registry SHA
+        id: registry_head
+        run: echo "sha=$(git -C registry rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Record review start time
         run: echo "REVIEW_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
@@ -241,15 +257,90 @@ jobs:
           echo "::warning::Codex first-pass review failed (commonly an OpenAI quota error); continuing with a Claude-only review."
           : > codex-findings.md
 
-      # Stage 2: Claude verifies Codex's findings, reviews independently, and decides.
-      # The GATE arm (prompts/registry.json gate_arm) runs on every review and supplies
-      # the official verdict. PRs opted into the dual-arm experiment (DUAL_ARM_LABEL)
-      # also run each experiment arm (arms other than the gate arm) over the same Codex
-      # findings, so the summary formats can be compared side by side.
-      - name: Record codex end / claude gate start time
+      # Persist the handoff even when Codex failed. Claude consumes the same diff,
+      # ticket/discussion context, and (possibly empty) findings on every retry.
+      - name: Record Codex completion metadata
+        if: always()
         run: |
-          echo "CODEX_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
-          echo "GATE_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+          codex_end_ns=$(date +%s%N)
+          echo "CODEX_END_NS=$codex_end_ns" >> "$GITHUB_ENV"
+          {
+            echo "BASE_REF=$BASE_REF"
+            echo "DUAL_ARMS=$DUAL_ARMS"
+            echo "REVIEW_START_NS=$REVIEW_START_NS"
+            echo "CODEX_START_NS=$CODEX_START_NS"
+            echo "CODEX_END_NS=$codex_end_ns"
+            echo "CODEX_STATUS=${{ steps.codex.outcome }}"
+          } > review-context.env
+          touch codex-findings.md
+
+      - name: Upload Codex review handoff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-review-${{ github.run_id }}
+          path: |
+            pr.diff
+            ticket.json
+            conversations.json
+            codex-findings.md
+            review-context.env
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+  # A failed/rate-limited Claude run can be retried with "Re-run failed jobs". The
+  # successful Codex job is not re-executed; this job downloads its immutable handoff.
+  claude:
+    needs: codex
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write # claude-code-action authenticates via OIDC
+    env:
+      PR: ${{ inputs.pr }}
+      DUAL_ARM_LABEL: biggiepockets-dual-arm
+      CODEX_MODEL: "openai/gpt-5.6-sol"
+      CLAUDE_MODEL: ""
+    steps:
+      - name: Checkout reviewed PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.codex.outputs.head_sha }}
+          fetch-depth: 0
+
+      - name: Checkout prompt registry
+        uses: actions/checkout@v4
+        with:
+          repository: BiggerPockets/.github
+          ref: ${{ needs.codex.outputs.registry_sha }}
+          token: ${{ secrets.BIGGIEPOCKETS_PAT }}
+          persist-credentials: false
+          path: registry
+
+      - name: Download Codex review handoff
+        uses: actions/download-artifact@v4
+        with:
+          name: codex-review-${{ github.run_id }}
+          path: .
+
+      - name: Restore review context
+        run: cat review-context.env >> "$GITHUB_ENV"
+
+      # Resolve again from the same pinned registry ref. Prompt text stays out of job
+      # outputs (which are size-limited), while the artifact carries all model inputs.
+      - name: Resolve review prompts
+        id: resolve
+        env:
+          REGISTRY_DIR: registry
+        run: registry/scripts/resolve-prompts.sh
+
+      # Stage 2: Claude verifies Codex's findings, reviews independently, and decides.
+      # The GATE arm supplies the official verdict. An opted-in experiment arm reads
+      # the same handoff but never changes that decision.
+      - name: Record Claude gate start time
+        run: echo "GATE_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
 
       - name: Claude verify and synthesize (gate arm)
         id: claude_gate
@@ -446,7 +537,7 @@ jobs:
           fi
 
           codex_status="ok"
-          [ "${{ steps.codex.outcome }}" = "failure" ] && codex_status="error"
+          [ "${CODEX_STATUS:-failure}" != "success" ] && codex_status="error"
           codex_findings=$(cat codex-findings.md 2>/dev/null || true)
           codex_findings_lines=$(wc -l < codex-findings.md 2>/dev/null || echo 0)
 
@@ -692,5 +783,4 @@ jobs:
               ]')
 
             submit_arm "$experiment_arm" "$experiment_prompt_name" "$experiment_prompt_version" "$experiment_trace_id" "$experiment_spans"
-          fi
           fi
