@@ -23,7 +23,9 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
 5. Check the diff for batch/task performance hot spots per these rules, and flag each
    genuine one with a file/line reference and a suggested fix:
    {{@prompts/_shared/perf-rules.md}}
-6. Report concrete issues — bugs, regressions, security problems, member-privacy
+6. Check how the diff parses structured values, per these rules:
+   {{@prompts/_shared/parsing-rules.md}}
+7. Report concrete issues — bugs, regressions, security problems, member-privacy
    violations, and genuine misses of the ticket's intent or clear scope creep — each with a
    file/line reference and a brief rationale. Do not list "doesn't match acceptance criteria"
    as an issue by itself; only raise it when the deviation harms the intent. If nothing is
