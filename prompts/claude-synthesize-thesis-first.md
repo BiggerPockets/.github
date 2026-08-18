@@ -29,11 +29,13 @@ Synthesize a single review decision for pull request #{{PR}}.
    pattern on a full-table #process/#collection is a genuine finding, not a nitpick;
    flag it with a suggested fix:
    {{@prompts/_shared/perf-rules.md}}
-7. Validate which of Codex's findings are real (discard false positives), add any genuine
+7. Check how the diff parses structured values, per these rules:
+   {{@prompts/_shared/parsing-rules.md}}
+8. Validate which of Codex's findings are real (discard false positives), add any genuine
    issues Codex missed, and (when a ticket is available) judge genuine misses of the ticket's
    intent or clear scope creep — but give credit when the author went beyond the literal
    acceptance criteria in a sound way rather than flagging it as non-compliant.
-8. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
+9. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
    genuine, blocking issue; otherwise "approve". A change that exceeds the AC without
    breaking the ticket's intent is a reason to approve, not to block.
 
