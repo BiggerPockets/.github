@@ -85,7 +85,8 @@ jobs:
 #### 3. Make the secrets available
 
 The reusable workflow consumes several secrets via `secrets: inherit`: credentials for the
-two AI review providers, an Atlassian email + API token to fetch the PR's JIRA ticket for
+two AI review providers (`OPENROUTER_API_KEY` for the Codex stage, which reaches its model
+through OpenRouter's Responses API), an Atlassian email + API token to fetch the PR's JIRA ticket for
 intent, and a personal access token for the BiggiePockets service account that submits the
 review. (The Claude auth secret is set by `/install-github-app` in step 1; the rest you add
 yourself.) Configure them as **organization secrets** (recommended — set once, available to
@@ -93,8 +94,8 @@ every repo) or as per-repo secrets if you prefer to scope them.
 
 It also reports per-review traces to the `biggiepockets-review` app in Datadog LLM
 Observability via `secrets.DATADOG_API_KEY`: verdict, timing, prompt version, the model each
-stage ran (`CODEX_MODEL`/`CLAUDE_MODEL` env vars in the workflow — leave empty to use each
-tool's own default), and the actual findings text from Codex and the summary Claude wrote,
+stage ran (`CODEX_MODEL`/`CLAUDE_MODEL` env vars in the workflow — `CODEX_MODEL` is an
+OpenRouter model slug and must be set; leave `CLAUDE_MODEL` empty to use Claude's own default), and the actual findings text from Codex and the summary Claude wrote,
 so review quality is inspectable, not just counted. This secret is optional — reviews still
 run and post normally without it, but no metrics are reported.
 
