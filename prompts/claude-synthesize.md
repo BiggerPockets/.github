@@ -31,11 +31,14 @@ Synthesize a single review decision for pull request #{{PR}}.
    {{@prompts/_shared/perf-rules.md}}
 7. Check how the diff parses structured values, per these rules:
    {{@prompts/_shared/parsing-rules.md}}
-8. Validate which of Codex's findings are real (discard false positives), add any genuine
+8. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
+   tag, per these rules:
+   {{@prompts/_shared/navigation-rules.md}}
+9. Validate which of Codex's findings are real (discard false positives), add any genuine
    issues Codex missed, and (when a ticket is available) judge genuine misses of the ticket's
    intent or clear scope creep — but give credit when the author went beyond the literal
    acceptance criteria in a sound way rather than flagging it as non-compliant.
-9. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
+10. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
    genuine, blocking issue; otherwise "approve". A change that exceeds the AC without
    breaking the ticket's intent is a reason to approve, not to block.
 
