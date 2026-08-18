@@ -66,7 +66,7 @@ jobs:
       # The Codex stage runs through OpenRouter, so its model must be an OpenRouter
       # model slug and must be set explicitly — Codex's own default model name is not
       # one OpenRouter accepts.
-      CODEX_MODEL: "openai/gpt-5.1-codex"
+      CODEX_MODEL: "openai/gpt-5.6-sol"
       CODEX_RESPONSES_ENDPOINT: "https://openrouter.ai/api/v1/responses"
       CLAUDE_MODEL: ""
     steps:
