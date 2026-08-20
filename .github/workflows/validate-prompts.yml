@@ -36,9 +36,8 @@ jobs:
         env:
           REGISTRY_DIR: ${{ github.workspace }}
           PR: '12345'
-          GITHUB_OUTPUT: /tmp/o1.txt
         run: |
-          scripts/resolve-prompts.sh >/dev/null
+          GITHUB_OUTPUT=/tmp/o1.txt scripts/resolve-prompts.sh >/dev/null
           echo "resolve OK"
 
       - name: Resolver is deterministic for a fixed PR
@@ -56,15 +55,47 @@ jobs:
         env:
           REGISTRY_DIR: ${{ github.workspace }}
           PR: '12345'
-          GITHUB_OUTPUT: /tmp/o4.txt
         run: |
-          scripts/resolve-prompts.sh >/dev/null
-          if grep -qE '\{\{@|\{\{' /tmp/o4.txt; then
-            echo "Unresolved template markers remain in a resolved prompt:" >&2
-            grep -nE '\{\{@|\{\{' /tmp/o4.txt >&2
-            exit 1
-          fi
+          GITHUB_OUTPUT=/tmp/o4.txt scripts/resolve-prompts.sh >/dev/null
+          # Assert the resolver actually wrote where we told it to. Without this an
+          # unreadable file yields an empty string, and every check below passes on
+          # nothing. GITHUB_OUTPUT must be set inline, not in a step `env:` block —
+          # the runner overrides that one with its own per-step file.
+          test -s /tmp/o4.txt || { echo "resolver wrote no output" >&2; exit 1; }
+          # Only the *resolved* prompts must be marker-free. The *_prompt_template
+          # outputs keep their {{PR}}/{{PROMPT_NAME}}/{{PROMPT_VERSION}} placeholders on
+          # purpose — that is the template Datadog Prompt Tracking records.
+          for out in codex_prompt gate_prompt experiment_prompt; do
+            resolved=$(sed -n "/^$out<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p" /tmp/o4.txt | sed '1d;$d')
+            if printf '%s' "$resolved" | grep -qE '\{\{'; then
+              echo "Unresolved template markers remain in $out:" >&2
+              printf '%s' "$resolved" | grep -nE '\{\{' >&2
+              exit 1
+            fi
+          done
           echo "no unresolved markers"
+
+      - name: Prompt templates are include-expanded and non-empty
+        env:
+          REGISTRY_DIR: ${{ github.workspace }}
+          PR: '12345'
+        run: |
+          GITHUB_OUTPUT=/tmp/o5.txt scripts/resolve-prompts.sh >/dev/null
+          test -s /tmp/o5.txt || { echo "resolver wrote no output" >&2; exit 1; }
+          # The *_prompt_template outputs are what Datadog records as the prompt
+          # template. They keep {{PR}}-style placeholders, but a shared-rule include
+          # must already be expanded — an unexpanded {{@...}} would ship a template
+          # that no longer matches the text the model actually saw.
+          for out in codex_prompt_template gate_prompt_template experiment_prompt_template; do
+            tmpl=$(sed -n "/^$out<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p" /tmp/o5.txt | sed '1d;$d')
+            test -n "$tmpl" || { echo "$out is empty" >&2; exit 1; }
+            if printf '%s' "$tmpl" | grep -qE '\{\{@'; then
+              echo "Unexpanded include remains in $out:" >&2
+              printf '%s' "$tmpl" | grep -nE '\{\{@' >&2
+              exit 1
+            fi
+          done
+          echo "templates include-expanded"
 
       - name: Arms are distinct prompts
         run: |
@@ -77,12 +108,13 @@ jobs:
         env:
           REGISTRY_DIR: ${{ github.workspace }}
           PR: '1'
-          GITHUB_OUTPUT: /tmp/before.txt
         run: |
-          scripts/resolve-prompts.sh >/dev/null
+          GITHUB_OUTPUT=/tmp/before.txt scripts/resolve-prompts.sh >/dev/null
           for f in prompts/_shared/*.md; do printf '\n# probe\n' >> "$f"; done
           GITHUB_OUTPUT=/tmp/after.txt scripts/resolve-prompts.sh >/dev/null
           for f in prompts/_shared/*.md; do git checkout -- "$f"; done
+          test -s /tmp/before.txt && test -s /tmp/after.txt \
+            || { echo "resolver wrote no output" >&2; exit 1; }
           before=$(sed -n '/^experiment_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/before.txt | sed '1d;$d')
           after=$(sed -n '/^experiment_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/after.txt | sed '1d;$d')
           if [ "$before" = "$after" ]; then

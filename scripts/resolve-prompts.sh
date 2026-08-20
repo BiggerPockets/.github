@@ -14,6 +14,12 @@
 # The resolved text substitutes late-binding placeholders used for provenance only:
 #   {{PR}}, {{PROMPT_NAME}}, {{PROMPT_VERSION}}
 #
+# Alongside each resolved text, the unsubstituted template (shared blocks expanded,
+# those three placeholders left intact) is emitted as <prefix>_prompt_template. It is
+# what Datadog LLM Obs Prompt Tracking records as the prompt template, with the
+# substituted values reported as its variables, so runs of one prompt group together
+# instead of splitting into a new template per PR.
+#
 # prompt_version is DERIVED from content, never hand-set: a hash of the template file
 # plus every shared block it includes. It changes if and only if that prompt's text
 # changes (a Roll), stays stable across PRs, and never encodes an arm — the arm is
@@ -23,7 +29,8 @@
 # Inputs (env): REGISTRY_DIR, PR.
 # Outputs: codex_prompt{,_name,_version}; gate_arm (arm key); gate_prompt{,_name,_version};
 # experiment_arm_key (first non-gate arm key, or empty); experiment_prompt{,_name,_version}
-# (the non-gate arm's prompt, or empty when there is only the gate arm).
+# (the non-gate arm's prompt, or empty when there is only the gate arm). Each prompt
+# also gets <prefix>_prompt_template.
 
 set -euo pipefail
 
@@ -112,6 +119,12 @@ prompt_version() { # name -> content-derived version (template + shared includes
   } | sha256sum | cut -c1-12
 }
 
+prompt_template() { # name -> include-expanded text, placeholders left intact
+  local name="$1"
+  _INCLUDED=()
+  expand_template "$REGISTRY_DIR/prompts/$name.md"
+}
+
 prompt_text() { # name version -> resolved text
   local name="$1" version="$2" text
   _INCLUDED=()
@@ -126,6 +139,7 @@ emit_prompt() { # emit_prompt <output prefix> <prompt name> — writes text/name
   local prefix="$1" name="$2" version
   version="$(prompt_version "$name")"
   write_output "${prefix}_prompt" "$(prompt_text "$name" "$version")"
+  write_output "${prefix}_prompt_template" "$(prompt_template "$name")"
   write_output "${prefix}_prompt_name" "$name"
   write_output "${prefix}_prompt_version" "$version"
 }
@@ -151,6 +165,7 @@ if [ -n "$EXPERIMENT_ARM" ]; then
   emit_prompt "experiment" "$(jq -r --arg a "$EXPERIMENT_ARM" '.arms[$a]' "$REGISTRY_FILE")"
 else
   write_output "experiment_prompt" ""
+  write_output "experiment_prompt_template" ""
   write_output "experiment_prompt_name" ""
   write_output "experiment_prompt_version" ""
 fi
