@@ -30,9 +30,9 @@
 # Inputs (env): REGISTRY_DIR, PR, GITHUB_REPOSITORY (falls back to "unknown", which
 # only changes which arm a PR lands in, never whether assignment is deterministic).
 # Outputs: codex_prompt{,_name,_version,_template}; arm_prompt{,_name,_version,_template}
-# for the ASSIGNED arm; assigned_arm (its key); control_arm; experiment_arm_key (the
-# first non-control arm, or empty); experiment_split_percent; assignment_bucket (0-99,
-# so an assignment can be recomputed and audited from the tag alone).
+# for the ASSIGNED arm; assigned_arm (its key); control_arm; experiment_split_percent;
+# assignment_bucket (0-99, so an assignment can be recomputed and audited from the tag
+# alone).
 
 set -euo pipefail
 
@@ -179,7 +179,6 @@ if [ -n "$EXPERIMENT_ARM" ] && [ "$BUCKET" -lt "$SPLIT_PERCENT" ]; then
 fi
 
 write_output "control_arm" "$CONTROL_ARM"
-write_output "experiment_arm_key" "$EXPERIMENT_ARM"
 write_output "experiment_split_percent" "$SPLIT_PERCENT"
 write_output "assignment_bucket" "$BUCKET"
 write_output "assigned_arm" "$ASSIGNED_ARM"

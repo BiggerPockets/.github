@@ -186,12 +186,9 @@ prompts/
   under. A stable `run_id` (`repo-pr-runid`) joins offline evals and panel ratings to the
   exact review.
 
-  Older spans in the same app ran both arms over one PR and reported two traces per
-  review; identify them by the tags only they carry — `arm_agreement`,
-  `experiment_verdict`, `label_assignment` — or by the span names
-  `claude.synthesize.gate` / `claude.synthesize.experiment`. They are still queryable, but
-  they answer a within-PR question current reviews no longer produce, so exclude them when
-  comparing arms rather than pooling them in.
+  Spans carrying an `arm_agreement`, `experiment_verdict`, or `label_assignment` tag came
+  from an earlier setup and are not comparable to these; exclude them when grouping by
+  arm.
 
 **Registry operations** (kept distinct so a formatting experiment can't silently change the
 production prompt):

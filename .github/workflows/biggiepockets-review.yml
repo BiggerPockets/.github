@@ -378,15 +378,13 @@ jobs:
       # and joined by a stable run_id (repo + pr + review attempt) so offline evals and
       # panel ratings line up per review. Never blocks/fails/delays the review itself.
       #
-      # A tag key resolves to a single value per submitted payload, so the arm's identity
-      # is only trustworthy while a payload carries exactly one arm — which it now does by
-      # construction, since only one arm runs. Keep `arm`/`prompt_name`/`prompt_version` at
-      # payload level and never submit two arms in one request.
+      # `arm`/`prompt_name`/`prompt_version` are payload-level tags, which is where a tag
+      # key resolves to one value — one arm per review, so one value each.
       #
       #   root biggiepockets.review -> codex.review, claude.synthesize
       #
-      # Compare arms by grouping on `arm` ACROSS pull requests (verdict rate, latency,
-      # tokens). There is no within-PR pair to diff: a PR is reviewed by one arm only.
+      # Compare arms by grouping on `arm` across pull requests (verdict rate, latency,
+      # tokens).
       - name: Report review metrics to Datadog LLM Obs
         if: always()
         continue-on-error: true
