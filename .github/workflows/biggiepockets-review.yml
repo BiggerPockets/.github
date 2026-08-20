@@ -74,7 +74,7 @@ jobs:
       # one OpenRouter accepts.
       CODEX_MODEL: "openai/gpt-5.6-sol"
       CODEX_RESPONSES_ENDPOINT: "https://openrouter.ai/api/v1/responses"
-      CLAUDE_MODEL: ""
+      CLAUDE_MODEL: "claude-opus-5"
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
@@ -302,7 +302,7 @@ jobs:
       PR: ${{ inputs.pr }}
       DUAL_ARM_LABEL: biggiepockets-dual-arm
       CODEX_MODEL: "openai/gpt-5.6-sol"
-      CLAUDE_MODEL: ""
+      CLAUDE_MODEL: "claude-opus-5"
     steps:
       - name: Checkout reviewed PR head
         uses: actions/checkout@v4
