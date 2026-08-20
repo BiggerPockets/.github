@@ -73,7 +73,34 @@ on:
         type: string
 
 jobs:
+  # Samples a fraction of PRs into the dual-arm summary experiment (see below) by
+  # applying the opt-in label before the review reads it. Optional — drop this job and
+  # the `needs:` below to review every PR single-arm.
+  sample:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.requested_reviewer.login == 'BiggiePockets'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Sample this PR into the dual-arm experiment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number || inputs.pr }}
+          # 1 in N PRs run both arms. Raise to sample less, set to 1 for every PR.
+          SAMPLE_RATE: 5
+        run: |
+          if [ $((PR % SAMPLE_RATE)) -eq 0 ]; then
+            # Never fail the review over experiment plumbing — a missing label or a
+            # token without write access should degrade to a single-arm review.
+            gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" \
+              --add-label biggiepockets-dual-arm ||
+              echo "::warning::Could not apply the dual-arm label; reviewing single-arm."
+          fi
+
   review:
+    needs: sample
     # React to a manual dispatch, or to BiggiePockets specifically being requested.
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -154,9 +181,15 @@ prompts/
   number, so it is balanced across PRs and stable across re-reviews). The arms are not
   disclosed in the comment. The official approve / request-changes gate always comes from
   `gate_arm` (`control`) — the experiment only changes presentation, never the decision.
-  PRs **without** the label get the single gate-arm review (one summary, no A/B), i.e. the
-  pre-experiment behavior. The label is also the gradual-rollout switch: enable/disable per PR
-  with no code change.
+  PRs **without** the label get the single gate-arm review (one summary, no A/B). The label
+  is also the rollout switch: enable/disable per PR with no code change.
+
+  Prefer sampling the label from the caller workflow (`SAMPLE_RATE` in the snippet above)
+  over applying it by hand. Labeling manually skews the comparison toward whichever PRs
+  looked interesting enough to label, and sampling on PR number keeps a PR in or out of the
+  experiment consistently across re-reviews. The label must already exist in the repo for
+  `gh pr edit --add-label` to apply it — create it once with
+  `gh label create biggiepockets-dual-arm`.
 - **Prompt Tracking.** Every LLM span carries the prompt that produced it under
   `meta.input.prompt` — the registry template with its `{{PR}}`-style placeholders intact,
   plus the values that filled them as `variables`, plus `id`/`name`/`version`. Keeping the
