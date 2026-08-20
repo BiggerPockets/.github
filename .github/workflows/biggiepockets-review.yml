@@ -525,6 +525,10 @@ jobs:
           gate_verdict="${GATE_VERDICT:-unknown}"
           label_assignment="${LABEL_ASSIGN:-unknown}"
           arm_agreement="${ARM_AGREEMENT:-unknown}"
+          # The experiment arm's own verdict, so a disagreement records which way it went
+          # (variant stricter vs. laxer) instead of only that one happened. "n/a" on
+          # single-arm runs, "failed" when the experiment arm produced no summary.
+          experiment_verdict="${EXPERIMENT_VERDICT:-unknown}"
           dual_arms="false"
           [ "$DUAL_ARMS" = "true" ] && dual_arms="true"
 
@@ -639,6 +643,7 @@ jobs:
               --arg verdict "$gate_verdict" \
               --arg label_assignment "$label_assignment" \
               --arg arm_agreement "$arm_agreement" \
+              --arg experiment_verdict "$experiment_verdict" \
               --arg arm "$arm_name" \
               --arg prompt_name "$arm_prompt_name" \
               --arg prompt_version "$arm_prompt_version" \
@@ -666,6 +671,7 @@ jobs:
                       "verdict:\($verdict)",
                       "label_assignment:\($label_assignment)",
                       "arm_agreement:\($arm_agreement)",
+                      "experiment_verdict:\($experiment_verdict)",
                       "gate_arm:\($gate_arm)",
                       "experiment_arm:\($experiment_arm)",
                       "codex_model:\($codex_model)",

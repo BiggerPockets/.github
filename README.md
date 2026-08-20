@@ -180,9 +180,12 @@ prompts/
   duplicated (which would double-count its latency and tokens); its findings are still the
   recorded input of both arms' spans. Compare arms at the `claude.synthesize.*` spans, which
   are like-for-like — the gate trace's root also spans codex, so root durations are not.
-  Both traces share a stable `run_id` (`repo-pr-runid`) and carry `verdict`, `arm_agreement`
-  (agree/disagree between the arms), and `label_assignment` (`A=control|B=thesis-first` or
-  the reverse), so offline evals and panel ratings join to the exact review.
+  Both traces share a stable `run_id` (`repo-pr-runid`) and carry `verdict` (the gate arm's
+  decision, the one that posts), `experiment_verdict` (the other arm's, so a disagreement
+  records which way it went — variant stricter or laxer — and not merely that one happened;
+  `n/a` on single-arm runs), `arm_agreement` (agree/disagree between the arms), and
+  `label_assignment` (`A=control|B=thesis-first` or the reverse), so offline evals and panel
+  ratings join to the exact review.
 
 **Registry operations** (kept distinct so a formatting experiment can't silently change the
 production prompt):
