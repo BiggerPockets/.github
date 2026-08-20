@@ -19,16 +19,19 @@ name: BiggiePockets Code Review (reusable)
 # span also carries its template and variables under meta.input.prompt, which is what
 # Datadog Prompt Tracking reads to group runs by prompt and version.
 #
-# Dual-arm summary experiment (BIG-21717): when the PR carries the opt-in label
-# DUAL_ARM_LABEL, the review runs an independent Claude pass for each EXPERIMENT arm
-# named in prompts/registry.json (the `thesis-first` arm today) in addition to the
-# GATE arm, all over the same Codex findings. The two summaries are posted together in
-# a single review comment, in a deterministic-but-randomized order (A/B labels swapped
-# per PR number) so neither position is favored and the arms are not disclosed to
-# reviewers. The GATE verdict — the official approve / request-changes review — ALWAYS
-# comes from prompts/registry.json `gate_arm`; the experiment only changes
-# presentation, never the decision. PRs without the label get the single gate-arm
-# review (one summary, no A/B), which is byte-for-byte the pre-experiment behavior.
+# Dual-arm summary experiment (BIG-21717): every review runs an independent Claude
+# pass for each EXPERIMENT arm named in prompts/registry.json (the `thesis-first` arm
+# today) in addition to the GATE arm, all over the same Codex findings. The two
+# summaries are posted together in a single review comment, in a
+# deterministic-but-randomized order (A/B labels swapped per PR number) so neither
+# position is favored and the arms are not disclosed to reviewers. The GATE verdict —
+# the official approve / request-changes review — ALWAYS comes from
+# prompts/registry.json `gate_arm`; the experiment only changes presentation, never the
+# decision.
+#
+# prompts/registry.json is the only switch: an arms map with nothing but `gate_arm`
+# leaves every review single-arm, so removing an arm (a Merge) turns the experiment off
+# for every repo at once.
 on:
   workflow_call:
     inputs:
@@ -63,9 +66,6 @@ jobs:
       id-token: write # claude-code-action authenticates via OIDC
     env:
       PR: ${{ inputs.pr }}
-      # Apply this label to a PR to opt into the dual-arm (control + thesis-first)
-      # summary experiment. Its absence keeps the single control-arm review.
-      DUAL_ARM_LABEL: biggiepockets-dual-arm
       # Explicit model per stage, threaded into both the actual invocation below and the
       # Datadog LLM Obs tags/spans at the bottom of this job. Empty means "let the tool
       # use its own default" (today's behavior, unchanged). Set these once you want a
@@ -127,23 +127,6 @@ jobs:
           echo "BASE_REF=$base" >> "$GITHUB_ENV"
           echo "PR_TITLE=$title" >> "$GITHUB_ENV"
           echo "Reviewing PR #$PR (base $base): $title"
-
-      # The dual-arm experiment is opt-in per PR: label DUAL_ARM_LABEL to run the
-      # control + thesis-first comparison; its absence keeps the single control-arm
-      # review. Also the natural gradual-rollout switch — no code change needed to
-      # enable/disable per PR.
-      - name: Check dual-arm opt-in label
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          labels=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels -q '.labels[].name' 2>/dev/null || true)
-          if printf '%s\n' "$labels" | grep -qx "$DUAL_ARM_LABEL"; then
-            echo "DUAL_ARMS=true" >> "$GITHUB_ENV"
-            echo "Opted into dual-arm review via label '$DUAL_ARM_LABEL'."
-          else
-            echo "DUAL_ARMS=false" >> "$GITHUB_ENV"
-            echo "Not opted into dual-arm review (label '$DUAL_ARM_LABEL' absent); running the single control-arm review."
-          fi
 
       - name: Compute PR diff
         run: |
@@ -268,7 +251,6 @@ jobs:
           echo "CODEX_END_NS=$codex_end_ns" >> "$GITHUB_ENV"
           {
             echo "BASE_REF=$BASE_REF"
-            echo "DUAL_ARMS=$DUAL_ARMS"
             echo "REVIEW_START_NS=$REVIEW_START_NS"
             echo "CODEX_START_NS=$CODEX_START_NS"
             echo "CODEX_END_NS=$codex_end_ns"
@@ -302,7 +284,6 @@ jobs:
       id-token: write # claude-code-action authenticates via OIDC
     env:
       PR: ${{ inputs.pr }}
-      DUAL_ARM_LABEL: biggiepockets-dual-arm
       CODEX_MODEL: "openai/gpt-5.6-sol"
       CLAUDE_MODEL: "claude-opus-5"
     steps:
@@ -339,8 +320,8 @@ jobs:
         run: registry/scripts/resolve-prompts.sh
 
       # Stage 2: Claude verifies Codex's findings, reviews independently, and decides.
-      # The GATE arm supplies the official verdict. An opted-in experiment arm reads
-      # the same handoff but never changes that decision.
+      # The GATE arm supplies the official verdict. Each experiment arm reads the same
+      # handoff but never changes that decision.
       - name: Record Claude gate start time
         run: echo "GATE_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
 
@@ -362,8 +343,8 @@ jobs:
         if: always()
         run: cp verdict.json verdict-gate.json 2>/dev/null || true
 
-      # Experiment arms only run when the PR opted in via DUAL_ARM_LABEL AND the
-      # registry declares at least one arm other than the gate arm. continue-on-error
+      # Experiment arms run whenever the registry declares at least one arm other than
+      # the gate arm. continue-on-error
       # keeps an experiment failure (e.g. a quota error) from failing the job and
       # skipping the gate submission; Datadog records the span as errored.
       - name: Record claude gate end / experiment start time
@@ -376,7 +357,7 @@ jobs:
           rm -f verdict.json
 
       - name: Claude verify and synthesize (experiment arm)
-        if: ${{ env.DUAL_ARMS == 'true' && steps.resolve.outputs.experiment_prompt != '' }}
+        if: ${{ steps.resolve.outputs.experiment_prompt != '' }}
         id: claude_experiment
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
@@ -387,11 +368,11 @@ jobs:
           prompt: ${{ steps.resolve.outputs.experiment_prompt }}
 
       - name: Preserve experiment verdict
-        if: ${{ always() && env.DUAL_ARMS == 'true' && steps.resolve.outputs.experiment_prompt != '' }}
+        if: ${{ always() && steps.resolve.outputs.experiment_prompt != '' }}
         run: cp verdict.json verdict-experiment.json 2>/dev/null || true
 
       - name: Record claude experiment end time
-        if: ${{ always() && env.DUAL_ARMS == 'true' && steps.resolve.outputs.experiment_prompt != '' }}
+        if: ${{ always() && steps.resolve.outputs.experiment_prompt != '' }}
         run: echo "EXPERIMENT_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
 
       # Submit the review. The GATE arm's verdict is the official approve /
@@ -422,7 +403,7 @@ jobs:
             experiment_summary=$(jq -r '.summary // ""' verdict-experiment.json 2>/dev/null) || experiment_summary=""
           fi
 
-          if [ "$DUAL_ARMS" = "true" ] && [ -n "$experiment_summary" ] && [ -n "$EXPERIMENT_ARM" ]; then
+          if [ -n "$experiment_summary" ] && [ -n "$EXPERIMENT_ARM" ]; then
             parity=$(( $(printf '%s' "$PR" | cksum | awk '{print $2}') % 2 ))
             if [ "$parity" -eq 0 ]; then
               first_name="Variant A"; first_summary="$gate_summary"
@@ -462,7 +443,7 @@ jobs:
 
           echo "GATE_VERDICT=$gate_verdict" >> "$GITHUB_ENV"
           echo "LABEL_ASSIGN=$label_assignment" >> "$GITHUB_ENV"
-          if [ "$DUAL_ARMS" = "true" ] && [ -n "$EXPERIMENT_ARM" ]; then
+          if [ -n "$EXPERIMENT_ARM" ]; then
             if [ -n "$experiment_summary" ]; then
               experiment_verdict=$(jq -r '.verdict // "unknown"' verdict-experiment.json 2>/dev/null) || experiment_verdict="unknown"
               agreement="agree"; [ "$gate_verdict" != "$experiment_verdict" ] && agreement="disagree"
@@ -529,9 +510,6 @@ jobs:
           # (variant stricter vs. laxer) instead of only that one happened. "n/a" on
           # single-arm runs, "failed" when the experiment arm produced no summary.
           experiment_verdict="${EXPERIMENT_VERDICT:-unknown}"
-          dual_arms="false"
-          [ "$DUAL_ARMS" = "true" ] && dual_arms="true"
-
           codex_prompt_name="${{ steps.resolve.outputs.codex_prompt_name }}"
           codex_prompt_version="${{ steps.resolve.outputs.codex_prompt_version }}"
           gate_prompt_name="${{ steps.resolve.outputs.gate_prompt_name }}"
@@ -540,7 +518,11 @@ jobs:
           experiment_prompt_name="${{ steps.resolve.outputs.experiment_prompt_name }}"
           experiment_prompt_version="${{ steps.resolve.outputs.experiment_prompt_version }}"
           experiment_arm="${{ steps.resolve.outputs.experiment_arm_key }}"
-          if [ "$dual_arms" != "true" ] || [ -z "$experiment_arm" ]; then
+          # True whenever registry.json defines an experiment arm, so the tag still
+          # separates dual-arm reviews from single-arm ones after a Merge.
+          dual_arms="false"
+          [ -n "$experiment_arm" ] && dual_arms="true"
+          if [ -z "$experiment_arm" ]; then
             experiment_prompt_name="n/a"
             experiment_prompt_version="n/a"
           fi
