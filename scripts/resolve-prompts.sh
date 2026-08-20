@@ -2,10 +2,11 @@
 # resolve-prompts.sh — resolve the BiggiePockets review prompts from the registry.
 #
 # prompts/registry.json declares the codex prompt, one or more arms (each a stored
-# prompt template), and which arm supplies the official gate verdict. Every review
-# runs the GATE arm's prompt; PRs opted into the dual-arm experiment additionally run
-# each EXperiment arm (arms other than the gate arm, one today) over the same Codex
-# findings so summary formats can be compared side by side.
+# prompt template), the control arm, and what percentage of pull requests an
+# experiment arm gets. This script picks ONE arm per review — hash('<repo>:<pr>')
+# mod 100, below experiment_split_percent means the experiment arm — and emits only
+# that arm's prompt. The assigned arm both posts its summary and decides the review,
+# so arms are compared BETWEEN pull requests and each review costs one Claude pass.
 #
 # Shared rule blocks (privacy, migration-data, perf) are stored once in
 # prompts/_shared/ and injected into every prompt that references them via {{@path}}
@@ -26,11 +27,12 @@
 # reported separately so Datadog LLM Obs can hold both (prompt_name/version = source
 # of truth for the text; the arm = the test condition).
 #
-# Inputs (env): REGISTRY_DIR, PR.
-# Outputs: codex_prompt{,_name,_version}; gate_arm (arm key); gate_prompt{,_name,_version};
-# experiment_arm_key (first non-gate arm key, or empty); experiment_prompt{,_name,_version}
-# (the non-gate arm's prompt, or empty when there is only the gate arm). Each prompt
-# also gets <prefix>_prompt_template.
+# Inputs (env): REGISTRY_DIR, PR, GITHUB_REPOSITORY (falls back to "unknown", which
+# only changes which arm a PR lands in, never whether assignment is deterministic).
+# Outputs: codex_prompt{,_name,_version,_template}; arm_prompt{,_name,_version,_template}
+# for the ASSIGNED arm; assigned_arm (its key); control_arm; experiment_split_percent;
+# assignment_bucket (0-99, so an assignment can be recomputed and audited from the tag
+# alone).
 
 set -euo pipefail
 
@@ -45,16 +47,21 @@ fi
 
 MAP_VERSION=$(jq -r '.version // empty' "$REGISTRY_FILE")
 CODEX_NAME=$(jq -r '.codex_prompt // empty' "$REGISTRY_FILE")
-GATE_ARM=$(jq -r '.gate_arm // empty' "$REGISTRY_FILE")
+CONTROL_ARM=$(jq -r '.control_arm // empty' "$REGISTRY_FILE")
+SPLIT_PERCENT=$(jq -r '.experiment_split_percent // 0' "$REGISTRY_FILE")
 ARMS=()
 while IFS= read -r arm; do ARMS+=("$arm"); done < <(jq -r '.arms | keys[]' "$REGISTRY_FILE")
 
-for name in "$CODEX_NAME" "$GATE_ARM"; do
+for name in "$CODEX_NAME" "$CONTROL_ARM"; do
   if [ -z "$name" ]; then
-    echo "::error::registry.json is missing codex_prompt or gate_arm" >&2
+    echo "::error::registry.json is missing codex_prompt or control_arm" >&2
     exit 1
   fi
 done
+if ! printf '%s' "$SPLIT_PERCENT" | grep -qE '^[0-9]+$' || [ "$SPLIT_PERCENT" -gt 100 ]; then
+  echo "::error::experiment_split_percent must be an integer 0-100, got '$SPLIT_PERCENT'" >&2
+  exit 1
+fi
 
 # Validate the config so a bad edit is caught at review time instead of silently
 # running a stale/duplicate prompt.
@@ -70,8 +77,8 @@ for arm in "${ARMS[@]}"; do
     exit 1
   fi
 done
-if ! printf '%s\n' "${ARMS[@]}" | grep -qx -- "$GATE_ARM"; then
-  echo "::error::gate_arm '$GATE_ARM' is not a declared arm" >&2
+if ! printf '%s\n' "${ARMS[@]}" | grep -qx -- "$CONTROL_ARM"; then
+  echo "::error::control_arm '$CONTROL_ARM' is not a declared arm" >&2
   exit 1
 fi
 
@@ -151,23 +158,30 @@ write_output() { # name value — multiline-safe via GITHUB_OUTPUT heredoc; fixe
 }
 
 emit_prompt "codex" "$CODEX_NAME"
-write_output "gate_arm" "$GATE_ARM"
-emit_prompt "gate" "$(jq -r --arg a "$GATE_ARM" '.arms[$a]' "$REGISTRY_FILE")"
 
-# Experiment arm = the first arm that is not the gate arm; there may be none (a
+# Experiment arm = the first arm that is not the control arm; there may be none (a
 # single-arm registry, e.g. after the experiment is merged away).
 EXPERIMENT_ARM=""
 for arm in "${ARMS[@]}"; do
-  if [ "$arm" != "$GATE_ARM" ]; then EXPERIMENT_ARM="$arm"; break; fi
+  if [ "$arm" != "$CONTROL_ARM" ]; then EXPERIMENT_ARM="$arm"; break; fi
 done
-write_output "experiment_arm_key" "$EXPERIMENT_ARM"
-if [ -n "$EXPERIMENT_ARM" ]; then
-  emit_prompt "experiment" "$(jq -r --arg a "$EXPERIMENT_ARM" '.arms[$a]' "$REGISTRY_FILE")"
-else
-  write_output "experiment_prompt" ""
-  write_output "experiment_prompt_template" ""
-  write_output "experiment_prompt_name" ""
-  write_output "experiment_prompt_version" ""
+
+# Assign this PR to one arm. sha256 over "<repo>:<pr>" rather than the PR number alone,
+# so two repos don't hand the same arm to their matching PR numbers, and the low 32 bits
+# mod 100 give the bucket. Deterministic by construction: a re-review of the same PR
+# resolves the same arm, and the bucket is emitted so any assignment can be re-derived
+# from telemetry without rerunning this script.
+ASSIGN_KEY="${GITHUB_REPOSITORY:-unknown}:$PR"
+BUCKET=$(( 16#$(printf '%s' "$ASSIGN_KEY" | sha256sum | cut -c1-8) % 100 ))
+ASSIGNED_ARM="$CONTROL_ARM"
+if [ -n "$EXPERIMENT_ARM" ] && [ "$BUCKET" -lt "$SPLIT_PERCENT" ]; then
+  ASSIGNED_ARM="$EXPERIMENT_ARM"
 fi
 
-echo "Resolved $MAP_VERSION prompts: codex=$CODEX_NAME gate=$GATE_ARM experiment=${EXPERIMENT_ARM:-none}"
+write_output "control_arm" "$CONTROL_ARM"
+write_output "experiment_split_percent" "$SPLIT_PERCENT"
+write_output "assignment_bucket" "$BUCKET"
+write_output "assigned_arm" "$ASSIGNED_ARM"
+emit_prompt "arm" "$(jq -r --arg a "$ASSIGNED_ARM" '.arms[$a]' "$REGISTRY_FILE")"
+
+echo "Resolved $MAP_VERSION prompts: codex=$CODEX_NAME assigned=$ASSIGNED_ARM (bucket $BUCKET, split ${SPLIT_PERCENT}% to ${EXPERIMENT_ARM:-none})"

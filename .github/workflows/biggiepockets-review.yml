@@ -19,19 +19,15 @@ name: BiggiePockets Code Review (reusable)
 # span also carries its template and variables under meta.input.prompt, which is what
 # Datadog Prompt Tracking reads to group runs by prompt and version.
 #
-# Dual-arm summary experiment (BIG-21717): every review runs an independent Claude
-# pass for each EXPERIMENT arm named in prompts/registry.json (the `thesis-first` arm
-# today) in addition to the GATE arm, all over the same Codex findings. The two
-# summaries are posted together in a single review comment, in a
-# deterministic-but-randomized order (A/B labels swapped per PR number) so neither
-# position is favored and the arms are not disclosed to reviewers. The GATE verdict —
-# the official approve / request-changes review — ALWAYS comes from
-# prompts/registry.json `gate_arm`; the experiment only changes presentation, never the
-# decision.
-#
-# prompts/registry.json is the only switch: an arms map with nothing but `gate_arm`
-# leaves every review single-arm, so removing an arm (a Merge) turns the experiment off
-# for every repo at once.
+# Prompt A/B test (BIG-21717): prompts/registry.json declares the arms, the control
+# arm, and what share of pull requests an experiment arm gets. Each review runs ONE
+# Claude pass, using the arm that scripts/resolve-prompts.sh assigns to that PR by
+# hashing '<repo>:<pr>' — so the arms are compared BETWEEN pull requests and a review
+# never costs a second Claude pass. The assigned arm writes both the posted summary
+# and the approve / request-changes decision, which means an experiment prompt does
+# affect real outcomes on its share of PRs. Assignment is deterministic, so a re-run
+# reviews with the same arm. Set experiment_split_percent to 0 in registry.json to
+# route everything to the control arm; every consuming repo reads that one file.
 on:
   workflow_call:
     inputs:
@@ -136,7 +132,7 @@ jobs:
 
       # Anchor the review on the work's intent. Always writes ticket.json: either the
       # ticket fields, or {"available": false} so a missing/unfetchable ticket degrades
-      # to a diff-based review instead of failing the gate.
+      # to a diff-based review instead of failing the review.
       - name: Fetch JIRA ticket for intent
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
@@ -188,9 +184,10 @@ jobs:
             > conversations.json
           echo "Wrote conversations.json ($(jq '.issue_comments | length' conversations.json) comments, $(jq '.review_comments | length' conversations.json) review comments, $(jq '.reviews | length' conversations.json) reviews)"
 
-      # Resolve every review-stage prompt from the registry: the Codex prompt plus one
-      # prompt per arm in prompts/registry.json, each with its shared-rule blocks expanded
-      # and a content-derived prompt_version. The gate arm name (control) is also emitted.
+      # Resolve the review-stage prompts from the registry: the Codex prompt, plus the
+      # prompt of the single arm this PR is assigned to, each with its shared-rule blocks
+      # expanded and a content-derived prompt_version. Also emits the assigned arm's key
+      # and the bucket it was assigned from.
       - name: Resolve review prompts
         id: resolve
         env:
@@ -320,13 +317,13 @@ jobs:
         run: registry/scripts/resolve-prompts.sh
 
       # Stage 2: Claude verifies Codex's findings, reviews independently, and decides.
-      # The GATE arm supplies the official verdict. Each experiment arm reads the same
-      # handoff but never changes that decision.
-      - name: Record Claude gate start time
-        run: echo "GATE_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+      # This is the only Claude pass, running whichever arm's prompt was assigned to
+      # this PR. Its verdict is the review.
+      - name: Record Claude start time
+        run: echo "CLAUDE_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
 
-      - name: Claude verify and synthesize (gate arm)
-        id: claude_gate
+      - name: Claude verify and synthesize
+        id: claude
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -335,103 +332,34 @@ jobs:
           # actor: claude (type: Bot). Add bot to allowed_bots list."
           allowed_bots: 'claude'
           claude_args: ${{ env.CLAUDE_MODEL != '' && format('--allowedTools "Read,Grep,Glob,Bash,Write" --model {0}', env.CLAUDE_MODEL) || '--allowedTools "Read,Grep,Glob,Bash,Write"' }}
-          prompt: ${{ steps.resolve.outputs.gate_prompt }}
+          prompt: ${{ steps.resolve.outputs.arm_prompt }}
 
-      # The experiment run writes verdict.json back to the same path the gate run used,
-      # so preserve the gate arm's verdict first.
-      - name: Preserve gate verdict
+      - name: Record Claude end time
         if: always()
-        run: cp verdict.json verdict-gate.json 2>/dev/null || true
+        run: echo "CLAUDE_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
 
-      # Experiment arms run whenever the registry declares at least one arm other than
-      # the gate arm. continue-on-error
-      # keeps an experiment failure (e.g. a quota error) from failing the job and
-      # skipping the gate submission; Datadog records the span as errored.
-      - name: Record claude gate end / experiment start time
-        run: |
-          echo "GATE_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
-          echo "EXPERIMENT_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
-          # The experiment run writes verdict.json back to the same path the gate run
-          # used; remove the gate arm's output so a failed experiment run can't leave a
-          # stale verdict.json that the preserve step would copy as the experiment arm's.
-          rm -f verdict.json
-
-      - name: Claude verify and synthesize (experiment arm)
-        if: ${{ steps.resolve.outputs.experiment_prompt != '' }}
-        id: claude_experiment
-        continue-on-error: true
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          allowed_bots: 'claude'
-          claude_args: ${{ env.CLAUDE_MODEL != '' && format('--allowedTools "Read,Grep,Glob,Bash,Write" --model {0}', env.CLAUDE_MODEL) || '--allowedTools "Read,Grep,Glob,Bash,Write"' }}
-          prompt: ${{ steps.resolve.outputs.experiment_prompt }}
-
-      - name: Preserve experiment verdict
-        if: ${{ always() && steps.resolve.outputs.experiment_prompt != '' }}
-        run: cp verdict.json verdict-experiment.json 2>/dev/null || true
-
-      - name: Record claude experiment end time
-        if: ${{ always() && steps.resolve.outputs.experiment_prompt != '' }}
-        run: echo "EXPERIMENT_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
-
-      # Submit the review. The GATE arm's verdict is the official approve /
-      # request-changes decision, always. Opted-in PRs whose experiment arm produced a
-      # summary get one comment with BOTH summaries (gate + experiment) labeled Variant
-      # A / Variant B; the label order is randomized per PR (deterministic hash of the
-      # PR number) so position bias is balanced across PRs and the same PR keeps the
-      # same labels across re-reviews, and the arms are not disclosed in the comment.
+      # Submit the review under the arm this PR was assigned. The arm is not disclosed
+      # in the comment: a reviewer who knows which prompt wrote a summary can't rate it
+      # blind, and the whole point of the split is an unbiased read on the two prompts.
       - name: Submit review as BiggiePockets
         id: submit
         env:
           # PAT authenticating as the BiggiePockets service account. A bot cannot
           # approve its own PR, so this never gates BiggiePockets-authored PRs.
           GH_TOKEN: ${{ secrets.BIGGIEPOCKETS_PAT }}
-          GATE_ARM: ${{ steps.resolve.outputs.gate_arm }}
-          EXPERIMENT_ARM: ${{ steps.resolve.outputs.experiment_arm_key }}
+          ASSIGNED_ARM: ${{ steps.resolve.outputs.assigned_arm }}
         run: |
-          if [ ! -f verdict-gate.json ]; then
-            echo "::error::Gate arm review run did not produce verdict.json" >&2
+          if [ ! -f verdict.json ]; then
+            echo "::error::Claude review run did not produce verdict.json" >&2
             exit 1
           fi
 
-          gate_verdict=$(jq -r '.verdict' verdict-gate.json)
-          gate_summary=$(jq -r '.summary' verdict-gate.json)
+          verdict=$(jq -r '.verdict' verdict.json)
+          summary=$(jq -r '.summary' verdict.json)
 
-          experiment_summary=""
-          if [ -f verdict-experiment.json ]; then
-            experiment_summary=$(jq -r '.summary // ""' verdict-experiment.json 2>/dev/null) || experiment_summary=""
-          fi
+          printf '## BiggiePockets assisted review\n\n%s\n' "$summary" > review-body.md
 
-          if [ -n "$experiment_summary" ] && [ -n "$EXPERIMENT_ARM" ]; then
-            # cksum prints "<checksum> <byte count>", so hash on $1. Reading $2 gives the
-            # digit count, which is constant across a repo's PR range and pins one arm to
-            # Variant A forever.
-            parity=$(( $(printf '%s' "$PR" | cksum | awk '{print $1}') % 2 ))
-            if [ "$parity" -eq 0 ]; then
-              first_name="Variant A"; first_summary="$gate_summary"
-              second_name="Variant B"; second_summary="$experiment_summary"
-              label_assignment="A=$GATE_ARM|B=$EXPERIMENT_ARM"
-            else
-              first_name="Variant A"; first_summary="$experiment_summary"
-              second_name="Variant B"; second_summary="$gate_summary"
-              label_assignment="A=$EXPERIMENT_ARM|B=$GATE_ARM"
-            fi
-
-            {
-              echo "BiggiePockets assisted review — the same review in two summary formats."
-              echo ""
-              printf '## %s\n\n%s\n' "$first_name" "$first_summary"
-              printf '\n---\n\n## %s\n\n%s\n' "$second_name" "$second_summary"
-            } > review-body.md
-          else
-            # Single-arm mode, or the experiment arm failed and produced no summary —
-            # fall back to the gate-only body rather than posting an empty Variant.
-            label_assignment="n/a"
-            printf '## BiggiePockets assisted review\n\n%s\n' "$gate_summary" > review-body.md
-          fi
-
-          case "$gate_verdict" in
+          case "$verdict" in
             approve)
               gh pr review "$PR" --approve --body-file review-body.md
               ;;
@@ -439,58 +367,31 @@ jobs:
               gh pr review "$PR" --request-changes --body-file review-body.md
               ;;
             *)
-              echo "::error::Unexpected gate verdict from $GATE_ARM review: '$gate_verdict'" >&2
+              echo "::error::Unexpected verdict from $ASSIGNED_ARM arm review: '$verdict'" >&2
               exit 1
               ;;
           esac
 
-          echo "GATE_VERDICT=$gate_verdict" >> "$GITHUB_ENV"
-          echo "LABEL_ASSIGN=$label_assignment" >> "$GITHUB_ENV"
-          if [ -n "$EXPERIMENT_ARM" ]; then
-            if [ -n "$experiment_summary" ]; then
-              experiment_verdict=$(jq -r '.verdict // "unknown"' verdict-experiment.json 2>/dev/null) || experiment_verdict="unknown"
-              agreement="agree"; [ "$gate_verdict" != "$experiment_verdict" ] && agreement="disagree"
-              echo "EXPERIMENT_VERDICT=$experiment_verdict" >> "$GITHUB_ENV"
-              echo "ARM_AGREEMENT=$agreement" >> "$GITHUB_ENV"
-            else
-              echo "EXPERIMENT_VERDICT=failed" >> "$GITHUB_ENV"
-              echo "ARM_AGREEMENT=gate-only" >> "$GITHUB_ENV"
-            fi
-          else
-            echo "EXPERIMENT_VERDICT=n/a" >> "$GITHUB_ENV"
-            echo "ARM_AGREEMENT=single" >> "$GITHUB_ENV"
-          fi
+          echo "VERDICT=$verdict" >> "$GITHUB_ENV"
 
-      # Reports ONE LLM OBS TRACE PER ARM, joined by a stable run_id (repo + pr +
-      # review attempt) so offline evals and panel ratings line up per review.
-      # Never blocks/fails/delays the review itself.
+      # Reports ONE LLM OBS TRACE per review, tagged with the arm this PR was assigned,
+      # and joined by a stable run_id (repo + pr + review attempt) so offline evals and
+      # panel ratings line up per review. Never blocks/fails/delays the review itself.
       #
-      # Each arm is submitted as its OWN REQUEST, and that separation is what makes the
-      # arm tags trustworthy. A tag key resolves to a single value per submitted payload
-      # — NOT per trace, which was measured the hard way: when both arms shared one
-      # request, every span reported the experiment's arm and prompt even after the arms
-      # were split into two distinct trace_ids. So the gate arm's review was credited to
-      # the variant prompt, and only ever on the dual-arm runs the experiment exists to
-      # measure. One payload per arm means each request carries exactly one value for
-      # `arm`/`prompt_name`/`prompt_version`, so they can be grouped and aggregated on.
-      # Do not merge the two submissions back into one request.
+      # `arm`/`prompt_name`/`prompt_version` are payload-level tags, which is where a tag
+      # key resolves to one value — one arm per review, so one value each.
       #
-      #   gate trace       root biggiepockets.review -> codex.review, claude.synthesize.gate
-      #   experiment trace root biggiepockets.review -> claude.synthesize.experiment
+      #   root biggiepockets.review -> codex.review, claude.synthesize
       #
-      # Codex runs once and feeds both arms, so it lives in the gate trace (the
-      # production pipeline) rather than being duplicated, which would double-count its
-      # latency and tokens. Its findings are still the recorded input of BOTH arms'
-      # spans. Compare arms at the claude.synthesize.* spans, which are like-for-like;
-      # the gate trace's root also spans codex, so root durations are not comparable.
+      # Compare arms by grouping on `arm` across pull requests (verdict rate, latency,
+      # tokens).
       - name: Report review metrics to Datadog LLM Obs
         if: always()
         continue-on-error: true
         env:
           DD_API_KEY: ${{ secrets.DATADOG_API_KEY }}
           CODEX_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.codex_prompt_template }}
-          GATE_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.gate_prompt_template }}
-          EXPERIMENT_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.experiment_prompt_template }}
+          ARM_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.arm_prompt_template }}
         run: |
           if [ -z "$DD_API_KEY" ]; then
             echo "Skipping Datadog LLM Obs submission: DATADOG_API_KEY not configured"
@@ -501,57 +402,38 @@ jobs:
           review_start_ns="${REVIEW_START_NS:-$now_ns}"
           codex_start_ns="${CODEX_START_NS:-$review_start_ns}"
           codex_end_ns="${CODEX_END_NS:-$codex_start_ns}"
-          gate_start_ns="${GATE_START_NS:-$codex_end_ns}"
-          gate_end_ns="${GATE_END_NS:-$gate_start_ns}"
-          experiment_start_ns="${EXPERIMENT_START_NS:-$gate_end_ns}"
-          experiment_end_ns="${EXPERIMENT_END_NS:-$experiment_start_ns}"
+          claude_start_ns="${CLAUDE_START_NS:-$codex_end_ns}"
+          claude_end_ns="${CLAUDE_END_NS:-$claude_start_ns}"
 
-          gate_verdict="${GATE_VERDICT:-unknown}"
-          label_assignment="${LABEL_ASSIGN:-unknown}"
-          arm_agreement="${ARM_AGREEMENT:-unknown}"
-          # The experiment arm's own verdict, so a disagreement records which way it went
-          # (variant stricter vs. laxer) instead of only that one happened. "n/a" on
-          # single-arm runs, "failed" when the experiment arm produced no summary.
-          experiment_verdict="${EXPERIMENT_VERDICT:-unknown}"
+          verdict="${VERDICT:-unknown}"
           codex_prompt_name="${{ steps.resolve.outputs.codex_prompt_name }}"
           codex_prompt_version="${{ steps.resolve.outputs.codex_prompt_version }}"
-          gate_prompt_name="${{ steps.resolve.outputs.gate_prompt_name }}"
-          gate_prompt_version="${{ steps.resolve.outputs.gate_prompt_version }}"
-          gate_arm="${{ steps.resolve.outputs.gate_arm }}"
-          experiment_prompt_name="${{ steps.resolve.outputs.experiment_prompt_name }}"
-          experiment_prompt_version="${{ steps.resolve.outputs.experiment_prompt_version }}"
-          experiment_arm="${{ steps.resolve.outputs.experiment_arm_key }}"
-          # True whenever registry.json defines an experiment arm, so the tag still
-          # separates dual-arm reviews from single-arm ones after a Merge.
-          dual_arms="false"
-          [ -n "$experiment_arm" ] && dual_arms="true"
-          if [ -z "$experiment_arm" ]; then
-            experiment_prompt_name="n/a"
-            experiment_prompt_version="n/a"
-          fi
+          arm="${{ steps.resolve.outputs.assigned_arm }}"
+          arm_prompt_name="${{ steps.resolve.outputs.arm_prompt_name }}"
+          arm_prompt_version="${{ steps.resolve.outputs.arm_prompt_version }}"
+          control_arm="${{ steps.resolve.outputs.control_arm }}"
+          # Which side of the split this review is on, plus the inputs that produced it.
+          # Recording the bucket and the split percentage makes an assignment auditable
+          # after the fact: a later Apply that changes the split can't silently rewrite
+          # what an already-recorded review was assigned under.
+          assignment_bucket="${{ steps.resolve.outputs.assignment_bucket }}"
+          split_percent="${{ steps.resolve.outputs.experiment_split_percent }}"
+          arm_role="control"
+          [ "$arm" != "$control_arm" ] && arm_role="experiment"
 
           codex_status="ok"
           [ "${CODEX_STATUS:-failure}" != "success" ] && codex_status="error"
           codex_findings=$(cat codex-findings.md 2>/dev/null || true)
           codex_findings_lines=$(wc -l < codex-findings.md 2>/dev/null || echo 0)
 
-          gate_status="ok"
-          [ "${{ steps.claude_gate.outcome }}" != "success" ] && gate_status="error"
-          experiment_status="n/a"
-          if [ "$dual_arms" = "true" ] && [ -n "$experiment_arm" ]; then
-            experiment_status="ok"
-            [ "${{ steps.claude_experiment.outcome }}" != "success" ] && experiment_status="error"
-          fi
+          claude_status="ok"
+          [ "${{ steps.claude.outcome }}" != "success" ] && claude_status="error"
 
           root_status="ok"
           [ "${{ steps.submit.outcome }}" != "success" ] && root_status="error"
 
-          gate_summary=""
-          [ -f verdict-gate.json ] && gate_summary=$(jq -r '.summary // ""' verdict-gate.json 2>/dev/null) || gate_summary=""
-          experiment_summary=""
-          if [ -f verdict-experiment.json ]; then
-            experiment_summary=$(jq -r '.summary // ""' verdict-experiment.json 2>/dev/null) || experiment_summary=""
-          fi
+          summary=""
+          [ -f verdict.json ] && summary=$(jq -r '.summary // ""' verdict.json 2>/dev/null) || summary=""
 
           # Cap free-text fields sent to Datadog so one outsized findings report can't
           # blow past the LLM Obs payload limit; the untruncated text is always still in
@@ -565,8 +447,7 @@ jobs:
             fi
           }
           codex_findings_excerpt=$(truncate "$codex_findings")
-          gate_summary_excerpt=$(truncate "$gate_summary")
-          experiment_summary_excerpt=$(truncate "$experiment_summary")
+          summary_excerpt=$(truncate "$summary")
 
           # Prompt Tracking: each LLM span carries the registry template that produced it,
           # under meta.input.prompt. The template keeps its {{PR}}/{{PROMPT_NAME}}/
@@ -594,102 +475,23 @@ jobs:
               }'
           }
           codex_prompt_obj=$(prompt_json "$codex_prompt_name" "$codex_prompt_version" "$CODEX_PROMPT_TEMPLATE")
-          gate_prompt_obj=$(prompt_json "$gate_prompt_name" "$gate_prompt_version" "$GATE_PROMPT_TEMPLATE")
+          arm_prompt_obj=$(prompt_json "$arm_prompt_name" "$arm_prompt_version" "$ARM_PROMPT_TEMPLATE")
 
           codex_model_tag="${CODEX_MODEL:-unspecified}"
           claude_model_tag="${CLAUDE_MODEL:-unspecified}"
 
           run_id="$GITHUB_REPOSITORY-pr$PR-${{ github.run_id }}"
 
-          # One trace per arm. Datadog resolves a tag key at trace scope, so an arm's
-          # identity can only live on a uniform `arm`/`prompt_name`/`prompt_version` key
-          # if that trace contains exactly one arm — which is what makes grouping and
-          # eval aggregation by arm possible. Sharing a trace collapses the two arms onto
-          # whichever span was submitted last.
           trace_id=$(openssl rand -hex 16)
           root_span_id=$(openssl rand -hex 8)
-          experiment_trace_id=$(openssl rand -hex 16)
-          experiment_root_span_id=$(openssl rand -hex 8)
           codex_span_id=$(openssl rand -hex 8)
-          gate_span_id=$(openssl rand -hex 8)
-          experiment_span_id=$(openssl rand -hex 8)
+          claude_span_id=$(openssl rand -hex 8)
 
-          # Submit ONE PAYLOAD PER ARM. The uniform arm/prompt_name/prompt_version keys
-          # live at payload level, so each request carries exactly one value for them.
-          submit_arm() {
-            arm_name="$1"; arm_prompt_name="$2"; arm_prompt_version="$3"
-            arm_trace_id="$4"; arm_spans="$5"
-
-            payload=$(jq -n \
-              --arg ml_app "biggiepockets-review" \
-              --arg repo "$GITHUB_REPOSITORY" \
-              --arg pr "$PR" \
-              --arg run_id "$run_id" \
-              --arg verdict "$gate_verdict" \
-              --arg label_assignment "$label_assignment" \
-              --arg arm_agreement "$arm_agreement" \
-              --arg experiment_verdict "$experiment_verdict" \
-              --arg arm "$arm_name" \
-              --arg prompt_name "$arm_prompt_name" \
-              --arg prompt_version "$arm_prompt_version" \
-              --arg gate_arm "$gate_arm" \
-              --arg experiment_arm "$experiment_arm" \
-              --arg codex_model "$codex_model_tag" \
-              --arg claude_model "$claude_model_tag" \
-              --arg codex_prompt_name "$codex_prompt_name" \
-              --arg codex_prompt_version "$codex_prompt_version" \
-              --argjson codex_findings_lines "$codex_findings_lines" \
-              --argjson dual_arms "$dual_arms" \
-              --argjson spans "$arm_spans" \
-              '{
-                data: {
-                  type: "span",
-                  attributes: {
-                    ml_app: $ml_app,
-                    tags: [
-                      "repo:\($repo)",
-                      "pr:\($pr)",
-                      "run_id:\($run_id)",
-                      "arm:\($arm)",
-                      "prompt_name:\($prompt_name)",
-                      "prompt_version:\($prompt_version)",
-                      "verdict:\($verdict)",
-                      "label_assignment:\($label_assignment)",
-                      "arm_agreement:\($arm_agreement)",
-                      "experiment_verdict:\($experiment_verdict)",
-                      "gate_arm:\($gate_arm)",
-                      "experiment_arm:\($experiment_arm)",
-                      "codex_model:\($codex_model)",
-                      "claude_model:\($claude_model)",
-                      "codex_findings_lines:\($codex_findings_lines)",
-                      "codex_prompt_name:\($codex_prompt_name)",
-                      "codex_prompt_version:\($codex_prompt_version)",
-                      "dual_arms:\($dual_arms)"
-                    ],
-                    spans: $spans
-                  }
-                }
-              }')
-
-            http_code=$(curl -sS -o /tmp/dd_response.json -w '%{http_code}' \
-              -X POST "https://api.datadoghq.com/api/intake/llm-obs/v1/trace/spans" \
-              -H "Content-Type: application/json" \
-              -H "DD-API-KEY: $DD_API_KEY" \
-              -d "$payload") || http_code="000"
-
-            if [ "$http_code" -ge 300 ] 2>/dev/null || [ "$http_code" = "000" ]; then
-              echo "::warning::Datadog LLM Obs submission failed for arm ${arm_name} (HTTP $http_code): $(cat /tmp/dd_response.json 2>/dev/null)"
-            else
-              echo "Reported ${arm_name} arm to Datadog LLM Obs (trace ${arm_trace_id}, prompt ${arm_prompt_name}@${arm_prompt_version}, run_id ${run_id})"
-            fi
-          }
-
-          # Gate arm trace: the production review (codex first pass -> gate verdict).
-          gate_spans=$(jq -n \
+          spans=$(jq -n \
             --arg trace_id "$trace_id" \
             --arg root_span_id "$root_span_id" \
             --arg codex_span_id "$codex_span_id" \
-            --arg gate_span_id "$gate_span_id" \
+            --arg claude_span_id "$claude_span_id" \
             --arg repo "$GITHUB_REPOSITORY" \
             --arg pr "$PR" \
             --arg base_ref "${BASE_REF:-unknown}" \
@@ -699,15 +501,15 @@ jobs:
             --argjson root_duration "$((now_ns - review_start_ns))" \
             --argjson codex_start_ns "$codex_start_ns" \
             --argjson codex_duration "$((codex_end_ns - codex_start_ns))" \
-            --argjson gate_start_ns "$gate_start_ns" \
-            --argjson gate_duration "$((gate_end_ns - gate_start_ns))" \
+            --argjson claude_start_ns "$claude_start_ns" \
+            --argjson claude_duration "$((claude_end_ns - claude_start_ns))" \
             --arg codex_status "$codex_status" \
-            --arg gate_status "$gate_status" \
+            --arg claude_status "$claude_status" \
             --arg root_status "$root_status" \
             --arg codex_findings_excerpt "$codex_findings_excerpt" \
-            --arg gate_summary_excerpt "$gate_summary_excerpt" \
+            --arg summary_excerpt "$summary_excerpt" \
             --argjson codex_prompt "$codex_prompt_obj" \
-            --argjson gate_prompt "$gate_prompt_obj" \
+            --argjson arm_prompt "$arm_prompt_obj" \
             '[
               {
                 parent_id: "undefined",
@@ -720,7 +522,7 @@ jobs:
                 meta: {
                   kind: "workflow",
                   input: {value: "repo:\($repo) pr:\($pr) base_ref:\($base_ref)"},
-                  output: {value: $gate_summary_excerpt}
+                  output: {value: $summary_excerpt}
                 }
               },
               {
@@ -745,79 +547,79 @@ jobs:
               {
                 parent_id: $root_span_id,
                 trace_id: $trace_id,
-                span_id: $gate_span_id,
-                name: "claude.synthesize.gate",
-                start_ns: $gate_start_ns,
-                duration: $gate_duration,
-                status: $gate_status,
+                span_id: $claude_span_id,
+                name: "claude.synthesize",
+                start_ns: $claude_start_ns,
+                duration: $claude_duration,
+                status: $claude_status,
                 meta: {
                   kind: "llm",
                   model_name: $claude_model,
                   model_provider: "anthropic",
                   input: {
                     messages: [{role: "user", content: $codex_findings_excerpt}],
-                    prompt: $gate_prompt
+                    prompt: $arm_prompt
                   },
-                  output: {messages: [{role: "assistant", content: $gate_summary_excerpt}]}
+                  output: {messages: [{role: "assistant", content: $summary_excerpt}]}
                 }
               }
             ]')
 
-          submit_arm "$gate_arm" "$gate_prompt_name" "$gate_prompt_version" "$trace_id" "$gate_spans"
-
-          # Experiment arm trace: the same codex findings summarized under the variant
-          # prompt. Separate request, so its arm tags cannot overwrite the gate arm's.
-          if [ "$dual_arms" = "true" ] && [ -n "$experiment_arm" ]; then
-            experiment_prompt_obj=$(prompt_json "$experiment_prompt_name" "$experiment_prompt_version" "$EXPERIMENT_PROMPT_TEMPLATE")
-            experiment_spans=$(jq -n \
-              --arg trace_id "$experiment_trace_id" \
-              --arg root_span_id "$experiment_root_span_id" \
-              --arg experiment_span_id "$experiment_span_id" \
-              --arg repo "$GITHUB_REPOSITORY" \
-              --arg pr "$PR" \
-              --arg base_ref "${BASE_REF:-unknown}" \
-              --arg claude_model "$claude_model_tag" \
-              --argjson experiment_start_ns "$experiment_start_ns" \
-              --argjson experiment_duration "$((experiment_end_ns - experiment_start_ns))" \
-              --arg experiment_status "$experiment_status" \
-              --arg codex_findings_excerpt "$codex_findings_excerpt" \
-              --arg experiment_summary_excerpt "$experiment_summary_excerpt" \
-              --argjson experiment_prompt "$experiment_prompt_obj" \
-              '[
-                {
-                  parent_id: "undefined",
-                  trace_id: $trace_id,
-                  span_id: $root_span_id,
-                  name: "biggiepockets.review",
-                  start_ns: $experiment_start_ns,
-                  duration: $experiment_duration,
-                  status: $experiment_status,
-                  meta: {
-                    kind: "workflow",
-                    input: {value: "repo:\($repo) pr:\($pr) base_ref:\($base_ref)"},
-                    output: {value: $experiment_summary_excerpt}
-                  }
-                },
-                {
-                  parent_id: $root_span_id,
-                  trace_id: $trace_id,
-                  span_id: $experiment_span_id,
-                  name: "claude.synthesize.experiment",
-                  start_ns: $experiment_start_ns,
-                  duration: $experiment_duration,
-                  status: $experiment_status,
-                  meta: {
-                    kind: "llm",
-                    model_name: $claude_model,
-                    model_provider: "anthropic",
-                    input: {
-                      messages: [{role: "user", content: $codex_findings_excerpt}],
-                      prompt: $experiment_prompt
-                    },
-                    output: {messages: [{role: "assistant", content: $experiment_summary_excerpt}]}
-                  }
+          payload=$(jq -n \
+            --arg ml_app "biggiepockets-review" \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg pr "$PR" \
+            --arg run_id "$run_id" \
+            --arg verdict "$verdict" \
+            --arg arm "$arm" \
+            --arg arm_role "$arm_role" \
+            --arg prompt_name "$arm_prompt_name" \
+            --arg prompt_version "$arm_prompt_version" \
+            --arg control_arm "$control_arm" \
+            --arg assignment_bucket "$assignment_bucket" \
+            --arg split_percent "$split_percent" \
+            --arg codex_model "$codex_model_tag" \
+            --arg claude_model "$claude_model_tag" \
+            --arg codex_prompt_name "$codex_prompt_name" \
+            --arg codex_prompt_version "$codex_prompt_version" \
+            --argjson codex_findings_lines "$codex_findings_lines" \
+            --argjson spans "$spans" \
+            '{
+              data: {
+                type: "span",
+                attributes: {
+                  ml_app: $ml_app,
+                  tags: [
+                    "repo:\($repo)",
+                    "pr:\($pr)",
+                    "run_id:\($run_id)",
+                    "arm:\($arm)",
+                    "arm_role:\($arm_role)",
+                    "prompt_name:\($prompt_name)",
+                    "prompt_version:\($prompt_version)",
+                    "verdict:\($verdict)",
+                    "control_arm:\($control_arm)",
+                    "assignment_bucket:\($assignment_bucket)",
+                    "experiment_split_percent:\($split_percent)",
+                    "codex_model:\($codex_model)",
+                    "claude_model:\($claude_model)",
+                    "codex_findings_lines:\($codex_findings_lines)",
+                    "codex_prompt_name:\($codex_prompt_name)",
+                    "codex_prompt_version:\($codex_prompt_version)"
+                  ],
+                  spans: $spans
                 }
-              ]')
+              }
+            }')
 
-            submit_arm "$experiment_arm" "$experiment_prompt_name" "$experiment_prompt_version" "$experiment_trace_id" "$experiment_spans"
+          http_code=$(curl -sS -o /tmp/dd_response.json -w '%{http_code}' \
+            -X POST "https://api.datadoghq.com/api/intake/llm-obs/v1/trace/spans" \
+            -H "Content-Type: application/json" \
+            -H "DD-API-KEY: $DD_API_KEY" \
+            -d "$payload") || http_code="000"
+
+          if [ "$http_code" -ge 300 ] 2>/dev/null || [ "$http_code" = "000" ]; then
+            echo "::warning::Datadog LLM Obs submission failed (HTTP $http_code): $(cat /tmp/dd_response.json 2>/dev/null)"
+          else
+            echo "Reported ${arm} arm to Datadog LLM Obs (trace ${trace_id}, prompt ${arm_prompt_name}@${arm_prompt_version}, run_id ${run_id})"
           fi
