@@ -375,12 +375,10 @@ jobs:
         if: ${{ always() && steps.resolve.outputs.experiment_prompt != '' }}
         run: echo "EXPERIMENT_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
 
-      # Submit the review. The GATE arm's verdict is the official approve /
-      # request-changes decision, always. Opted-in PRs whose experiment arm produced a
-      # summary get one comment with BOTH summaries (gate + experiment) labeled Variant
-      # A / Variant B; the label order is randomized per PR (deterministic hash of the
-      # PR number) so position bias is balanced across PRs and the same PR keeps the
-      # same labels across re-reviews, and the arms are not disclosed in the comment.
+      # Submit the review. The GATE arm's summary is the only one posted, and its
+      # verdict is the official approve / request-changes decision. The experiment arm
+      # runs as a shadow: its verdict is compared against the gate's and reported to
+      # Datadog, but it never reaches the PR, so reviewers read one review.
       - name: Submit review as BiggiePockets
         id: submit
         env:
@@ -403,33 +401,7 @@ jobs:
             experiment_summary=$(jq -r '.summary // ""' verdict-experiment.json 2>/dev/null) || experiment_summary=""
           fi
 
-          if [ -n "$experiment_summary" ] && [ -n "$EXPERIMENT_ARM" ]; then
-            # cksum prints "<checksum> <byte count>", so hash on $1. Reading $2 gives the
-            # digit count, which is constant across a repo's PR range and pins one arm to
-            # Variant A forever.
-            parity=$(( $(printf '%s' "$PR" | cksum | awk '{print $1}') % 2 ))
-            if [ "$parity" -eq 0 ]; then
-              first_name="Variant A"; first_summary="$gate_summary"
-              second_name="Variant B"; second_summary="$experiment_summary"
-              label_assignment="A=$GATE_ARM|B=$EXPERIMENT_ARM"
-            else
-              first_name="Variant A"; first_summary="$experiment_summary"
-              second_name="Variant B"; second_summary="$gate_summary"
-              label_assignment="A=$EXPERIMENT_ARM|B=$GATE_ARM"
-            fi
-
-            {
-              echo "BiggiePockets assisted review — the same review in two summary formats."
-              echo ""
-              printf '## %s\n\n%s\n' "$first_name" "$first_summary"
-              printf '\n---\n\n## %s\n\n%s\n' "$second_name" "$second_summary"
-            } > review-body.md
-          else
-            # Single-arm mode, or the experiment arm failed and produced no summary —
-            # fall back to the gate-only body rather than posting an empty Variant.
-            label_assignment="n/a"
-            printf '## BiggiePockets assisted review\n\n%s\n' "$gate_summary" > review-body.md
-          fi
+          printf '## BiggiePockets assisted review\n\n%s\n' "$gate_summary" > review-body.md
 
           case "$gate_verdict" in
             approve)
@@ -445,7 +417,6 @@ jobs:
           esac
 
           echo "GATE_VERDICT=$gate_verdict" >> "$GITHUB_ENV"
-          echo "LABEL_ASSIGN=$label_assignment" >> "$GITHUB_ENV"
           if [ -n "$EXPERIMENT_ARM" ]; then
             if [ -n "$experiment_summary" ]; then
               experiment_verdict=$(jq -r '.verdict // "unknown"' verdict-experiment.json 2>/dev/null) || experiment_verdict="unknown"
@@ -470,7 +441,7 @@ jobs:
       # — NOT per trace, which was measured the hard way: when both arms shared one
       # request, every span reported the experiment's arm and prompt even after the arms
       # were split into two distinct trace_ids. So the gate arm's review was credited to
-      # the variant prompt, and only ever on the dual-arm runs the experiment exists to
+      # the variant prompt, and only ever on the two-arm runs the experiment exists to
       # measure. One payload per arm means each request carries exactly one value for
       # `arm`/`prompt_name`/`prompt_version`, so they can be grouped and aggregated on.
       # Do not merge the two submissions back into one request.
@@ -507,7 +478,6 @@ jobs:
           experiment_end_ns="${EXPERIMENT_END_NS:-$experiment_start_ns}"
 
           gate_verdict="${GATE_VERDICT:-unknown}"
-          label_assignment="${LABEL_ASSIGN:-unknown}"
           arm_agreement="${ARM_AGREEMENT:-unknown}"
           # The experiment arm's own verdict, so a disagreement records which way it went
           # (variant stricter vs. laxer) instead of only that one happened. "n/a" on
@@ -522,7 +492,7 @@ jobs:
           experiment_prompt_version="${{ steps.resolve.outputs.experiment_prompt_version }}"
           experiment_arm="${{ steps.resolve.outputs.experiment_arm_key }}"
           # True whenever registry.json defines an experiment arm, so the tag still
-          # separates dual-arm reviews from single-arm ones after a Merge.
+          # separates two-arm reviews from single-arm ones after a Merge.
           dual_arms="false"
           [ -n "$experiment_arm" ] && dual_arms="true"
           if [ -z "$experiment_arm" ]; then
@@ -626,7 +596,6 @@ jobs:
               --arg pr "$PR" \
               --arg run_id "$run_id" \
               --arg verdict "$gate_verdict" \
-              --arg label_assignment "$label_assignment" \
               --arg arm_agreement "$arm_agreement" \
               --arg experiment_verdict "$experiment_verdict" \
               --arg arm "$arm_name" \
@@ -654,7 +623,6 @@ jobs:
                       "prompt_name:\($prompt_name)",
                       "prompt_version:\($prompt_version)",
                       "verdict:\($verdict)",
-                      "label_assignment:\($label_assignment)",
                       "arm_agreement:\($arm_agreement)",
                       "experiment_verdict:\($experiment_verdict)",
                       "gate_arm:\($gate_arm)",

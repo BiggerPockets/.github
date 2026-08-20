@@ -3,9 +3,9 @@
 #
 # prompts/registry.json declares the codex prompt, one or more arms (each a stored
 # prompt template), and which arm supplies the official gate verdict. Every review
-# runs the GATE arm's prompt; PRs opted into the dual-arm experiment additionally run
-# each EXperiment arm (arms other than the gate arm, one today) over the same Codex
-# findings so summary formats can be compared side by side.
+# runs the GATE arm's prompt, plus each EXperiment arm (arms other than the gate arm,
+# one today) over the same Codex findings so summary formats can be compared. Only the
+# gate arm's summary is posted; the experiment arms report to Datadog only.
 #
 # Shared rule blocks (privacy, migration-data, perf) are stored once in
 # prompts/_shared/ and injected into every prompt that references them via {{@path}}

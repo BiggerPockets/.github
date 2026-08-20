@@ -126,7 +126,7 @@ Once installed, trigger a review either way:
   workflow_dispatch** and pass the PR number. (Available once the caller file is on the
   repo's default branch.)
 
-### Prompt registry and the dual-arm summary experiment
+### Prompt registry and the shadow-arm experiment
 
 The review-stage prompts are not inline in the workflow. They live in this repo under
 `prompts/` and are resolved at runtime by `scripts/resolve-prompts.sh`:
@@ -146,18 +146,17 @@ prompts/
 - **Content-derived versions.** `prompt_version` is a content hash of the template plus the
   shared blocks it includes — it changes only when that prompt's text changes, not per PR
   or per arm, so Datadog LLM Obs can attribute quality to the exact prompt text that ran.
-- **Dual-arm, within-PR comparison.** Every review runs an experiment arm
-  (`thesis-first`) in addition to the gate arm — two independent
-  Claude passes over the same Codex findings (arms and their prompts live in `registry.json`;
-  one non-gate arm today). Both summaries are posted in a single review comment labeled
-  **Variant A** / **Variant B** in a per-PR-randomized order (deterministic hash of the PR
-  number, so it is balanced across PRs and stable across re-reviews). The arms are not
-  disclosed in the comment. The official approve / request-changes gate always comes from
-  `gate_arm` (`control`) — the experiment only changes presentation, never the decision.
-  `registry.json` is the only switch. An `arms` map holding nothing but `gate_arm` leaves
-  every review single-arm (one summary, no A/B), so a Merge that drops the last experiment
-  arm turns the comparison off everywhere at once — and until it does, every review pays for
-  a second Claude synthesize pass.
+- **Shadow-arm comparison.** Every review runs an experiment arm (`thesis-first`) in
+  addition to the gate arm — two independent Claude passes over the same Codex findings
+  (arms and their prompts live in `registry.json`; one non-gate arm today). Only the gate
+  arm (`control`) reaches the PR: it writes the posted summary and the official approve /
+  request-changes decision. The experiment arm's summary is never posted, so a reviewer
+  sees exactly one review; its verdict goes to Datadog only, where `arm_agreement` and
+  `experiment_verdict` say whether the variant would have decided differently and which
+  way. `registry.json` is the only switch. An `arms` map holding nothing but `gate_arm` leaves
+  every review single-arm, so a Merge that drops the last experiment arm turns the
+  comparison off everywhere at once — and until it does, every review pays for a second
+  Claude synthesize pass.
 - **Prompt Tracking.** Every LLM span carries the prompt that produced it under
   `meta.input.prompt` — the registry template with its `{{PR}}`-style placeholders intact,
   plus the values that filled them as `variables`, plus `id`/`name`/`version`. Keeping the
@@ -184,9 +183,8 @@ prompts/
   Both traces share a stable `run_id` (`repo-pr-runid`) and carry `verdict` (the gate arm's
   decision, the one that posts), `experiment_verdict` (the other arm's, so a disagreement
   records which way it went — variant stricter or laxer — and not merely that one happened;
-  `n/a` on single-arm runs), `arm_agreement` (agree/disagree between the arms), and
-  `label_assignment` (`A=control|B=thesis-first` or the reverse), so offline evals and panel
-  ratings join to the exact review.
+  `n/a` on single-arm runs), and `arm_agreement` (agree/disagree between the arms), so
+  offline evals and panel ratings join to the exact review.
 
 **Registry operations** (kept distinct so a formatting experiment can't silently change the
 production prompt):
