@@ -15,7 +15,9 @@ name: BiggiePockets Code Review (reusable)
 # registry (BiggerPockets/.github) as a versioned template, plus one shared rule
 # block per concern under prompts/_shared/ injected via {{@path}}.
 # Prompts are resolved by scripts/resolve-prompts.sh into step outputs; a derived
-# prompt_version (content hash) identifies each prompt in Datadog LLM Obs.
+# prompt_version (content hash) identifies each prompt in Datadog LLM Obs. Each LLM
+# span also carries its template and variables under meta.input.prompt, which is what
+# Datadog Prompt Tracking reads to group runs by prompt and version.
 #
 # Dual-arm summary experiment (BIG-21717): when the PR carries the opt-in label
 # DUAL_ARM_LABEL, the review runs an independent Claude pass for each EXPERIMENT arm
@@ -502,6 +504,9 @@ jobs:
         continue-on-error: true
         env:
           DD_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+          CODEX_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.codex_prompt_template }}
+          GATE_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.gate_prompt_template }}
+          EXPERIMENT_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.experiment_prompt_template }}
         run: |
           if [ -z "$DD_API_KEY" ]; then
             echo "Skipping Datadog LLM Obs submission: DATADOG_API_KEY not configured"
@@ -573,6 +578,34 @@ jobs:
           codex_findings_excerpt=$(truncate "$codex_findings")
           gate_summary_excerpt=$(truncate "$gate_summary")
           experiment_summary_excerpt=$(truncate "$experiment_summary")
+
+          # Prompt Tracking: each LLM span carries the registry template that produced it,
+          # under meta.input.prompt. The template keeps its {{PR}}/{{PROMPT_NAME}}/
+          # {{PROMPT_VERSION}} placeholders and the substituted values ride along as
+          # `variables`, so every PR's run lands on the same prompt in Datadog instead of
+          # registering a new template per PR. `version` is our content-derived hash, so a
+          # prompt edit (a Roll) is what starts a new version.
+          prompt_json() { # name version template -> Prompt object
+            jq -n \
+              --arg name "$1" \
+              --arg version "$2" \
+              --arg template "$3" \
+              --arg pr "$PR" \
+              '{
+                id: $name,
+                name: $name,
+                version: $version,
+                template: $template,
+                # Report only the placeholders this template actually uses, so the
+                # variables list matches what a Playground replay needs to render it.
+                variables: (
+                  {PR: $pr, PROMPT_NAME: $name, PROMPT_VERSION: $version}
+                  | with_entries(select(.key as $k | $template | contains("{{" + $k + "}}")))
+                )
+              }'
+          }
+          codex_prompt_obj=$(prompt_json "$codex_prompt_name" "$codex_prompt_version" "$CODEX_PROMPT_TEMPLATE")
+          gate_prompt_obj=$(prompt_json "$gate_prompt_name" "$gate_prompt_version" "$GATE_PROMPT_TEMPLATE")
 
           codex_model_tag="${CODEX_MODEL:-unspecified}"
           claude_model_tag="${CLAUDE_MODEL:-unspecified}"
@@ -682,6 +715,8 @@ jobs:
             --arg root_status "$root_status" \
             --arg codex_findings_excerpt "$codex_findings_excerpt" \
             --arg gate_summary_excerpt "$gate_summary_excerpt" \
+            --argjson codex_prompt "$codex_prompt_obj" \
+            --argjson gate_prompt "$gate_prompt_obj" \
             '[
               {
                 parent_id: "undefined",
@@ -709,7 +744,10 @@ jobs:
                   kind: "llm",
                   model_name: $codex_model,
                   model_provider: "openrouter",
-                  input: {messages: [{role: "user", content: "Review pr:\($pr) against ticket.json/pr.diff"}]},
+                  input: {
+                    messages: [{role: "user", content: "Review pr:\($pr) against ticket.json/pr.diff"}],
+                    prompt: $codex_prompt
+                  },
                   output: {messages: [{role: "assistant", content: $codex_findings_excerpt}]}
                 }
               },
@@ -725,7 +763,10 @@ jobs:
                   kind: "llm",
                   model_name: $claude_model,
                   model_provider: "anthropic",
-                  input: {messages: [{role: "user", content: $codex_findings_excerpt}]},
+                  input: {
+                    messages: [{role: "user", content: $codex_findings_excerpt}],
+                    prompt: $gate_prompt
+                  },
                   output: {messages: [{role: "assistant", content: $gate_summary_excerpt}]}
                 }
               }
@@ -736,6 +777,7 @@ jobs:
           # Experiment arm trace: the same codex findings summarized under the variant
           # prompt. Separate request, so its arm tags cannot overwrite the gate arm's.
           if [ "$dual_arms" = "true" ] && [ -n "$experiment_arm" ]; then
+            experiment_prompt_obj=$(prompt_json "$experiment_prompt_name" "$experiment_prompt_version" "$EXPERIMENT_PROMPT_TEMPLATE")
             experiment_spans=$(jq -n \
               --arg trace_id "$experiment_trace_id" \
               --arg root_span_id "$experiment_root_span_id" \
@@ -749,6 +791,7 @@ jobs:
               --arg experiment_status "$experiment_status" \
               --arg codex_findings_excerpt "$codex_findings_excerpt" \
               --arg experiment_summary_excerpt "$experiment_summary_excerpt" \
+              --argjson experiment_prompt "$experiment_prompt_obj" \
               '[
                 {
                   parent_id: "undefined",
@@ -776,7 +819,10 @@ jobs:
                     kind: "llm",
                     model_name: $claude_model,
                     model_provider: "anthropic",
-                    input: {messages: [{role: "user", content: $codex_findings_excerpt}]},
+                    input: {
+                      messages: [{role: "user", content: $codex_findings_excerpt}],
+                      prompt: $experiment_prompt
+                    },
                     output: {messages: [{role: "assistant", content: $experiment_summary_excerpt}]}
                   }
                 }

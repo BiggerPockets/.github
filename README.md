@@ -99,7 +99,8 @@ yourself.) Configure them as **organization secrets** (recommended — set once,
 every repo) or as per-repo secrets if you prefer to scope them.
 
 It also reports per-review traces to the `biggiepockets-review` app in Datadog LLM
-Observability via `secrets.DATADOG_API_KEY`: verdict, timing, prompt version, the model each
+Observability via `secrets.DATADOG_API_KEY`: verdict, timing, prompt template and version
+(tracked as prompts, see below), the model each
 stage ran (`CODEX_MODEL`/`CLAUDE_MODEL` env vars in the workflow — `CODEX_MODEL` is an
 OpenRouter model slug and must be set; leave `CLAUDE_MODEL` empty to use Claude's own default), and the actual findings text from Codex and the summary Claude wrote,
 so review quality is inspectable, not just counted. This secret is optional — reviews still
@@ -156,6 +157,14 @@ prompts/
   PRs **without** the label get the single gate-arm review (one summary, no A/B), i.e. the
   pre-experiment behavior. The label is also the gradual-rollout switch: enable/disable per PR
   with no code change.
+- **Prompt Tracking.** Every LLM span carries the prompt that produced it under
+  `meta.input.prompt` — the registry template with its `{{PR}}`-style placeholders intact,
+  plus the values that filled them as `variables`, plus `id`/`name`/`version`. Keeping the
+  placeholders is what makes each prompt one tracked prompt in Datadog rather than a new
+  template per PR, so the [Prompts view](https://app.datadoghq.com/llm/traces) shows call
+  volume, latency, tokens, and a version diff per prompt, and any span can be replayed in
+  the Playground with its exact template and variables. A version starts when the prompt
+  text changes (a Roll), since `version` is the same content hash reported as a tag.
 - **Datadog.** Each arm is reported as **its own trace**, so every trace holds exactly one
   arm and carries unambiguous `arm`/`prompt_name`/`prompt_version` tags you can group and
   aggregate on. One trace per arm is required, not stylistic: Datadog resolves a tag key at
