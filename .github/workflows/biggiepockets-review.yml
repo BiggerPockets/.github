@@ -404,7 +404,10 @@ jobs:
           fi
 
           if [ -n "$experiment_summary" ] && [ -n "$EXPERIMENT_ARM" ]; then
-            parity=$(( $(printf '%s' "$PR" | cksum | awk '{print $2}') % 2 ))
+            # cksum prints "<checksum> <byte count>", so hash on $1. Reading $2 gives the
+            # digit count, which is constant across a repo's PR range and pins one arm to
+            # Variant A forever.
+            parity=$(( $(printf '%s' "$PR" | cksum | awk '{print $1}') % 2 ))
             if [ "$parity" -eq 0 ]; then
               first_name="Variant A"; first_summary="$gate_summary"
               second_name="Variant B"; second_summary="$experiment_summary"
