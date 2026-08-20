@@ -23,9 +23,13 @@ jobs:
 
       - name: Validate registry config
         run: |
-          jq -e '.version == 1' prompts/registry.json >/dev/null
+          jq -e '.version == 2' prompts/registry.json >/dev/null
           jq -e '.codex_prompt == "codex-first-pass"' prompts/registry.json >/dev/null
-          jq -e '.gate_arm == "control"' prompts/registry.json >/dev/null
+          jq -e '.control_arm == "control"' prompts/registry.json >/dev/null
+          # An out-of-range split would route reviews to an arm that doesn't exist, or
+          # silently pin every review to one side of a test that looks live.
+          jq -e '.experiment_split_percent | type == "number" and . >= 0 and . <= 100' \
+            prompts/registry.json >/dev/null
           for arm in $(jq -r '.arms | keys[]' prompts/registry.json); do
             prompt=$(jq -r --arg a "$arm" '.arms[$a]' prompts/registry.json)
             test -f "prompts/$prompt.md" || { echo "prompts/$prompt.md missing for arm $arm"; exit 1; }
@@ -37,6 +41,7 @@ jobs:
           REGISTRY_DIR: ${{ github.workspace }}
           PR: '12345'
         run: |
+          : > /tmp/o1.txt
           GITHUB_OUTPUT=/tmp/o1.txt scripts/resolve-prompts.sh >/dev/null
           echo "resolve OK"
 
@@ -45,8 +50,11 @@ jobs:
           REGISTRY_DIR: ${{ github.workspace }}
           PR: '12345'
         run: |
+          : > /tmp/o2.txt
           GITHUB_OUTPUT=/tmp/o2.txt scripts/resolve-prompts.sh >/dev/null
-          # Second run overwrites o2 only; capture a third into o3 and compare.
+          # The resolver appends, so each run needs a truncated file of its own; two
+          # fresh resolves must be byte-identical.
+          : > /tmp/o3.txt
           GITHUB_OUTPUT=/tmp/o3.txt scripts/resolve-prompts.sh >/dev/null
           diff /tmp/o2.txt /tmp/o3.txt
           echo "deterministic OK"
@@ -56,6 +64,7 @@ jobs:
           REGISTRY_DIR: ${{ github.workspace }}
           PR: '12345'
         run: |
+          : > /tmp/o4.txt
           GITHUB_OUTPUT=/tmp/o4.txt scripts/resolve-prompts.sh >/dev/null
           # Assert the resolver actually wrote where we told it to. Without this an
           # unreadable file yields an empty string, and every check below passes on
@@ -65,7 +74,7 @@ jobs:
           # Only the *resolved* prompts must be marker-free. The *_prompt_template
           # outputs keep their {{PR}}/{{PROMPT_NAME}}/{{PROMPT_VERSION}} placeholders on
           # purpose — that is the template Datadog Prompt Tracking records.
-          for out in codex_prompt gate_prompt experiment_prompt; do
+          for out in codex_prompt arm_prompt; do
             resolved=$(sed -n "/^$out<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p" /tmp/o4.txt | sed '1d;$d')
             if printf '%s' "$resolved" | grep -qE '\{\{'; then
               echo "Unresolved template markers remain in $out:" >&2
@@ -80,13 +89,14 @@ jobs:
           REGISTRY_DIR: ${{ github.workspace }}
           PR: '12345'
         run: |
+          : > /tmp/o5.txt
           GITHUB_OUTPUT=/tmp/o5.txt scripts/resolve-prompts.sh >/dev/null
           test -s /tmp/o5.txt || { echo "resolver wrote no output" >&2; exit 1; }
           # The *_prompt_template outputs are what Datadog records as the prompt
           # template. They keep {{PR}}-style placeholders, but a shared-rule include
           # must already be expanded — an unexpanded {{@...}} would ship a template
           # that no longer matches the text the model actually saw.
-          for out in codex_prompt_template gate_prompt_template experiment_prompt_template; do
+          for out in codex_prompt_template arm_prompt_template; do
             tmpl=$(sed -n "/^$out<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p" /tmp/o5.txt | sed '1d;$d')
             test -n "$tmpl" || { echo "$out is empty" >&2; exit 1; }
             if printf '%s' "$tmpl" | grep -qE '\{\{@'; then
@@ -99,24 +109,86 @@ jobs:
 
       - name: Arms are distinct prompts
         run: |
-          control=$(jq -r '.arms.control' prompts/registry.json)
-          variant=$(jq -r '.arms["thesis-first"]' prompts/registry.json)
-          test "$control" != "$variant" || { echo "arms resolve to the same prompt"; exit 1; }
-          echo "arms distinct"
+          # Two arms pointing at the same prompt file would report an A/B result for a
+          # test that has no variable in it.
+          total=$(jq -r '.arms | keys | length' prompts/registry.json)
+          distinct=$(jq -r '.arms | [.[]] | unique | length' prompts/registry.json)
+          test "$total" = "$distinct" || { echo "two arms resolve to the same prompt"; exit 1; }
+          echo "arms distinct ($total)"
+
+      # Only the ASSIGNED arm's prompt is resolved per run, so a broken variant prompt
+      # would stay invisible until a PR happened to hash into it. Sweep PR numbers until
+      # every declared arm has been assigned at least once, and resolve each one.
+      - name: Every arm resolves for some PR
+        env:
+          REGISTRY_DIR: ${{ github.workspace }}
+          GITHUB_REPOSITORY: BiggerPockets/validate
+        run: |
+          declared=$(jq -r '.arms | keys | sort | join(" ")' prompts/registry.json)
+          want=$(jq -r '.arms | keys | length' prompts/registry.json)
+          split=$(jq -r '.experiment_split_percent' prompts/registry.json)
+          seen=""; count=0
+          # Stop as soon as every arm has been covered — each resolve costs ~0.15s, and a
+          # sane split hits both arms within the first handful of PR numbers.
+          for pr in $(seq 1 500); do
+            [ "$count" -eq "$want" ] && break
+            out=/tmp/arm-$pr.txt
+            # The resolver APPENDS to GITHUB_OUTPUT, so start from an empty file or a
+            # second resolve doubles every key and the extracted value spans both.
+            : > "$out"
+            PR=$pr GITHUB_OUTPUT=$out scripts/resolve-prompts.sh >/dev/null
+            arm=$(sed -n '/^assigned_arm<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' "$out" | sed '1d;$d')
+            case " $seen " in *" $arm "*) continue;; esac
+            seen="$seen $arm"; count=$((count + 1))
+            resolved=$(sed -n '/^arm_prompt<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' "$out" | sed '1d;$d')
+            test -n "$resolved" || { echo "arm $arm resolved to an empty prompt (pr $pr)" >&2; exit 1; }
+            printf '%s' "$resolved" | grep -qE '\{\{' && { echo "markers left in arm $arm" >&2; exit 1; }
+            echo "arm $arm resolves (first seen at pr $pr)"
+          done
+          got=$(printf '%s\n' $seen | sort | tr '\n' ' ' | sed 's/ $//')
+          # A 0 or 100 split deliberately routes every review to one arm, so only demand
+          # full coverage when the split actually sends traffic both ways.
+          if [ "$split" -gt 0 ] && [ "$split" -lt 100 ]; then
+            test "$got" = "$declared" || {
+              echo "arms assigned over 500 PRs: '$got'; declared: '$declared'" >&2
+              exit 1
+            }
+          fi
+          echo "arm coverage OK ($got)"
+
+      - name: Assignment is stable for a fixed PR
+        env:
+          REGISTRY_DIR: ${{ github.workspace }}
+          GITHUB_REPOSITORY: BiggerPockets/validate
+          PR: '12345'
+        run: |
+          # A PR that changed arms between reviews would post two different review styles
+          # on the same PR and split its telemetry across both arms.
+          for i in 1 2 3; do
+            : > /tmp/assign-$i.txt
+            GITHUB_OUTPUT=/tmp/assign-$i.txt scripts/resolve-prompts.sh >/dev/null
+            sed -n '/^assigned_arm<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/assign-$i.txt \
+              | sed '1d;$d' > /tmp/arm-only-$i.txt
+          done
+          diff /tmp/arm-only-1.txt /tmp/arm-only-2.txt
+          diff /tmp/arm-only-2.txt /tmp/arm-only-3.txt
+          echo "assignment stable ($(cat /tmp/arm-only-1.txt))"
 
       - name: Roll bumps prompt versions (content-derived provenance)
         env:
           REGISTRY_DIR: ${{ github.workspace }}
           PR: '1'
         run: |
+          : > /tmp/before.txt
           GITHUB_OUTPUT=/tmp/before.txt scripts/resolve-prompts.sh >/dev/null
           for f in prompts/_shared/*.md; do printf '\n# probe\n' >> "$f"; done
+          : > /tmp/after.txt
           GITHUB_OUTPUT=/tmp/after.txt scripts/resolve-prompts.sh >/dev/null
           for f in prompts/_shared/*.md; do git checkout -- "$f"; done
           test -s /tmp/before.txt && test -s /tmp/after.txt \
             || { echo "resolver wrote no output" >&2; exit 1; }
-          before=$(sed -n '/^experiment_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/before.txt | sed '1d;$d')
-          after=$(sed -n '/^experiment_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/after.txt | sed '1d;$d')
+          before=$(sed -n '/^arm_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/before.txt | sed '1d;$d')
+          after=$(sed -n '/^arm_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/after.txt | sed '1d;$d')
           if [ "$before" = "$after" ]; then
             echo "editing a shared rule did not bump prompt_version" >&2
             exit 1

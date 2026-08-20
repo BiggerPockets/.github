@@ -126,14 +126,14 @@ Once installed, trigger a review either way:
   workflow_dispatch** and pass the PR number. (Available once the caller file is on the
   repo's default branch.)
 
-### Prompt registry and the shadow-arm experiment
+### Prompt registry and the prompt A/B test
 
 The review-stage prompts are not inline in the workflow. They live in this repo under
 `prompts/` and are resolved at runtime by `scripts/resolve-prompts.sh`:
 
 ```
 prompts/
-  registry.json                              # arms + gate_arm + codex prompt name
+  registry.json                              # arms + control arm + split + codex prompt
   codex-first-pass.md                        # Stage 1 prompt (template)
   claude-synthesize.md                       # Stage 2 control arm (template)
   claude-synthesize-thesis-first.md          # Stage 2 thesis-first arm (template)
@@ -146,17 +146,23 @@ prompts/
 - **Content-derived versions.** `prompt_version` is a content hash of the template plus the
   shared blocks it includes — it changes only when that prompt's text changes, not per PR
   or per arm, so Datadog LLM Obs can attribute quality to the exact prompt text that ran.
-- **Shadow-arm comparison.** Every review runs an experiment arm (`thesis-first`) in
-  addition to the gate arm — two independent Claude passes over the same Codex findings
-  (arms and their prompts live in `registry.json`; one non-gate arm today). Only the gate
-  arm (`control`) reaches the PR: it writes the posted summary and the official approve /
-  request-changes decision. The experiment arm's summary is never posted, so a reviewer
-  sees exactly one review; its verdict goes to Datadog only, where `arm_agreement` and
-  `experiment_verdict` say whether the variant would have decided differently and which
-  way. `registry.json` is the only switch. An `arms` map holding nothing but `gate_arm` leaves
-  every review single-arm, so a Merge that drops the last experiment arm turns the
-  comparison off everywhere at once — and until it does, every review pays for a second
-  Claude synthesize pass.
+- **One arm per pull request.** Two Claude prompts sit in the registry — `control` and
+  `thesis-first` — and each review runs exactly one of them. `scripts/resolve-prompts.sh`
+  hashes `<repo>:<pr>` into a bucket 0-99 and assigns the PR to the experiment arm when
+  that bucket falls under `experiment_split_percent` (50 today), so the arms split traffic
+  evenly and every review costs a single Claude pass. Assignment is a pure function of
+  repo and PR number: re-running a review reuses the same arm, and one PR never sees two
+  review styles.
+- **The assigned arm decides.** Whichever arm a PR draws writes the posted summary *and*
+  the approve / request-changes verdict. No separate control gate holds the decision back,
+  which is the tradeoff for one pass per review: an experiment prompt affects real review
+  outcomes on its share of PRs. Set `experiment_split_percent` to `0` to route every
+  review to `control_arm` without removing the arm. The arm is never named in the review
+  comment — a reviewer who knows which prompt wrote a summary can't judge it blind.
+- **Comparison is between PRs, not within one.** No PR is reviewed twice, so there is no
+  paired A/B to diff on a single PR. Compare the arms by grouping Datadog on `arm` across
+  many reviews — verdict rate, latency, tokens. That needs volume before it means
+  anything; a gap in approve rate over a dozen PRs is noise.
 - **Prompt Tracking.** Every LLM span carries the prompt that produced it under
   `meta.input.prompt` — the registry template with its `{{PR}}`-style placeholders intact,
   plus the values that filled them as `variables`, plus `id`/`name`/`version`. Keeping the
@@ -165,38 +171,41 @@ prompts/
   volume, latency, tokens, and a version diff per prompt, and any span can be replayed in
   the Playground with its exact template and variables. A version starts when the prompt
   text changes (a Roll), since `version` is the same content hash reported as a tag.
-- **Datadog.** Each arm is reported as **its own trace**, so every trace holds exactly one
-  arm and carries unambiguous `arm`/`prompt_name`/`prompt_version` tags you can group and
-  aggregate on. One trace per arm is required, not stylistic: Datadog resolves a tag key at
-  trace scope, so putting both arms in one trace collapses those keys onto whichever span
-  was written last and credits one arm's review to the other's prompt.
+- **Datadog.** Each review is one trace, tagged with the arm that ran it:
 
   ```
-  gate trace        biggiepockets.review → codex.review, claude.synthesize.gate
-  experiment trace  biggiepockets.review → claude.synthesize.experiment
+  biggiepockets.review → codex.review, claude.synthesize
   ```
 
-  Codex runs once and feeds both arms, so it sits in the gate trace rather than being
-  duplicated (which would double-count its latency and tokens); its findings are still the
-  recorded input of both arms' spans. Compare arms at the `claude.synthesize.*` spans, which
-  are like-for-like — the gate trace's root also spans codex, so root durations are not.
-  Both traces share a stable `run_id` (`repo-pr-runid`) and carry `verdict` (the gate arm's
-  decision, the one that posts), `experiment_verdict` (the other arm's, so a disagreement
-  records which way it went — variant stricter or laxer — and not merely that one happened;
-  `n/a` on single-arm runs), and `arm_agreement` (agree/disagree between the arms), so
-  offline evals and panel ratings join to the exact review.
+  A tag key resolves to one value per submitted payload, so an `arm` tag is only
+  trustworthy while a payload carries a single arm — which it does by construction now
+  that one arm runs per review. Tags include `arm`, `arm_role` (`control`/`experiment`),
+  `prompt_name`, `prompt_version`, `verdict`, `assignment_bucket`, and
+  `experiment_split_percent`. Recording the bucket and the split keeps an assignment
+  auditable: changing the split later can't rewrite what an already-recorded review ran
+  under. A stable `run_id` (`repo-pr-runid`) joins offline evals and panel ratings to the
+  exact review.
+
+  Older spans in the same app ran both arms over one PR and reported two traces per
+  review; identify them by the tags only they carry — `arm_agreement`,
+  `experiment_verdict`, `label_assignment` — or by the span names
+  `claude.synthesize.gate` / `claude.synthesize.experiment`. They are still queryable, but
+  they answer a within-PR question current reviews no longer produce, so exclude them when
+  comparing arms rather than pooling them in.
 
 **Registry operations** (kept distinct so a formatting experiment can't silently change the
 production prompt):
 
 - **Roll** — edit a prompt or shared-rule file; its content-derived `prompt_version` bumps.
-- **Apply** — point an arm or `gate_arm` at a different stored prompt in `registry.json`
-  (no version change). Callers tracking `@main` pick the change up on their next run. A
+- **Apply** — point `control_arm` or an arm at a different stored prompt in
+  `registry.json`, or change `experiment_split_percent` (no version change). Callers tracking `@main` pick the change up on their next run. A
   caller that pins `uses:` to a tag or SHA needs BOTH that `@ref` and its `registry_ref`
   input bumped in lockstep — Apply owns that ref-bump explicitly.
-- **Split** — add a new arm entry in `registry.json` + its prompt file.
+- **Split** — add a new arm entry in `registry.json` + its prompt file, and give it a
+  share of traffic via `experiment_split_percent`.
 - **Merge** — fold a variant's content into another prompt and remove the arm.
 
 A `validate-prompts.yml` workflow guards the registry: it fails a PR if a template has
-dangling includes, `registry.json` references a missing prompt, the resolver isn't
-deterministic, or a shared-rule edit doesn't bump versions.
+dangling includes, `registry.json` references a missing prompt, two arms point at the
+same prompt, an arm's prompt fails to resolve, arm assignment isn't stable for a fixed PR,
+the resolver isn't deterministic, or a shared-rule edit doesn't bump versions.
