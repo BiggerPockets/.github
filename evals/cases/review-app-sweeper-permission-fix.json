@@ -1,0 +1,8 @@
+{
+  "id": "review-app-sweeper-permission-fix",
+  "pr": 30502,
+  "why": "The fix for the case above: adds `pull-requests: read` and captures the HTTP status so a non-200 is surfaced as a warning annotation instead of being swallowed. A correct review approves this. It is the negative case that stops a prompt from scoring well by requesting changes on everything.",
+  "expect_verdict": "approve",
+  "must_match": [],
+  "notes": "Scored on verdict alone. Kept deliberately: an eval set of defect cases only rewards a reviewer that never approves."
+}

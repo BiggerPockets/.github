@@ -1,0 +1,28 @@
+{
+  "id": "review-app-sweeper-permission-scope",
+  "pr": 30503,
+  "why": "Replay of BiggerPockets/biggerpockets#30384 at its original head. The workflow it adds declares only `issues: read`, but its /cwa check reads comments on a PR-backed issue, which also needs `pull-requests: read`. The request 403s, `curl -sf` swallows it into an empty string, and the fail-closed guard keeps every app, so the sweeper can never expire anything. The real review approved this and recorded the scope as correctly declared.",
+  "expect_verdict": "request_changes",
+  "must_match": [
+    [
+      "pull-requests",
+      "pull_requests",
+      "pull request read",
+      "permission scope",
+      "too narrow"
+    ],
+    [
+      "403",
+      "permission",
+      "scope"
+    ],
+    [
+      "expire",
+      "sweep",
+      "never",
+      "no-op",
+      "skip"
+    ]
+  ],
+  "notes": "The blocking finding must be the permission scope. A review that requests changes only over the missing pagination on the comments fetch, or only over the swallowed DELETE status, has not found this bug \u2014 the must_match rows are what separate those."
+}

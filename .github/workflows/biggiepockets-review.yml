@@ -46,6 +46,17 @@ on:
         required: false
         default: main
         type: string
+      dry_run:
+        description: >-
+          Run the review without submitting it. The verdict is uploaded as a
+          `review-verdict-pr<pr>` artifact instead of being posted, which is what the
+          prompt evals in the registry's evals/ use to score the prompts against pull
+          requests whose correct outcome is already known. Everything upstream of the
+          submit step is unchanged on purpose: an eval that runs a different pipeline
+          measures a different pipeline.
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   # Codex and Claude intentionally run in separate jobs. GitHub can only re-run a
@@ -341,7 +352,33 @@ jobs:
       # Submit the review under the arm this PR was assigned. The arm is not disclosed
       # in the comment: a reviewer who knows which prompt wrote a summary can't rate it
       # blind, and the whole point of the split is an unbiased read on the two prompts.
+      # Evals path: keep the verdict as an artifact rather than posting it. VERDICT is
+      # still exported so the Datadog reporting below records a dry run the same way it
+      # records a real one.
+      - name: Record verdict without submitting
+        if: ${{ inputs.dry_run }}
+        run: |
+          if [ ! -f verdict.json ]; then
+            echo "::error::Claude review run did not produce verdict.json" >&2
+            exit 1
+          fi
+          echo "VERDICT=$(jq -r '.verdict' verdict.json)" >> "$GITHUB_ENV"
+          echo "Dry run: verdict is $(jq -r '.verdict' verdict.json), not submitting"
+
+      # Uploaded even on failure: a missing or malformed verdict is itself an eval
+      # result, and the scorer treats "no verdict" as a failed case rather than a pass.
+      - name: Upload verdict for eval scoring
+        if: ${{ always() && inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-verdict-pr${{ inputs.pr }}
+          path: verdict.json
+          if-no-files-found: warn
+          retention-days: 7
+          overwrite: true
+
       - name: Submit review as BiggiePockets
+        if: ${{ !inputs.dry_run }}
         id: submit
         env:
           # PAT authenticating as the BiggiePockets service account. A bot cannot
