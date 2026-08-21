@@ -34,11 +34,16 @@ Synthesize a single review decision for pull request #{{PR}}.
 8. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
    tag, per these rules:
    {{@prompts/_shared/navigation-rules.md}}
-9. Validate which of Codex's findings are real (discard false positives), add any genuine
+9. When the diff touches CI config, a GitHub Actions workflow, or any unattended job,
+   review it per these rules:
+   {{@prompts/_shared/automation-rules.md}}
+10. Validate which of Codex's findings are real (discard false positives), add any genuine
    issues Codex missed, and (when a ticket is available) judge genuine misses of the ticket's
    intent or clear scope creep — but give credit when the author went beyond the literal
-   acceptance criteria in a sound way rather than flagging it as non-compliant.
-10. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
+   acceptance criteria in a sound way rather than flagging it as non-compliant. Hold every
+   claim you make and every finding you retire to these rules:
+   {{@prompts/_shared/verification-rules.md}}
+11. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
    genuine, blocking issue; otherwise "approve". A change that exceeds the AC without
    breaking the ticket's intent is a reason to approve, not to block.
 
