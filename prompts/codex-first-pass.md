@@ -28,7 +28,10 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
 7. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
    tag, per these rules:
    {{@prompts/_shared/navigation-rules.md}}
-8. Report concrete issues — bugs, regressions, security problems, member-privacy
+8. When the diff touches CI config, a GitHub Actions workflow, or any unattended job,
+   review it per these rules:
+   {{@prompts/_shared/automation-rules.md}}
+9. Report concrete issues — bugs, regressions, security problems, member-privacy
    violations, and genuine misses of the ticket's intent or clear scope creep — each with a
    file/line reference and a brief rationale. Do not list "doesn't match acceptance criteria"
    as an issue by itself; only raise it when the deviation harms the intent. If nothing is
