@@ -116,7 +116,21 @@ run and post normally without it, but no metrics are reported.
 The exact secret names each step expects are visible in the `env:` and `with:` blocks of
 [`.github/workflows/biggiepockets-review.yml`](.github/workflows/biggiepockets-review.yml).
 
-#### 4. Give BiggiePockets access
+#### 4. Set workflow permissions
+
+The reusable workflow's jobs need `pull-requests: read` and `id-token: write` (OIDC
+authentication for `claude-code-action`). The caller YAML declares these in its
+`permissions` block, but GitHub caps those declarations at whatever the repo's default
+token setting allows. Repos set to **"Read repository contents"** (the restrictive
+default) deny `id-token: write` regardless of what the YAML says — the workflow fails
+with `startup_failure` before any job runs.
+
+Go to **Settings → Actions → General → Workflow permissions** on the target repo and set:
+
+- **"Read and write permissions"**
+- **"Allow GitHub Actions to create and approve pull requests"** (checked)
+
+#### 5. Give BiggiePockets access
 
 The **BiggiePockets** service account must have access to the repo so it can be requested
 as a reviewer and post the review. Add it as a collaborator (or via a team) with at least
