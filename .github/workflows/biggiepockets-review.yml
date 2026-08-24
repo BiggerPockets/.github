@@ -166,21 +166,29 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          comments=$(gh api --paginate \
+          gh api --paginate \
             "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
-            -q '[.[] | {author: .user.login, created_at, body}]' | jq -s 'add // []')
-          review_comments=$(gh api --paginate \
+            -q '[.[] | {author: .user.login, created_at, body}]' \
+            | jq -s 'add // []' > "$RUNNER_TEMP/issue_comments.json"
+          gh api --paginate \
             "repos/$GITHUB_REPOSITORY/pulls/$PR/comments" \
-            -q '[.[] | {author: .user.login, path, line, created_at, body}]' | jq -s 'add // []')
-          reviews=$(gh api --paginate \
+            -q '[.[] | {author: .user.login, path, line, created_at, body}]' \
+            | jq -s 'add // []' > "$RUNNER_TEMP/review_comments.json"
+          gh api --paginate \
             "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" \
-            -q '[.[] | select(.body != "") | {author: .user.login, state, submitted_at, body}]' | jq -s 'add // []')
+            -q '[.[] | select(.body != "") | {author: .user.login, state, submitted_at, body}]' \
+            | jq -s 'add // []' > "$RUNNER_TEMP/reviews.json"
 
+          # The three lists reach jq as files rather than as --argjson arguments: a
+          # single argument is capped at 128KB regardless of how much room the rest
+          # of the command line has, and a long-running PR thread passes that on its
+          # review bodies alone, at which point jq dies with "Argument list too long"
+          # and the whole review never starts.
           jq -n \
-            --argjson comments "$comments" \
-            --argjson review_comments "$review_comments" \
-            --argjson reviews "$reviews" \
-            '{issue_comments: $comments, review_comments: $review_comments, reviews: $reviews}' \
+            --slurpfile comments "$RUNNER_TEMP/issue_comments.json" \
+            --slurpfile review_comments "$RUNNER_TEMP/review_comments.json" \
+            --slurpfile reviews "$RUNNER_TEMP/reviews.json" \
+            '{issue_comments: $comments[0], review_comments: $review_comments[0], reviews: $reviews[0]}' \
             > conversations.json
           echo "Wrote conversations.json ($(jq '.issue_comments | length' conversations.json) comments, $(jq '.review_comments | length' conversations.json) review comments, $(jq '.reviews | length' conversations.json) reviews)"
 
