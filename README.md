@@ -72,6 +72,13 @@ on:
         required: true
         type: string
 
+# The reusable workflow's jobs need these scopes. Declare them explicitly so the
+# caller works regardless of the repo's default token permissions.
+permissions:
+  contents: read
+  pull-requests: read
+  id-token: write
+
 jobs:
   review:
     # React to a manual dispatch, or to BiggiePockets specifically being requested.
