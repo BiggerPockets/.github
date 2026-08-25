@@ -30,28 +30,13 @@ The review logic lives centrally in this repo. Each consuming repo only adds a t
 
 Do this once per repo you want BiggiePockets to review.
 
-#### 1. Install the Claude GitHub app and add its auth token
+#### 1. Install the Claude GitHub app
 
-The Claude verification stage uses [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action),
-which needs two things: the official [Claude GitHub app](https://github.com/apps/claude)
-installed, and a `CLAUDE_CODE_OAUTH_TOKEN` secret it can authenticate with. From a clone of
-the target repo, run the slash command in Claude Code:
-
-```
-/install-github-app
-```
-
-It walks you through both — but the two halves have very different scopes:
-
-- **App install — once for the whole org.** If the Claude app is already installed
-  org-wide, skip the app-installation step; you do **not** need to reinstall it per repo.
-- **Auth token — per repo.** `/install-github-app` writes `CLAUDE_CODE_OAUTH_TOKEN` as a
-  **repo** secret, not an org secret, so this is the part you actually need on each new repo.
-  If you'd rather set it once, add `CLAUDE_CODE_OAUTH_TOKEN` as an **organization secret** by
-  hand and skip this command entirely.
-
-You need **admin access** on the repo and an authenticated `gh` CLI. (If the command fails,
-install the app manually from https://github.com/apps/claude and add the token by hand.)
+The Claude verification stage uses [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action).
+Install the official [Claude GitHub app](https://github.com/apps/claude) for the organization
+once; you do **not** need to reinstall it per repo. Claude's model requests authenticate
+through OpenRouter using the shared `OPENROUTER_API_KEY` described below, so no personal
+Claude Code OAuth token is required.
 
 #### 2. Add the caller workflow
 
@@ -98,18 +83,17 @@ jobs:
 #### 3. Make the secrets available
 
 The reusable workflow consumes several secrets via `secrets: inherit`: credentials for the
-two AI review providers (`OPENROUTER_API_KEY` for the Codex stage, which reaches its model
-through OpenRouter's Responses API), an Atlassian email + API token to fetch the PR's JIRA ticket for
-intent, and a personal access token for the BiggiePockets service account that submits the
-review. (The Claude auth secret is set by `/install-github-app` in step 1; the rest you add
-yourself.) Configure them as **organization secrets** (recommended — set once, available to
-every repo) or as per-repo secrets if you prefer to scope them.
+the AI review provider (`OPENROUTER_API_KEY`, shared by both the Codex and Claude stages),
+an Atlassian email + API token to fetch the PR's JIRA ticket for intent, and a personal access
+token for the BiggiePockets service account that submits the review. Configure them as
+**organization secrets** (recommended — set once, available to every repo) or as per-repo
+secrets if you prefer to scope them.
 
 It also reports per-review traces to the `biggiepockets-review` app in Datadog LLM
 Observability via `secrets.DATADOG_API_KEY`: verdict, timing, prompt template and version
 (tracked as prompts, see below), the model each
-stage ran (`CODEX_MODEL`/`CLAUDE_MODEL` env vars in the workflow — `CODEX_MODEL` is an
-OpenRouter model slug and must be set; leave `CLAUDE_MODEL` empty to use Claude's own default), and the actual findings text from Codex and the summary Claude wrote,
+stage ran (`CODEX_MODEL`/`CLAUDE_MODEL` env vars in the workflow — both are OpenRouter
+model slugs and must be set), and the actual findings text from Codex and the summary Claude wrote,
 so review quality is inspectable, not just counted. This secret is optional — reviews still
 run and post normally without it, but no metrics are reported.
 
