@@ -22,24 +22,28 @@ Synthesize a single review decision for pull request #{{PR}}.
    When the diff adds or changes image assets, check that they are provided at retina
    quality (e.g. a 2x asset or an `srcset`/`@2x` variant); flag raster images that ship
    only at 1x where a high-DPI version is expected. {{@prompts/_shared/migration-data-rule.md}}
-5. Enforce these BiggerPockets member-privacy rules and treat a genuine violation as a
+5. Enforce task completeness and reject incomplete tasks, half-measures, placeholders, or
+   deferred work per these rules as blocking issues:
+   {{@prompts/_shared/completeness-rules.md}}
+6. Enforce these BiggerPockets member-privacy rules and treat a genuine violation as a
    blocking issue:
    {{@prompts/_shared/privacy-rules.md}}
-6. Check for batch/task performance hot spots per these rules — an N+1 or O(n^2)+
+7. Check for batch/task performance hot spots per these rules — an N+1 or O(n^2)+
    pattern on a full-table #process/#collection is a genuine finding, not a nitpick;
    flag it with a suggested fix:
    {{@prompts/_shared/perf-rules.md}}
-7. Check how the diff parses structured values, per these rules:
+8. Check how the diff parses structured values, per these rules:
    {{@prompts/_shared/parsing-rules.md}}
-8. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
+9. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
    tag, per these rules:
    {{@prompts/_shared/navigation-rules.md}}
-9. Validate which of Codex's findings are real (discard false positives), add any genuine
+10. Validate which of Codex's findings are real (discard false positives), add any genuine
    issues Codex missed, and (when a ticket is available) judge genuine misses of the ticket's
    intent or clear scope creep — but give credit when the author went beyond the literal
    acceptance criteria in a sound way rather than flagging it as non-compliant.
-10. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
-   genuine, blocking issue; otherwise "approve". A change that exceeds the AC without
+11. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
+   genuine, blocking issue (such as a bug, regression, privacy violation, half-finished task,
+   placeholder, or deferred work); otherwise "approve". A change that exceeds the AC without
    breaking the ticket's intent is a reason to approve, not to block.
 
 Write a file named verdict.json in the current working directory with EXACTLY this shape:
