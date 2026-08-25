@@ -7,7 +7,7 @@ name: BiggiePockets Code Review (reusable)
 # Callers own the triggers and gating (e.g. fire on review_requested when
 # BiggiePockets is the requested reviewer) and pass the PR number as `pr`.
 # Secrets are supplied by the caller via `secrets: inherit`:
-#   OPENROUTER_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, JIRA_EMAIL, JIRA_API_TOKEN,
+#   OPENROUTER_API_KEY, JIRA_EMAIL, JIRA_API_TOKEN,
 #   BIGGIEPOCKETS_PAT, DATADOG_API_KEY (optional; enables review-quality
 #   metrics in Datadog LLM Obs).
 #
@@ -282,7 +282,8 @@ jobs:
     env:
       PR: ${{ inputs.pr }}
       CODEX_MODEL: "openai/gpt-5.6-sol"
-      CLAUDE_MODEL: "claude-opus-5"
+      CLAUDE_MODEL: "anthropic/claude-opus-5"
+      ANTHROPIC_BASE_URL: "https://openrouter.ai/api"
     steps:
       - name: Checkout reviewed PR head
         uses: actions/checkout@v4
@@ -326,7 +327,10 @@ jobs:
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # claude-code-action accepts an Anthropic-compatible API key and base URL.
+          # OpenRouter exposes that API at ANTHROPIC_BASE_URL, so this shared org key
+          # replaces the per-user Claude Code OAuth token.
+          anthropic_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           # Allow the `claude` bot to trigger this review. Without this, PRs opened
           # by the claude bot are rejected with "Workflow initiated by non-human
           # actor: claude (type: Bot). Add bot to allowed_bots list."
@@ -555,7 +559,7 @@ jobs:
                 meta: {
                   kind: "llm",
                   model_name: $claude_model,
-                  model_provider: "anthropic",
+                  model_provider: "openrouter",
                   input: {
                     messages: [{role: "user", content: $codex_findings_excerpt}],
                     prompt: $arm_prompt
