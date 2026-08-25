@@ -46,6 +46,17 @@ on:
         required: false
         default: main
         type: string
+      dry_run:
+        description: >-
+          Run the review without submitting it. The verdict is uploaded as a
+          `review-verdict-pr<pr>` artifact instead of being posted, which is what the
+          prompt evals in the registry's evals/ use to score the prompts against pull
+          requests whose correct outcome is already known. Everything upstream of the
+          submit step is unchanged on purpose: an eval that runs a different pipeline
+          measures a different pipeline.
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   # Codex and Claude intentionally run in separate jobs. GitHub can only re-run a
@@ -319,6 +330,18 @@ jobs:
       # Stage 2: Claude verifies Codex's findings, reviews independently, and decides.
       # This is the only Claude pass, running whichever arm's prompt was assigned to
       # this PR. Its verdict is the review.
+      # Allocated here rather than inside the Datadog step below, because the eval
+      # metrics the prompt evals attach to this review have to join on the same span ids
+      # this trace is submitted under, and that job runs after this one.
+      - name: Allocate LLM Obs trace ids
+        run: |
+          {
+            echo "TRACE_ID=$(openssl rand -hex 16)"
+            echo "ROOT_SPAN_ID=$(openssl rand -hex 8)"
+            echo "CODEX_SPAN_ID=$(openssl rand -hex 8)"
+            echo "CLAUDE_SPAN_ID=$(openssl rand -hex 8)"
+          } >> "$GITHUB_ENV"
+
       - name: Record Claude start time
         run: echo "CLAUDE_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
 
@@ -341,7 +364,53 @@ jobs:
       # Submit the review under the arm this PR was assigned. The arm is not disclosed
       # in the comment: a reviewer who knows which prompt wrote a summary can't rate it
       # blind, and the whole point of the split is an unbiased read on the two prompts.
+      # Evals path: keep the verdict as an artifact rather than posting it. VERDICT is
+      # still exported so the Datadog reporting below records a dry run the same way it
+      # records a real one.
+      - name: Record verdict without submitting
+        if: ${{ inputs.dry_run }}
+        run: |
+          if [ ! -f verdict.json ]; then
+            echo "::error::Claude review run did not produce verdict.json" >&2
+            exit 1
+          fi
+          echo "VERDICT=$(jq -r '.verdict' verdict.json)" >> "$GITHUB_ENV"
+          echo "Dry run: verdict is $(jq -r '.verdict' verdict.json), not submitting"
+
+          # What the eval run needs to publish its result against this review: the prompt
+          # that produced it, and the span to hang the eval metric on. ml_app matches the
+          # trace submission below so the metric lands on the same application.
+          jq -n \
+            --arg pr "$PR" \
+            --arg ml_app "biggiepockets-review" \
+            --arg arm "${{ steps.resolve.outputs.assigned_arm }}" \
+            --arg prompt_name "${{ steps.resolve.outputs.arm_prompt_name }}" \
+            --arg prompt_version "${{ steps.resolve.outputs.arm_prompt_version }}" \
+            --arg registry_ref "${{ inputs.registry_ref }}" \
+            --arg registry_sha "${{ needs.codex.outputs.registry_sha }}" \
+            --arg trace_id "$TRACE_ID" \
+            --arg claude_span_id "$CLAUDE_SPAN_ID" \
+            '{pr: $pr, ml_app: $ml_app, arm: $arm, prompt_name: $prompt_name,
+              prompt_version: $prompt_version, registry_ref: $registry_ref,
+              registry_sha: $registry_sha, trace_id: $trace_id,
+              claude_span_id: $claude_span_id}' > review-meta.json
+
+      # Uploaded even on failure: a missing or malformed verdict is itself an eval
+      # result, and the scorer treats "no verdict" as a failed case rather than a pass.
+      - name: Upload verdict for eval scoring
+        if: ${{ always() && inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-verdict-pr${{ inputs.pr }}
+          path: |
+            verdict.json
+            review-meta.json
+          if-no-files-found: warn
+          retention-days: 7
+          overwrite: true
+
       - name: Submit review as BiggiePockets
+        if: ${{ !inputs.dry_run }}
         id: submit
         env:
           # PAT authenticating as the BiggiePockets service account. A bot cannot
@@ -482,10 +551,10 @@ jobs:
 
           run_id="$GITHUB_REPOSITORY-pr$PR-${{ github.run_id }}"
 
-          trace_id=$(openssl rand -hex 16)
-          root_span_id=$(openssl rand -hex 8)
-          codex_span_id=$(openssl rand -hex 8)
-          claude_span_id=$(openssl rand -hex 8)
+          trace_id="$TRACE_ID"
+          root_span_id="$ROOT_SPAN_ID"
+          codex_span_id="$CODEX_SPAN_ID"
+          claude_span_id="$CLAUDE_SPAN_ID"
 
           spans=$(jq -n \
             --arg trace_id "$trace_id" \
