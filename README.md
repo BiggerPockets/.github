@@ -147,7 +147,7 @@ objected and it was never resolved"* legible to the panel.
 
 ### Models
 
-Every model an OpenRouter slug with a default pinned in the workflow, overrideable per repo
+Every model is an OpenRouter slug with a default pinned in the workflow, overrideable per repo
 by setting the matching **Actions variable** (Settings → Actions → Variables) in the calling
 repo. An unset or empty variable keeps the default. Stage 1 runs no model, so it has no entry.
 
@@ -158,11 +158,12 @@ repo. An unset or empty variable keeps the default. Stage 1 runs no model, so it
 | melchior | `MAGI_MODEL_MELCHIOR` | `z-ai/glm-5.3-flash` |
 | Arbitration | `ARBITER_MODEL` | `openai/gpt-5.6-sol` |
 
-There is no fallback model. A seat listed in `prompts/registry.json` with no
-`MAGI_MODEL_<SEAT>` of its own fails its own job with an explicit error, so adding a seat is
-deliberately a three-part change: roster entry, job, model. A seat that quietly ran the same
-model as another seat would be a panel that had lost a voice while still reporting three
-verdicts — worse than a seat that fails and says why.
+There is no fallback model, and no seat can inherit another's. Adding a seat is deliberately
+a three-part change — roster entry, job, model — with each part failing on its own terms if
+you skip it: a roster entry with no job fails CI, and a job whose model expression resolves to
+nothing fails that job at its `Confirm seat model` step. What none of them do is let the seat
+run, because a seat quietly sharing another seat's model is a panel that has lost a voice
+while still reporting three verdicts.
 
 Changing a seat's model never touches the prompt — the auditor prompt is seat-agnostic by
 construction, and CI asserts it.
@@ -356,12 +357,14 @@ prompts/
   stored prompt (no version change). Callers tracking `@main` pick the change up on their
   next run. A caller that pins `uses:` to a tag or SHA needs BOTH that `@ref` and its
   `registry_ref` input bumped in lockstep — Apply owns that ref-bump explicitly.
-- **Seat** — add or remove a name in `auditors`. A new seat also needs a
-  `MAGI_MODEL_<SEAT>` default in the workflow (or that repository variable set); without
-  one its matrix leg fails rather than silently doubling up on another seat's model.
+- **Seat** — add or remove a name in `auditors`, **and** the matching job in
+  `.github/workflows/biggiepockets-review.yml` with its `MAGI_MODEL_<SEAT>`. CI fails if the
+  roster and the seat jobs disagree, or if the new job's `steps:` block isn't byte-identical
+  to the others.
 
 A `validate-prompts.yml` workflow guards the registry: it fails a PR if a template has
 dangling includes, `registry.json` references a missing prompt, the auditor prompt names a
-seat, the arbitrator prompt doesn't name every seat, the seat list isn't a matrix-ready JSON
-array of at least two safe unique names, a broken registry resolves instead of erroring, the
-resolver isn't deterministic for a fixed PR, or a shared-rule edit doesn't bump versions.
+seat, the arbitrator prompt doesn't name every seat, the roster isn't a well-formed list of
+at least two safe unique names, the seat jobs don't match the roster and each other, a broken
+registry resolves instead of erroring, the resolver isn't deterministic for a fixed PR, or a
+shared-rule edit doesn't bump versions.

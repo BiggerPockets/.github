@@ -243,6 +243,36 @@ jobs:
           done
           echo "seat jobs match the roster ($(printf '%s\n' $seats | wc -l | tr -d ' ') seats) and each other"
 
+      # A reviewed PR is untrusted input, and every job that checks out the PR head has that
+      # checkout as its working directory — the same directory verdict.json and the
+      # audit-*.json globs are read from. Without a step that clears those names first, a PR
+      # can commit a file the review mistakes for a model's verdict and approve itself. This
+      # is the kind of invariant that disappears when someone adds a job by copying another
+      # one and trimming it, so it is asserted rather than reviewed.
+      - name: Every PR checkout clears the reserved handoff names
+        run: |
+          wf=.github/workflows/biggiepockets-review.yml
+          job_block() { awk -v start="  $1:" '
+            index($0, start) == 1 { inside = 1; next }
+            inside && /^  [^ ]/ { exit }
+            inside { print }' "$wf"; }
+
+          checked=0
+          for job in $(grep -oE '^  [a-z][a-z0-9_-]*:' "$wf" | tr -d ' :'); do
+            block=$(job_block "$job")
+            printf '%s' "$block" | grep -qE 'name: Checkout (reviewed )?PR head' || continue
+            checked=$((checked + 1))
+            printf '%s' "$block" | grep -q 'name: Clear reserved handoff filenames' \
+              || { echo "job '$job' checks out the PR head without clearing reserved handoff names" >&2; exit 1; }
+            for reserved in verdict.json 'audit-\*.json' pr.diff ticket.json; do
+              printf '%s' "$block" | grep -q -- "$reserved" \
+                || { echo "job '$job' does not clear $reserved" >&2; exit 1; }
+            done
+          done
+          test "$checked" -ge 4 \
+            || { echo "expected at least 4 jobs checking out the PR head, found $checked" >&2; exit 1; }
+          echo "all $checked PR checkouts clear the reserved handoff names"
+
       - name: Resolver rejects a broken registry
         run: |
           # Each of these misconfigurations would otherwise surface as a confusing

@@ -37,10 +37,10 @@ name: BiggiePockets Code Review (reusable)
 #   MAGI_MODEL_BALTHAZAR  balthazar     (default google/gemini-3.7-flash)
 #   MAGI_MODEL_MELCHIOR   melchior      (default z-ai/glm-5.3-flash)
 #   ARBITER_MODEL         arbitration   (default openai/gpt-5.6-sol)
-# Every seat carries its own model in its own job. There is no shared fallback on
-# purpose: a seat quietly running the same model as another seat is a panel that has lost
-# a voice while still reporting three verdicts, which is worse than a seat that fails and
-# says so.
+# Every seat carries its own model in its own job, and no seat can inherit another's: a
+# seat quietly running the same model as another seat is a panel that has lost a voice
+# while still reporting three verdicts. A roster entry with no job fails CI; a job whose
+# model expression resolves to nothing fails at its `Confirm seat model` step.
 # The three seats run different models on purpose: the auditor prompt is identical, so
 # what a disagreement between seats measures is the models, and three runs of one model
 # would mostly agree trivially and leave the arbitrator nothing to weigh.
@@ -102,6 +102,18 @@ jobs:
         with:
           ref: refs/pull/${{ inputs.pr }}/head
           fetch-depth: 0
+
+      # Same reason as the panel jobs below: this job's working directory is the PR's own
+      # checkout. Every file this stage publishes is written unconditionally, but the raw
+      # API responses are read back only when the fetch that produces them ran — so a PR
+      # that committed ticket-raw.json could otherwise inject attachments into the handoff.
+      - name: Clear reserved handoff filenames
+        run: |
+          rm -rf verdict.json audit-*.json audit-*.env \
+            pr.diff pr.json stack.json ticket.json epic.json \
+            conversations.json designs.json context-manifest.json review-context.env \
+            pr-raw.json ticket-raw.json epic-raw.json urls.json attachments.json \
+            stack-*.json
 
       # Pin every later job to the exact commit this context was gathered from. This
       # matters when a failed audit or arbitration job is retried after the PR has
@@ -207,7 +219,10 @@ jobs:
           # can leave a cycle behind, and a cycle here would hang the whole review.
           ancestors='[]'
           b="$base"
-          seen=""
+          # Seeded with this PR's own head branch. A base chain that comes back around to
+          # it would otherwise match this very PR by branch name and report the panel that
+          # it is stacked on itself.
+          seen=" $(jq -r '.head_ref' pr.json) "
           depth=0
           while [ "$b" != "$default" ] && [ "$depth" -lt 10 ]; do
             case " $seen " in *" $b "*) echo "::warning::Stack walk revisited branch $b; stopping."; break;; esac
@@ -215,9 +230,13 @@ jobs:
 
             # An open PR for the branch is the one being stacked on; fall back to the most
             # recent closed one, which is how a just-merged parent still explains the base.
+            # Cross-repository PRs are excluded: --head matches on branch name alone, so a
+            # fork whose branch happens to be named like our base is not our ancestor.
             num=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$b" --state all --limit 10 \
-              --json number,state \
-              -q '[.[] | select(.state == "OPEN")] + [.[]] | .[0].number // empty')
+              --json number,state,isCrossRepository \
+              -q '[.[] | select(.isCrossRepository == false)]
+                  | ([.[] | select(.state == "OPEN")] + .)
+                  | .[0].number // empty')
             if [ -z "$num" ]; then
               echo "No pull request has $b as its head; stopping the walk there."
               break
@@ -402,9 +421,14 @@ jobs:
             urls_from conversations.json discussion
           } | jq -s '.' > urls.json
 
-          if [ -f ticket-raw.json ]; then
+          # Read the raw ticket only when the fetch actually succeeded, and treat an
+          # unparseable body as no attachments. `curl -o` writes the response body whatever
+          # the status, so a 401 or a proxy's HTML error page lands in ticket-raw.json —
+          # and a jq failure here would fail the context job and take down a review that
+          # is supposed to degrade to a diff-based one.
+          if [ "$(jq -r '.available' ticket.json)" = "true" ] && [ -f ticket-raw.json ]; then
             jq '[.fields.attachment // [] | .[] | {filename, mime_type: .mimeType, size, url: .content, source: "ticket"}]' \
-              ticket-raw.json > attachments.json
+              ticket-raw.json > attachments.json 2>/dev/null || echo '[]' > attachments.json
           else
             echo '[]' > attachments.json
           fi
@@ -549,6 +573,22 @@ jobs:
           ref: ${{ needs.context.outputs.head_sha }}
           fetch-depth: 0
 
+      # A reviewed PR is untrusted input, and this job's working directory IS the PR's
+      # checkout — the same directory the handoff downloads into, the same one the model
+      # writes its verdict to, and the same one the globs downstream read. A PR that
+      # committed verdict.json, or any audit-*.json, would otherwise hand this stage a
+      # verdict it wrote itself: nothing further down can tell a committed file from a
+      # model's output. Clear those names before anything reads them.
+      #
+      # A PR that legitimately contains one of these paths loses it from the working tree
+      # for the length of the review. It is still in pr.diff, which is what gets reviewed.
+      - name: Clear reserved handoff filenames
+        run: |
+          rm -rf verdict.json audit-*.json audit-*.env \
+            review-context.env context-manifest.json \
+            pr.diff pr.json stack.json ticket.json epic.json \
+            conversations.json designs.json
+
       - name: Checkout prompt registry
         uses: actions/checkout@v4
         with:
@@ -667,6 +707,22 @@ jobs:
           ref: ${{ needs.context.outputs.head_sha }}
           fetch-depth: 0
 
+      # A reviewed PR is untrusted input, and this job's working directory IS the PR's
+      # checkout — the same directory the handoff downloads into, the same one the model
+      # writes its verdict to, and the same one the globs downstream read. A PR that
+      # committed verdict.json, or any audit-*.json, would otherwise hand this stage a
+      # verdict it wrote itself: nothing further down can tell a committed file from a
+      # model's output. Clear those names before anything reads them.
+      #
+      # A PR that legitimately contains one of these paths loses it from the working tree
+      # for the length of the review. It is still in pr.diff, which is what gets reviewed.
+      - name: Clear reserved handoff filenames
+        run: |
+          rm -rf verdict.json audit-*.json audit-*.env \
+            review-context.env context-manifest.json \
+            pr.diff pr.json stack.json ticket.json epic.json \
+            conversations.json designs.json
+
       - name: Checkout prompt registry
         uses: actions/checkout@v4
         with:
@@ -784,6 +840,22 @@ jobs:
         with:
           ref: ${{ needs.context.outputs.head_sha }}
           fetch-depth: 0
+
+      # A reviewed PR is untrusted input, and this job's working directory IS the PR's
+      # checkout — the same directory the handoff downloads into, the same one the model
+      # writes its verdict to, and the same one the globs downstream read. A PR that
+      # committed verdict.json, or any audit-*.json, would otherwise hand this stage a
+      # verdict it wrote itself: nothing further down can tell a committed file from a
+      # model's output. Clear those names before anything reads them.
+      #
+      # A PR that legitimately contains one of these paths loses it from the working tree
+      # for the length of the review. It is still in pr.diff, which is what gets reviewed.
+      - name: Clear reserved handoff filenames
+        run: |
+          rm -rf verdict.json audit-*.json audit-*.env \
+            review-context.env context-manifest.json \
+            pr.diff pr.json stack.json ticket.json epic.json \
+            conversations.json designs.json
 
       - name: Checkout prompt registry
         uses: actions/checkout@v4
@@ -909,6 +981,22 @@ jobs:
         with:
           ref: ${{ needs.context.outputs.head_sha }}
           fetch-depth: 0
+
+      # A reviewed PR is untrusted input, and this job's working directory IS the PR's
+      # checkout — the same directory the handoff downloads into, the same one the model
+      # writes its verdict to, and the same one the globs downstream read. A PR that
+      # committed verdict.json, or any audit-*.json, would otherwise hand this stage a
+      # verdict it wrote itself: nothing further down can tell a committed file from a
+      # model's output. Clear those names before anything reads them.
+      #
+      # A PR that legitimately contains one of these paths loses it from the working tree
+      # for the length of the review. It is still in pr.diff, which is what gets reviewed.
+      - name: Clear reserved handoff filenames
+        run: |
+          rm -rf verdict.json audit-*.json audit-*.env \
+            review-context.env context-manifest.json \
+            pr.diff pr.json stack.json ticket.json epic.json \
+            conversations.json designs.json
 
       - name: Checkout prompt registry
         uses: actions/checkout@v4
@@ -1037,6 +1125,19 @@ jobs:
         run: |
           if [ ! -f verdict.json ]; then
             echo "::error::Arbitration did not produce verdict.json" >&2
+            exit 1
+          fi
+
+          # Validate before posting, the same way each seat validates its own verdict. This
+          # is the only text that reaches the pull request, and `jq -r` on a missing key
+          # yields the string "null" — which would post a review whose entire body is the
+          # word null rather than failing and saying why.
+          if ! jq -e '(.verdict == "approve" or .verdict == "request_changes")
+                      and (.summary | type == "string") and (.summary | length > 0)' \
+               verdict.json >/dev/null 2>&1; then
+            echo "::error::Arbitration wrote a verdict.json that is not a usable verdict:" >&2
+            jq -c '{verdict, summary_type: (.summary | type), summary_length: (.summary | tostring | length)}' verdict.json >&2 2>/dev/null \
+              || echo "(unparseable JSON)" >&2
             exit 1
           fi
 
@@ -1179,7 +1280,10 @@ jobs:
 
           arbiter_model_tag="${ARBITER_MODEL:-unspecified}"
 
-          run_id="$GITHUB_REPOSITORY-pr$PR-${{ github.run_id }}"
+          # Includes the attempt: "Re-run failed jobs" is a documented path, and two
+          # reviews of the same PR sharing a join key would collide in every eval that
+          # groups by it.
+          run_id="$GITHUB_REPOSITORY-pr$PR-${{ github.run_id }}-${{ github.run_attempt }}"
 
           trace_id=$(openssl rand -hex 16)
           root_span_id=$(openssl rand -hex 8)
