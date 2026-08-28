@@ -1,38 +1,38 @@
 #!/usr/bin/env bash
 # resolve-prompts.sh — resolve the BiggiePockets review prompts from the registry.
 #
-# prompts/registry.json declares the codex prompt, one or more arms (each a stored
-# prompt template), the control arm, and what percentage of pull requests an
-# experiment arm gets. This script picks ONE arm per review — hash('<repo>:<pr>')
-# mod 100, below experiment_split_percent means the experiment arm — and emits only
-# that arm's prompt. The assigned arm both posts its summary and decides the review,
-# so arms are compared BETWEEN pull requests and each review costs one Claude pass.
+# prompts/registry.json declares the codex prompt, the auditor prompt, the arbitrator
+# prompt, and the panel seats. A review runs the auditor prompt once per seat (caspar,
+# balthazar, melchior) in independent jobs, then the arbitrator prompt once over the
+# three verdicts those jobs produced. This script emits every prompt each review needs;
+# the workflow decides which model runs in which seat.
+#
+# The auditor prompt is emitted ONCE and every seat runs that same text. Nothing in it
+# is parameterized by seat, so the three audits differ only by model and by the
+# independent judgment of the run — never by wording.
 #
 # Shared rule blocks (privacy, migration-data, perf) are stored once in
 # prompts/_shared/ and injected into every prompt that references them via {{@path}}
-# markers, so the Codex and Claude prompts can never drift out of sync.
+# markers, so the Codex and auditor prompts can never drift out of sync.
 #
 # The resolved text substitutes late-binding placeholders used for provenance only:
-#   {{PR}}, {{PROMPT_NAME}}, {{PROMPT_VERSION}}
+#   {{PR}}, {{PROMPT_NAME}}, {{PROMPT_VERSION}}, {{AUDITORS}}
 #
 # Alongside each resolved text, the unsubstituted template (shared blocks expanded,
-# those three placeholders left intact) is emitted as <prefix>_prompt_template. It is
-# what Datadog LLM Obs Prompt Tracking records as the prompt template, with the
-# substituted values reported as its variables, so runs of one prompt group together
-# instead of splitting into a new template per PR.
+# those placeholders left intact) is emitted as <prefix>_prompt_template. It is what
+# Datadog LLM Obs Prompt Tracking records as the prompt template, with the substituted
+# values reported as its variables, so runs of one prompt group together instead of
+# splitting into a new template per PR.
 #
 # prompt_version is DERIVED from content, never hand-set: a hash of the template file
 # plus every shared block it includes. It changes if and only if that prompt's text
-# changes (a Roll), stays stable across PRs, and never encodes an arm — the arm is
-# reported separately so Datadog LLM Obs can hold both (prompt_name/version = source
-# of truth for the text; the arm = the test condition).
+# changes (a Roll) and stays stable across PRs, so Datadog can attribute a change in
+# review quality to the exact prompt text that produced it.
 #
-# Inputs (env): REGISTRY_DIR, PR, GITHUB_REPOSITORY (falls back to "unknown", which
-# only changes which arm a PR lands in, never whether assignment is deterministic).
-# Outputs: codex_prompt{,_name,_version,_template}; arm_prompt{,_name,_version,_template}
-# for the ASSIGNED arm; assigned_arm (its key); control_arm; experiment_split_percent;
-# assignment_bucket (0-99, so an assignment can be recomputed and audited from the tag
-# alone).
+# Inputs (env): REGISTRY_DIR, PR.
+# Outputs: codex_prompt{,_name,_version,_template}; auditor_prompt{,_name,_version,_template};
+# arbiter_prompt{,_name,_version,_template}; auditors (JSON array of seat names, which the
+# workflow feeds straight into its fan-out matrix); auditor_count.
 
 set -euo pipefail
 
@@ -47,40 +47,48 @@ fi
 
 MAP_VERSION=$(jq -r '.version // empty' "$REGISTRY_FILE")
 CODEX_NAME=$(jq -r '.codex_prompt // empty' "$REGISTRY_FILE")
-CONTROL_ARM=$(jq -r '.control_arm // empty' "$REGISTRY_FILE")
-SPLIT_PERCENT=$(jq -r '.experiment_split_percent // 0' "$REGISTRY_FILE")
-ARMS=()
-while IFS= read -r arm; do ARMS+=("$arm"); done < <(jq -r '.arms | keys[]' "$REGISTRY_FILE")
-
-for name in "$CODEX_NAME" "$CONTROL_ARM"; do
-  if [ -z "$name" ]; then
-    echo "::error::registry.json is missing codex_prompt or control_arm" >&2
-    exit 1
-  fi
-done
-if ! printf '%s' "$SPLIT_PERCENT" | grep -qE '^[0-9]+$' || [ "$SPLIT_PERCENT" -gt 100 ]; then
-  echo "::error::experiment_split_percent must be an integer 0-100, got '$SPLIT_PERCENT'" >&2
-  exit 1
-fi
+AUDITOR_NAME=$(jq -r '.auditor_prompt // empty' "$REGISTRY_FILE")
+ARBITER_NAME=$(jq -r '.arbiter_prompt // empty' "$REGISTRY_FILE")
 
 # Validate the config so a bad edit is caught at review time instead of silently
-# running a stale/duplicate prompt.
+# running a stale prompt or an undersized panel.
 : "${MAP_VERSION:?registry.json missing version}"
-for arm in "${ARMS[@]}"; do
-  prompt=$(jq -r --arg a "$arm" '.arms[$a] // empty' "$REGISTRY_FILE")
-  if [ -z "$prompt" ]; then
-    echo "::error::Arm '$arm' has no prompt mapping in prompts/registry.json" >&2
+for field in codex_prompt auditor_prompt arbiter_prompt; do
+  name=$(jq -r --arg f "$field" '.[$f] // empty' "$REGISTRY_FILE")
+  if [ -z "$name" ]; then
+    echo "::error::registry.json is missing $field" >&2
     exit 1
   fi
-  if [ ! -f "$REGISTRY_DIR/prompts/$prompt.md" ]; then
-    echo "::error::Arm '$arm' maps to '$prompt' but prompts/$prompt.md does not exist" >&2
+  if [ ! -f "$REGISTRY_DIR/prompts/$name.md" ]; then
+    echo "::error::$field is '$name' but prompts/$name.md does not exist" >&2
     exit 1
   fi
 done
-if ! printf '%s\n' "${ARMS[@]}" | grep -qx -- "$CONTROL_ARM"; then
-  echo "::error::control_arm '$CONTROL_ARM' is not a declared arm" >&2
+
+if ! jq -e '.auditors | type == "array"' "$REGISTRY_FILE" >/dev/null; then
+  echo "::error::registry.json .auditors must be an array of seat names" >&2
   exit 1
 fi
+AUDITORS=()
+while IFS= read -r seat; do AUDITORS+=("$seat"); done < <(jq -r '.auditors[]' "$REGISTRY_FILE")
+if [ "${#AUDITORS[@]}" -lt 2 ]; then
+  echo "::error::registry.json declares ${#AUDITORS[@]} auditor(s); a panel needs at least 2" >&2
+  exit 1
+fi
+# Seat names become artifact names and shell identifiers downstream, and a duplicate
+# would have two jobs overwrite one seat's verdict — shrinking the panel invisibly.
+for seat in "${AUDITORS[@]}"; do
+  if ! printf '%s' "$seat" | grep -qE '^[a-z][a-z0-9-]*$'; then
+    echo "::error::auditor seat '$seat' must be lowercase alphanumeric/dashes" >&2
+    exit 1
+  fi
+done
+if [ "$(printf '%s\n' "${AUDITORS[@]}" | sort -u | wc -l)" -ne "${#AUDITORS[@]}" ]; then
+  echo "::error::registry.json .auditors contains duplicate seat names" >&2
+  exit 1
+fi
+
+AUDITOR_LIST=$(printf '%s, ' "${AUDITORS[@]}"); AUDITOR_LIST="${AUDITOR_LIST%, }"
 
 # Expand {{@path}} includes (path relative to REGISTRY_DIR), recording each included
 # file on _INCLUDED (de-duplicated). A marker may appear inline within a line: text
@@ -90,7 +98,7 @@ fi
 # recursive resolver.
 _INCLUDED=()
 expand_template() {
-  local file="$1" out="" line rest pre rel post
+  local file="$1" out="" line rest pre rel
   while IFS= read -r line || [ -n "$line" ]; do
     rest="$line"
     while [[ "$rest" == *'{{@'* ]]; do
@@ -102,9 +110,11 @@ expand_template() {
         exit 1
       fi
       seen=0
-      for f in "${_INCLUDED[@]:-}"; do
-        if [ "$f" = "$incfile" ]; then seen=1; break; fi
-      done
+      if [ "${#_INCLUDED[@]}" -gt 0 ]; then
+        for f in "${_INCLUDED[@]}"; do
+          if [ "$f" = "$incfile" ]; then seen=1; break; fi
+        done
+      fi
       if [ "$seen" -eq 0 ]; then _INCLUDED+=("$incfile"); fi
       out+="$pre"
       out+="$(cat "$incfile")"
@@ -122,7 +132,12 @@ prompt_version() { # name -> content-derived version (template + shared includes
   expand_template "$REGISTRY_DIR/prompts/$name.md" > /dev/null
   {
     cat "$REGISTRY_DIR/prompts/$name.md"
-    for f in "${_INCLUDED[@]:-}"; do cat "$f"; done
+    # Test the length, not "${_INCLUDED[@]:-}": that form expands an empty array to one
+    # empty string, and a prompt with no {{@}} includes (the arbitrator has none) would
+    # `cat ""` and abort the resolve under `set -e`.
+    if [ "${#_INCLUDED[@]}" -gt 0 ]; then
+      for f in "${_INCLUDED[@]}"; do cat "$f"; done
+    fi
   } | sha256sum | cut -c1-12
 }
 
@@ -139,6 +154,7 @@ prompt_text() { # name version -> resolved text
   text="${text//\{\{PR\}\}/$PR}"
   text="${text//\{\{PROMPT_NAME\}\}/$name}"
   text="${text//\{\{PROMPT_VERSION\}\}/$version}"
+  text="${text//\{\{AUDITORS\}\}/$AUDITOR_LIST}"
   printf '%s' "$text"
 }
 
@@ -158,30 +174,11 @@ write_output() { # name value — multiline-safe via GITHUB_OUTPUT heredoc; fixe
 }
 
 emit_prompt "codex" "$CODEX_NAME"
+emit_prompt "auditor" "$AUDITOR_NAME"
+emit_prompt "arbiter" "$ARBITER_NAME"
 
-# Experiment arm = the first arm that is not the control arm; there may be none (a
-# single-arm registry, e.g. after the experiment is merged away).
-EXPERIMENT_ARM=""
-for arm in "${ARMS[@]}"; do
-  if [ "$arm" != "$CONTROL_ARM" ]; then EXPERIMENT_ARM="$arm"; break; fi
-done
+# Emitted as compact JSON so the workflow can hand it directly to a matrix `include`.
+write_output "auditors" "$(jq -c '.auditors' "$REGISTRY_FILE")"
+write_output "auditor_count" "${#AUDITORS[@]}"
 
-# Assign this PR to one arm. sha256 over "<repo>:<pr>" rather than the PR number alone,
-# so two repos don't hand the same arm to their matching PR numbers, and the low 32 bits
-# mod 100 give the bucket. Deterministic by construction: a re-review of the same PR
-# resolves the same arm, and the bucket is emitted so any assignment can be re-derived
-# from telemetry without rerunning this script.
-ASSIGN_KEY="${GITHUB_REPOSITORY:-unknown}:$PR"
-BUCKET=$(( 16#$(printf '%s' "$ASSIGN_KEY" | sha256sum | cut -c1-8) % 100 ))
-ASSIGNED_ARM="$CONTROL_ARM"
-if [ -n "$EXPERIMENT_ARM" ] && [ "$BUCKET" -lt "$SPLIT_PERCENT" ]; then
-  ASSIGNED_ARM="$EXPERIMENT_ARM"
-fi
-
-write_output "control_arm" "$CONTROL_ARM"
-write_output "experiment_split_percent" "$SPLIT_PERCENT"
-write_output "assignment_bucket" "$BUCKET"
-write_output "assigned_arm" "$ASSIGNED_ARM"
-emit_prompt "arm" "$(jq -r --arg a "$ASSIGNED_ARM" '.arms[$a]' "$REGISTRY_FILE")"
-
-echo "Resolved $MAP_VERSION prompts: codex=$CODEX_NAME assigned=$ASSIGNED_ARM (bucket $BUCKET, split ${SPLIT_PERCENT}% to ${EXPERIMENT_ARM:-none})"
+echo "Resolved v$MAP_VERSION prompts: codex=$CODEX_NAME auditor=$AUDITOR_NAME arbiter=$ARBITER_NAME panel=[$AUDITOR_LIST]"

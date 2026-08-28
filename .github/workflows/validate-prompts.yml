@@ -3,8 +3,8 @@ name: Validate prompt registry
 # Guard rails for the BiggiePockets review prompt registry (prompts/). Prompt
 # versions are derived from content, so this prevents the failure modes that a
 # hand-bumped version can't: a broken template, a dangling {{@include}}, a
-# registry.json that references a prompt that doesn't exist, or a resolver that
-# is not deterministic for a fixed PR number.
+# registry.json that references a prompt that doesn't exist, a panel that can't be
+# fanned out, or a resolver that is not deterministic for a fixed PR number.
 
 on:
   pull_request:
@@ -17,37 +17,45 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    env:
+      REGISTRY_DIR: ${{ github.workspace }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Validate registry config
         run: |
-          jq -e '.version == 2' prompts/registry.json >/dev/null
+          jq -e '.version == 3' prompts/registry.json >/dev/null
           jq -e '.codex_prompt == "codex-first-pass"' prompts/registry.json >/dev/null
-          jq -e '.control_arm == "control"' prompts/registry.json >/dev/null
-          # An out-of-range split would route reviews to an arm that doesn't exist, or
-          # silently pin every review to one side of a test that looks live.
-          jq -e '.experiment_split_percent | type == "number" and . >= 0 and . <= 100' \
-            prompts/registry.json >/dev/null
-          for arm in $(jq -r '.arms | keys[]' prompts/registry.json); do
-            prompt=$(jq -r --arg a "$arm" '.arms[$a]' prompts/registry.json)
-            test -f "prompts/$prompt.md" || { echo "prompts/$prompt.md missing for arm $arm"; exit 1; }
+          for field in codex_prompt auditor_prompt arbiter_prompt; do
+            name=$(jq -r --arg f "$field" '.[$f] // empty' prompts/registry.json)
+            test -n "$name" || { echo "registry.json missing $field"; exit 1; }
+            test -f "prompts/$name.md" || { echo "prompts/$name.md missing for $field"; exit 1; }
           done
-          echo "registry.json OK"
+          # A one-seat "panel" is a single reviewer wearing a panel's costume: the
+          # arbitrator would have nothing to weigh and the extra stage would be pure cost.
+          count=$(jq -r '.auditors | length' prompts/registry.json)
+          test "$count" -ge 2 || { echo "registry.json declares $count auditor(s); need >= 2"; exit 1; }
+          distinct=$(jq -r '.auditors | unique | length' prompts/registry.json)
+          test "$count" = "$distinct" || { echo "duplicate auditor seat names"; exit 1; }
+          # Seat names become artifact names, file names, and env-var suffixes downstream.
+          for seat in $(jq -r '.auditors[]' prompts/registry.json); do
+            printf '%s' "$seat" | grep -qE '^[a-z][a-z0-9-]*$' \
+              || { echo "auditor seat '$seat' is not lowercase alphanumeric/dashes"; exit 1; }
+          done
+          echo "registry.json OK ($count auditors)"
 
       - name: Resolver resolves all prompts for e2e PR
         env:
-          REGISTRY_DIR: ${{ github.workspace }}
           PR: '12345'
         run: |
           : > /tmp/o1.txt
           GITHUB_OUTPUT=/tmp/o1.txt scripts/resolve-prompts.sh >/dev/null
+          test -s /tmp/o1.txt || { echo "resolver wrote no output" >&2; exit 1; }
           echo "resolve OK"
 
       - name: Resolver is deterministic for a fixed PR
         env:
-          REGISTRY_DIR: ${{ github.workspace }}
           PR: '12345'
         run: |
           : > /tmp/o2.txt
@@ -61,7 +69,6 @@ jobs:
 
       - name: No unresolved template markers
         env:
-          REGISTRY_DIR: ${{ github.workspace }}
           PR: '12345'
         run: |
           : > /tmp/o4.txt
@@ -72,10 +79,11 @@ jobs:
           # the runner overrides that one with its own per-step file.
           test -s /tmp/o4.txt || { echo "resolver wrote no output" >&2; exit 1; }
           # Only the *resolved* prompts must be marker-free. The *_prompt_template
-          # outputs keep their {{PR}}/{{PROMPT_NAME}}/{{PROMPT_VERSION}} placeholders on
-          # purpose — that is the template Datadog Prompt Tracking records.
-          for out in codex_prompt arm_prompt; do
+          # outputs keep their {{PR}}/{{PROMPT_NAME}}/{{PROMPT_VERSION}}/{{AUDITORS}}
+          # placeholders on purpose — that is the template Datadog Prompt Tracking records.
+          for out in codex_prompt auditor_prompt arbiter_prompt; do
             resolved=$(sed -n "/^$out<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p" /tmp/o4.txt | sed '1d;$d')
+            test -n "$resolved" || { echo "$out resolved to empty text" >&2; exit 1; }
             if printf '%s' "$resolved" | grep -qE '\{\{'; then
               echo "Unresolved template markers remain in $out:" >&2
               printf '%s' "$resolved" | grep -nE '\{\{' >&2
@@ -86,7 +94,6 @@ jobs:
 
       - name: Prompt templates are include-expanded and non-empty
         env:
-          REGISTRY_DIR: ${{ github.workspace }}
           PR: '12345'
         run: |
           : > /tmp/o5.txt
@@ -96,7 +103,7 @@ jobs:
           # template. They keep {{PR}}-style placeholders, but a shared-rule include
           # must already be expanded — an unexpanded {{@...}} would ship a template
           # that no longer matches the text the model actually saw.
-          for out in codex_prompt_template arm_prompt_template; do
+          for out in codex_prompt_template auditor_prompt_template arbiter_prompt_template; do
             tmpl=$(sed -n "/^$out<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p" /tmp/o5.txt | sed '1d;$d')
             test -n "$tmpl" || { echo "$out is empty" >&2; exit 1; }
             if printf '%s' "$tmpl" | grep -qE '\{\{@'; then
@@ -107,76 +114,92 @@ jobs:
           done
           echo "templates include-expanded"
 
-      - name: Arms are distinct prompts
-        run: |
-          # Two arms pointing at the same prompt file would report an A/B result for a
-          # test that has no variable in it.
-          total=$(jq -r '.arms | keys | length' prompts/registry.json)
-          distinct=$(jq -r '.arms | [.[]] | unique | length' prompts/registry.json)
-          test "$total" = "$distinct" || { echo "two arms resolve to the same prompt"; exit 1; }
-          echo "arms distinct ($total)"
-
-      # Only the ASSIGNED arm's prompt is resolved per run, so a broken variant prompt
-      # would stay invisible until a PR happened to hash into it. Sweep PR numbers until
-      # every declared arm has been assigned at least once, and resolve each one.
-      - name: Every arm resolves for some PR
+      # The whole point of the panel is three INDEPENDENT judgments of the same question.
+      # If the resolver ever parameterized the auditor prompt by seat, the seats would be
+      # answering subtly different questions and a disagreement would no longer mean the
+      # auditors disagreed. Assert the emitted auditor prompt is one fixed text.
+      - name: Auditor prompt is identical for every seat
         env:
-          REGISTRY_DIR: ${{ github.workspace }}
-          GITHUB_REPOSITORY: BiggerPockets/validate
-        run: |
-          declared=$(jq -r '.arms | keys | sort | join(" ")' prompts/registry.json)
-          want=$(jq -r '.arms | keys | length' prompts/registry.json)
-          split=$(jq -r '.experiment_split_percent' prompts/registry.json)
-          seen=""; count=0
-          # Stop as soon as every arm has been covered — each resolve costs ~0.15s, and a
-          # sane split hits both arms within the first handful of PR numbers.
-          for pr in $(seq 1 500); do
-            [ "$count" -eq "$want" ] && break
-            out=/tmp/arm-$pr.txt
-            # The resolver APPENDS to GITHUB_OUTPUT, so start from an empty file or a
-            # second resolve doubles every key and the extracted value spans both.
-            : > "$out"
-            PR=$pr GITHUB_OUTPUT=$out scripts/resolve-prompts.sh >/dev/null
-            arm=$(sed -n '/^assigned_arm<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' "$out" | sed '1d;$d')
-            case " $seen " in *" $arm "*) continue;; esac
-            seen="$seen $arm"; count=$((count + 1))
-            resolved=$(sed -n '/^arm_prompt<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' "$out" | sed '1d;$d')
-            test -n "$resolved" || { echo "arm $arm resolved to an empty prompt (pr $pr)" >&2; exit 1; }
-            printf '%s' "$resolved" | grep -qE '\{\{' && { echo "markers left in arm $arm" >&2; exit 1; }
-            echo "arm $arm resolves (first seen at pr $pr)"
-          done
-          got=$(printf '%s\n' $seen | sort | tr '\n' ' ' | sed 's/ $//')
-          # A 0 or 100 split deliberately routes every review to one arm, so only demand
-          # full coverage when the split actually sends traffic both ways.
-          if [ "$split" -gt 0 ] && [ "$split" -lt 100 ]; then
-            test "$got" = "$declared" || {
-              echo "arms assigned over 500 PRs: '$got'; declared: '$declared'" >&2
-              exit 1
-            }
-          fi
-          echo "arm coverage OK ($got)"
-
-      - name: Assignment is stable for a fixed PR
-        env:
-          REGISTRY_DIR: ${{ github.workspace }}
-          GITHUB_REPOSITORY: BiggerPockets/validate
           PR: '12345'
         run: |
-          # A PR that changed arms between reviews would post two different review styles
-          # on the same PR and split its telemetry across both arms.
-          for i in 1 2 3; do
-            : > /tmp/assign-$i.txt
-            GITHUB_OUTPUT=/tmp/assign-$i.txt scripts/resolve-prompts.sh >/dev/null
-            sed -n '/^assigned_arm<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/assign-$i.txt \
-              | sed '1d;$d' > /tmp/arm-only-$i.txt
+          : > /tmp/o6.txt
+          GITHUB_OUTPUT=/tmp/o6.txt scripts/resolve-prompts.sh >/dev/null
+          # Exactly one auditor_prompt block is emitted, and it names no individual seat.
+          blocks=$(grep -c '^auditor_prompt<<' /tmp/o6.txt)
+          test "$blocks" = "1" || { echo "expected 1 auditor_prompt block, got $blocks" >&2; exit 1; }
+          prompt=$(sed -n '/^auditor_prompt<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/o6.txt | sed '1d;$d')
+          for seat in $(jq -r '.auditors[]' prompts/registry.json); do
+            if printf '%s' "$prompt" | grep -qi "$seat"; then
+              echo "auditor prompt names seat '$seat'; it must be seat-agnostic" >&2
+              exit 1
+            fi
           done
-          diff /tmp/arm-only-1.txt /tmp/arm-only-2.txt
-          diff /tmp/arm-only-2.txt /tmp/arm-only-3.txt
-          echo "assignment stable ($(cat /tmp/arm-only-1.txt))"
+          echo "auditor prompt is seat-agnostic"
+
+      # The arbitrator has to know which seats to expect, or a seat that failed to
+      # produce a verdict reads as an absence rather than a gap.
+      - name: Arbitrator prompt names the panel
+        env:
+          PR: '12345'
+        run: |
+          : > /tmp/o7.txt
+          GITHUB_OUTPUT=/tmp/o7.txt scripts/resolve-prompts.sh >/dev/null
+          tmpl=$(sed -n '/^arbiter_prompt_template<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/o7.txt | sed '1d;$d')
+          printf '%s' "$tmpl" | grep -q '{{AUDITORS}}' \
+            || { echo "arbiter prompt template must reference {{AUDITORS}}" >&2; exit 1; }
+          resolved=$(sed -n '/^arbiter_prompt<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/o7.txt | sed '1d;$d')
+          for seat in $(jq -r '.auditors[]' prompts/registry.json); do
+            printf '%s' "$resolved" | grep -q "$seat" \
+              || { echo "resolved arbiter prompt does not name seat '$seat'" >&2; exit 1; }
+          done
+          echo "arbiter prompt names every seat"
+
+      # The audit job fans out over this value via fromJSON, so it must be a JSON array
+      # of strings — a malformed one fails the matrix at run time, after stage 1 has
+      # already been paid for.
+      - name: Auditors output is a matrix-ready JSON array
+        env:
+          PR: '12345'
+        run: |
+          : > /tmp/o8.txt
+          GITHUB_OUTPUT=/tmp/o8.txt scripts/resolve-prompts.sh >/dev/null
+          auditors=$(sed -n '/^auditors<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/o8.txt | sed '1d;$d')
+          printf '%s' "$auditors" | jq -e 'type == "array" and length >= 2 and all(.[]; type == "string")' >/dev/null \
+            || { echo "auditors output is not a JSON array of >=2 strings: $auditors" >&2; exit 1; }
+          count=$(sed -n '/^auditor_count<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/o8.txt | sed '1d;$d')
+          test "$count" = "$(printf '%s' "$auditors" | jq 'length')" \
+            || { echo "auditor_count ($count) disagrees with auditors array" >&2; exit 1; }
+          # Single line, so it survives being interpolated into the matrix expression.
+          test "$(printf '%s' "$auditors" | wc -l | tr -d ' ')" = "0" \
+            || { echo "auditors output must be compact single-line JSON" >&2; exit 1; }
+          echo "auditors matrix-ready ($auditors)"
+
+      - name: Resolver rejects a broken registry
+        run: |
+          # Each of these misconfigurations would otherwise surface as a confusing
+          # mid-review failure (or, for a one-seat panel, as a silently degraded review).
+          cp prompts/registry.json /tmp/registry.bak
+          restore() { cp /tmp/registry.bak prompts/registry.json; }
+          expect_fail() {
+            local label="$1"
+            if PR=1 GITHUB_OUTPUT=/tmp/reject.txt scripts/resolve-prompts.sh >/dev/null 2>&1; then
+              restore; echo "resolver accepted $label" >&2; exit 1
+            fi
+            restore; echo "rejected: $label"
+          }
+          jq '.auditor_prompt = "does-not-exist"' /tmp/registry.bak > prompts/registry.json
+          expect_fail "auditor_prompt pointing at a missing file"
+          jq '.arbiter_prompt = null' /tmp/registry.bak > prompts/registry.json
+          expect_fail "a null arbiter_prompt"
+          jq '.auditors = ["caspar"]' /tmp/registry.bak > prompts/registry.json
+          expect_fail "a one-seat panel"
+          jq '.auditors = ["caspar", "caspar", "melchior"]' /tmp/registry.bak > prompts/registry.json
+          expect_fail "duplicate seat names"
+          jq '.auditors = ["Caspar", "melchior"]' /tmp/registry.bak > prompts/registry.json
+          expect_fail "a seat name that is not shell/artifact safe"
 
       - name: Roll bumps prompt versions (content-derived provenance)
         env:
-          REGISTRY_DIR: ${{ github.workspace }}
           PR: '1'
         run: |
           : > /tmp/before.txt
@@ -187,8 +210,8 @@ jobs:
           for f in prompts/_shared/*.md; do git checkout -- "$f"; done
           test -s /tmp/before.txt && test -s /tmp/after.txt \
             || { echo "resolver wrote no output" >&2; exit 1; }
-          before=$(sed -n '/^arm_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/before.txt | sed '1d;$d')
-          after=$(sed -n '/^arm_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/after.txt | sed '1d;$d')
+          before=$(sed -n '/^auditor_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/before.txt | sed '1d;$d')
+          after=$(sed -n '/^auditor_prompt_version<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/after.txt | sed '1d;$d')
           if [ "$before" = "$after" ]; then
             echo "editing a shared rule did not bump prompt_version" >&2
             exit 1
