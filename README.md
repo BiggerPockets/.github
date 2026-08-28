@@ -25,6 +25,26 @@ is exactly the failure a panel exists to avoid — so CI asserts no prompt reads
 pre-existing findings file and the registry declares no prompt but the auditor's and the
 arbitrator's.
 
+```mermaid
+flowchart LR
+  ctx["1 · context<br/>diff · ticket + AC · discussion<br/>(no model)"]
+  subgraph panel["2 · panel — one prompt, three separate jobs"]
+    direction TB
+    caspar["caspar<br/>openai/gpt-5.6-luna"]
+    balthazar["balthazar<br/>google/gemini-3.7-flash"]
+    melchior["melchior<br/>z-ai/glm-5.3-flash"]
+  end
+  arb["3 · arbitrate<br/>openai/gpt-5.6-sol"]
+  posted(["the one verdict the PR sees"])
+  ctx --> caspar
+  ctx --> balthazar
+  ctx --> melchior
+  caspar --> arb
+  balthazar --> arb
+  melchior --> arb
+  arb --> posted
+```
+
 The **BiggiePockets** service account then submits that `approve` / `request_changes` review
 on the PR. If the PR has no `BIG-XXXXX` key in its title (or the ticket can't be fetched),
 the review degrades gracefully to a diff-based review instead of failing.
@@ -78,10 +98,14 @@ repo. An unset or empty variable keeps the default. Stage 1 runs no model, so it
 | melchior | `MAGI_MODEL_MELCHIOR` | `z-ai/glm-5.3-flash` |
 | Arbitration | `ARBITER_MODEL` | `openai/gpt-5.6-sol` |
 
-`MAGI_MODEL_DEFAULT` (default `google/gemini-3.7-flash`) covers a seat added to
-`prompts/registry.json` that has no entry of its own, so a new seat runs instead of failing
-the matrix. Changing a seat's model never touches the prompt — the auditor prompt is
-seat-agnostic by construction, and CI asserts it.
+There is no fallback model. A seat listed in `prompts/registry.json` with no
+`MAGI_MODEL_<SEAT>` of its own fails its matrix leg with an explicit error, so adding a seat
+is deliberately a two-part change: registry entry plus model. A seat that quietly ran the
+same model as another seat would be a panel that had lost a voice while still reporting three
+verdicts — worse than a leg that fails and says why.
+
+Changing a seat's model never touches the prompt — the auditor prompt is seat-agnostic by
+construction, and CI asserts it.
 
 The review logic lives centrally in this repo. Each consuming repo only adds a thin
 **caller** workflow that owns the triggers and gating and delegates to this one.
@@ -237,15 +261,9 @@ prompts/
   volume, latency, tokens, and a version diff per prompt, and any span can be replayed in
   the Playground with its exact template and variables. A version starts when the prompt
   text changes (a Roll), since `version` is the same content hash reported as a tag.
-- **Datadog.** Each review is one trace, one span per stage and one per seat:
-
-  ```
-  biggiepockets.review
-    ├── magi.audit.caspar
-    ├── magi.audit.balthazar
-    ├── magi.audit.melchior
-    └── magi.arbitrate
-  ```
+- **Datadog.** Each review is one trace: a `biggiepockets.review` root with one
+  `magi.audit.<seat>` child per seat and one `magi.arbitrate` child — the shape of the
+  diagram above, minus stage 1, which runs no model and so has no LLM span.
 
   A seat's own verdict, confidence, model, and blocking-finding count live on that seat's
   span and on `auditor_verdict.<seat>` / `auditor_confidence.<seat>` /
@@ -275,8 +293,9 @@ prompts/
   stored prompt (no version change). Callers tracking `@main` pick the change up on their
   next run. A caller that pins `uses:` to a tag or SHA needs BOTH that `@ref` and its
   `registry_ref` input bumped in lockstep — Apply owns that ref-bump explicitly.
-- **Seat** — add or remove a name in `auditors`, and give a new seat a `MAGI_MODEL_<SEAT>`
-  default in the workflow (without one it falls back to `MAGI_MODEL_DEFAULT`).
+- **Seat** — add or remove a name in `auditors`. A new seat also needs a
+  `MAGI_MODEL_<SEAT>` default in the workflow (or that repository variable set); without
+  one its matrix leg fails rather than silently doubling up on another seat's model.
 
 A `validate-prompts.yml` workflow guards the registry: it fails a PR if a template has
 dangling includes, `registry.json` references a missing prompt, the auditor prompt names a

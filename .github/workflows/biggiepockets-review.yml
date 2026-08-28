@@ -32,8 +32,10 @@ name: BiggiePockets Code Review (reusable)
 #   MAGI_MODEL_CASPAR     caspar        (default openai/gpt-5.6-luna)
 #   MAGI_MODEL_BALTHAZAR  balthazar     (default google/gemini-3.7-flash)
 #   MAGI_MODEL_MELCHIOR   melchior      (default z-ai/glm-5.3-flash)
-#   MAGI_MODEL_DEFAULT    any seat with no default and no override of its own
 #   ARBITER_MODEL         arbitration   (default openai/gpt-5.6-sol)
+# Every seat needs its own entry. There is no fallback model on purpose: a seat quietly
+# running the same model as another seat is a panel that has lost a voice while still
+# reporting three verdicts, which is worse than a matrix leg that fails and says so.
 # The three seats run different models on purpose: the auditor prompt is identical, so
 # what a disagreement between seats measures is the models, and three runs of one model
 # would mostly agree trivially and leave the arbitrator nothing to weigh.
@@ -259,12 +261,11 @@ jobs:
       PR: ${{ inputs.pr }}
       AUDITOR: ${{ matrix.auditor }}
       # One OpenRouter slug per seat, each overrideable by the matching repository
-      # variable. MAGI_MODEL_DEFAULT only catches a seat added to registry.json that has
-      # no entry here, so a new seat runs rather than failing the matrix.
+      # variable. A seat with no entry here has no model and fails its matrix leg — see
+      # the note in the header on why there is no fallback.
       MAGI_MODEL_CASPAR: ${{ vars.MAGI_MODEL_CASPAR || 'openai/gpt-5.6-luna' }}
       MAGI_MODEL_BALTHAZAR: ${{ vars.MAGI_MODEL_BALTHAZAR || 'google/gemini-3.7-flash' }}
       MAGI_MODEL_MELCHIOR: ${{ vars.MAGI_MODEL_MELCHIOR || 'z-ai/glm-5.3-flash' }}
-      MAGI_MODEL_DEFAULT: ${{ vars.MAGI_MODEL_DEFAULT || 'google/gemini-3.7-flash' }}
     steps:
       - name: Checkout reviewed PR head
         uses: actions/checkout@v4
@@ -299,16 +300,17 @@ jobs:
         run: registry/scripts/resolve-prompts.sh
 
       # Look the seat's model up by name rather than hard-coding a model per matrix leg,
-      # so adding a seat to registry.json needs no change here and an override is a
-      # repository variable rather than a workflow edit.
+      # so an override is a repository variable rather than a workflow edit. A seat with
+      # no MAGI_MODEL_<SEAT> of its own fails here: adding a seat to registry.json is
+      # deliberately a two-part change, because the seat only earns its cost if it runs a
+      # model no other seat is running.
       - name: Select seat model
         id: seat
         run: |
           var="MAGI_MODEL_$(printf '%s' "$AUDITOR" | tr '[:lower:]-' '[:upper:]_')"
           model="${!var:-}"
-          if [ -z "$model" ]; then model="$MAGI_MODEL_DEFAULT"; fi
           if [ -z "$model" ]; then
-            echo "::error::No model resolved for auditor '$AUDITOR' (set $var or MAGI_MODEL_DEFAULT)" >&2
+            echo "::error::Auditor '$AUDITOR' has no model: set $var as a repository variable, or give it a default in this workflow's audit job." >&2
             exit 1
           fi
           echo "model=$model" >> "$GITHUB_OUTPUT"
