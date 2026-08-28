@@ -12,9 +12,12 @@ request.
    approval.
 2. Read the evidence the auditors worked from, all of it in the current working directory:
    context-manifest.json (what was gathered and what was unavailable), pr.diff, pr.json,
-   ticket.json (its acceptance_criteria are guidelines, not a hard contract), epic.json,
-   conversations.json and designs.json (references only — they are not fetched, so a design
-   you cannot open is never itself a finding).
+   stack.json, ticket.json (its acceptance_criteria are guidelines, not a hard contract),
+   epic.json, conversations.json and designs.json (references only — they are not fetched, so
+   a design you cannot open is never itself a finding). When stack.json says "stacked" is
+   true, pr.diff is this PR's own changes on top of unmerged ancestor PRs: discard a finding
+   that belongs to an ancestor's code, and discard "this is missing" when an ancestor's files
+   or commits already did it.
 3. Verify each distinct blocking finding against the code yourself. Use `git log` / `git
    show` on the branch and grep for callers and tests. Findings often overlap: treat two
    auditors describing the same defect at the same location as ONE finding raised twice, not

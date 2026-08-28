@@ -27,44 +27,57 @@ Everything you need was gathered for you and sits in the current working directo
    touches with their line counts. The body is usually where the author states the scope
    they took on and any follow-up they deliberately left out; weigh that statement against
    the ticket rather than ignoring it.
-5. Read conversations.json: the PR's existing discussion (issue_comments, review_comments
+5. Read stack.json. If "stacked" is true, this PR sits on top of one or more pull requests
+   that are themselves unmerged, listed nearest-first in "ancestors". This changes what you
+   are judging: pr.diff is ONLY this PR's own changes, measured against its base branch, so
+   the base already contains the ancestors' work.
+   - Never raise a finding about code an ancestor introduced. It is under review in its own
+     PR, and the same objection filed twice against two PRs is noise.
+   - Never report as missing something an ancestor already did. Check its "files" and
+     commit headlines before concluding a piece of the ticket was skipped.
+   - Do judge this PR's fit with the stack: work that duplicates or contradicts an ancestor,
+     an interface used here that the ancestor does not provide, or a change that only makes
+     sense if an ancestor is merged first and does not say so.
+   - Judge this PR against ITS ticket. Ancestors often carry a different ticket in the same
+     epic ("ticket_key"), and satisfying a sibling ticket is not this PR's job.
+6. Read conversations.json: the PR's existing discussion (issue_comments, review_comments
    with file/line, and prior reviews). Factor this context into your review: respect
    decisions already settled in the thread, don't re-raise concerns the author has already
    addressed or that were explicitly accepted, and weigh unresolved objections raised by
    human reviewers. Treat the conversation as more reliable than the ticket's literal
    acceptance criteria: if the thread shows the work was refined or explicitly accepted
    beyond the AC in a sound way, honor that.
-6. Read designs.json: design references (Figma and other design tools, screenshots,
+7. Read designs.json: design references (Figma and other design tools, screenshots,
    walkthrough videos, ticket attachments) harvested from those texts. They are recorded,
    NOT fetched — you cannot open them and must not try. What they tell you is that a design
    exists for this work, which matters when the diff changes UI: judge the change against
    what the ticket and discussion say about that design, and never treat a reference you
    cannot open as a defect.
-7. Review the diff in pr.diff. Do NOT rely on the hunks alone: use `git log` /
+8. Review the diff in pr.diff. Do NOT rely on the hunks alone: use `git log` /
    `git show` on the branch to inspect commit history and grep for callers and related tests
    to judge impact.
    When the diff adds or changes image assets, check that they are provided at retina
    quality (e.g. a 2x asset or an `srcset`/`@2x` variant); flag raster images that ship
    only at 1x where a high-DPI version is expected. {{@prompts/_shared/migration-data-rule.md}}
-8. Enforce task completeness and reject incomplete tasks, half-measures, placeholders, or
+9. Enforce task completeness and reject incomplete tasks, half-measures, placeholders, or
    deferred work per these rules as blocking issues:
    {{@prompts/_shared/completeness-rules.md}}
-9. Enforce these BiggerPockets member-privacy rules and treat a genuine violation as a
+10. Enforce these BiggerPockets member-privacy rules and treat a genuine violation as a
    blocking issue:
    {{@prompts/_shared/privacy-rules.md}}
-10. Check for batch/task performance hot spots per these rules — an N+1 or O(n^2)+
+11. Check for batch/task performance hot spots per these rules — an N+1 or O(n^2)+
    pattern on a full-table #process/#collection is a genuine finding, not a nitpick;
    flag it with a suggested fix:
    {{@prompts/_shared/perf-rules.md}}
-11. Check how the diff parses structured values, per these rules:
+12. Check how the diff parses structured values, per these rules:
    {{@prompts/_shared/parsing-rules.md}}
-12. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
+13. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
    tag, per these rules:
    {{@prompts/_shared/navigation-rules.md}}
-13. When a ticket is available, judge genuine misses of the ticket's intent or clear scope
+14. When a ticket is available, judge genuine misses of the ticket's intent or clear scope
    creep — but give credit when the author went beyond the literal acceptance criteria in a
    sound way rather than flagging it as non-compliant.
-14. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
+15. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
    genuine, blocking issue (such as a bug, regression, privacy violation, half-finished task,
    placeholder, or deferred work); otherwise "approve". A change that exceeds the AC without
    breaking the ticket's intent is a reason to approve, not to block.

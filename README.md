@@ -8,10 +8,10 @@ Org-wide GitHub defaults and shared reusable workflows.
 request with a **panel** of independent auditors and an arbitrator:
 
 1. **Context** — gathers everything the panel judges against and uploads it as one
-   immutable handoff: the diff, the PR itself, the JIRA ticket and its acceptance criteria,
-   that ticket's **epic**, the PR's existing discussion, and any **design references** found
-   in those texts — plus a manifest saying which of them were actually available. **No model
-   reviews the code here.**
+   immutable handoff: the diff, the PR itself, the **PRs it is stacked on**, the JIRA ticket
+   and its acceptance criteria, that ticket's **epic**, the PR's existing discussion, and any
+   **design references** found in those texts — plus a manifest saying which of them were
+   actually available. **No model reviews the code here.**
 2. **Panel** — three auditors named **caspar**, **balthazar**, and **melchior** each audit
    the change *independently*, running the *same* auditor prompt, and each writes its own
    verdict (`approve` / `request_changes`, plus a stated confidence and its blocking
@@ -29,7 +29,7 @@ arbitrator's.
 
 ```mermaid
 flowchart LR
-  ctx["1 · context<br/>diff · PR · ticket + AC · epic<br/>discussion · designs · manifest<br/>(no model)"]
+  ctx["1 · context<br/>diff · PR · stack · ticket + AC · epic<br/>discussion · designs · manifest<br/>(no model)"]
   subgraph panel["2 · panel — one prompt, three independent jobs"]
     direction TB
     caspar["caspar<br/>openai/gpt-5.6-luna"]
@@ -105,6 +105,7 @@ source becomes one file in the handoff every seat downloads:
 | `context-manifest.json` | What was gathered, and which sources were unavailable and why |
 | `pr.diff` | The diff of the reviewed commit against its base |
 | `pr.json` | Title, body, labels, commit messages, and the touched files with line counts |
+| `stack.json` | The PRs this one is stacked on, nearest first, when its base isn't the default branch |
 | `ticket.json` | The `BIG-XXXXX` ticket from the PR title: summary, description, acceptance criteria, status, type, and its parent's key |
 | `epic.json` | That parent — where the wider goal usually lives, when a ticket's own description reads as a fragment |
 | `conversations.json` | The PR's existing discussion: comments, inline review threads, prior reviews |
@@ -116,6 +117,22 @@ less to judge intent against. The manifest exists so an auditor can tell *"there
 for this work"* from *"the epic fetch failed"* — both otherwise read as silence, which is how
 a review ends up judging intent against nothing and not saying so. The prompts require an
 auditor to name context it did not have and what it could not judge without it.
+
+**Stacked PRs.** When a PR's base isn't the default branch, stage 1 walks down the stack —
+base branch to the PR whose head is that branch, until it reaches the default branch — and
+records each ancestor's number, title, body, state, ticket key, commit headlines, and touched
+paths. This matters because `pr.diff` is measured against the base, so it holds only this
+PR's own changes while the branch beneath it carries work that is itself still under review.
+An auditor not told that misreads a stacked PR in both directions: it blames this PR for what
+an ancestor introduced, and it reports as missing the work an ancestor already did. The
+prompts rule both out, and instead direct the panel at the questions that are this PR's — does
+it duplicate or contradict an ancestor, does it use an interface the ancestor doesn't provide,
+does it only make sense if an ancestor merges first without saying so. Ancestors often carry a
+sibling ticket in the same epic, and satisfying that ticket is not this PR's job.
+
+The walk is capped at ten levels and refuses to revisit a branch, so a cycle left behind by a
+retargeted branch can't hang a review. A base that is neither the default branch nor any PR's
+head — a long-lived release branch — is recorded as not a stack, with the reason.
 
 Design links are **recorded, never followed**. The panel has no Figma credentials, and a code
 review has no reason to pull design or member-facing content into a build artifact. What a

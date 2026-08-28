@@ -6,9 +6,9 @@ name: BiggiePockets Code Review (reusable)
 # A review runs in three stages:
 #   1. Context     — gathers everything the panel judges against and uploads it as one
 #                    immutable handoff: the diff, the PR itself (body, labels, commits,
-#                    touched files), the JIRA ticket and its acceptance criteria, that
-#                    ticket's epic, the PR discussion, and any design references found in
-#                    those texts. Whatever isn't available is recorded as unavailable, in
+#                    touched files), the PRs it is stacked on, the JIRA ticket and its
+#                    acceptance criteria, that ticket's epic, the PR discussion, and any
+#                    design references found in those texts. Whatever isn't available is recorded as unavailable, in
 #                    context-manifest.json, so an auditor can tell "there is no epic" from
 #                    "the epic fetch failed". No model reviews the code here: nothing
 #                    reads the diff ahead of the panel, so no finding is planted in front
@@ -178,6 +178,88 @@ jobs:
           git diff "origin/$BASE_REF...HEAD" > pr.diff
           echo "PR diff is $(wc -l < pr.diff) lines"
 
+      # Walk down the stack. A PR whose base is not the default branch is usually stacked
+      # on top of another PR, and pr.diff above is computed against that base — so the
+      # diff is this PR's own changes only, and the branch it sits on contains work that
+      # is itself under review and can still change.
+      #
+      # An auditor not told that reads a stacked PR wrongly in both directions: it blames
+      # this PR for what the parent introduced, and it reports as missing the work the
+      # parent already did. Always writes stack.json.
+      - name: Walk the PR stack
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          default=$(gh repo view "$GITHUB_REPOSITORY" --json defaultBranchRef -q .defaultBranchRef.name)
+          base=$(jq -r '.base_ref' pr.json)
+
+          note="pr.diff contains ONLY this PR's own changes, measured against its base branch."
+          if [ "$base" = "$default" ]; then
+            jq -n --arg default "$default" --arg base "$base" --arg note "$note" \
+              '{available: true, stacked: false, reason: "the PR targets the default branch", default_branch: $default, base_ref: $base, depth: 0, ancestors: [], note: $note}' \
+              > stack.json
+            echo "PR targets the default branch ($default); not a stack."
+            exit 0
+          fi
+
+          # Follow base -> the PR whose head is that base, until the default branch. The
+          # depth cap and the seen-list are guards, not expectations: a retargeted branch
+          # can leave a cycle behind, and a cycle here would hang the whole review.
+          ancestors='[]'
+          b="$base"
+          seen=""
+          depth=0
+          while [ "$b" != "$default" ] && [ "$depth" -lt 10 ]; do
+            case " $seen " in *" $b "*) echo "::warning::Stack walk revisited branch $b; stopping."; break;; esac
+            seen="$seen $b"
+
+            # An open PR for the branch is the one being stacked on; fall back to the most
+            # recent closed one, which is how a just-merged parent still explains the base.
+            num=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$b" --state all --limit 10 \
+              --json number,state \
+              -q '[.[] | select(.state == "OPEN")] + [.[]] | .[0].number // empty')
+            if [ -z "$num" ]; then
+              echo "No pull request has $b as its head; stopping the walk there."
+              break
+            fi
+
+            gh pr view "$num" --repo "$GITHUB_REPOSITORY" \
+              --json number,title,body,state,url,baseRefName,headRefName,additions,deletions,commits,files \
+              > "stack-$num.json"
+
+            ancestors=$(jq -n --argjson a "$ancestors" --slurpfile p "stack-$num.json" \
+              '$a + [$p[0] | {
+                number, title, body, state, url,
+                base_ref: .baseRefName,
+                head_ref: .headRefName,
+                additions, deletions,
+                ticket_key: ((.title | capture("(?<k>BIG-[0-9]+)").k) // null),
+                commits: [.commits[] | .messageHeadline],
+                files: [.files[] | .path]
+              }]')
+
+            b=$(jq -r '.baseRefName' "stack-$num.json")
+            depth=$((depth + 1))
+          done
+
+          jq -n \
+            --arg default "$default" \
+            --arg base "$base" \
+            --arg note "$note" \
+            --argjson ancestors "$ancestors" \
+            '{
+              available: true,
+              stacked: (($ancestors | length) > 0),
+              reason: (if ($ancestors | length) > 0 then "the PR is stacked on unmerged work"
+                       else "the base branch is not the default branch, but no pull request has it as its head" end),
+              default_branch: $default,
+              base_ref: $base,
+              depth: ($ancestors | length),
+              ancestors: $ancestors,
+              note: $note
+            }' > stack.json
+          echo "Stack: base $base, default $default, $(jq -r '.depth' stack.json) ancestor PR(s) $(jq -r '[.ancestors[].number] | map("#" + tostring) | join(" <- ")' stack.json)"
+
       # Anchor the review on the work's intent. Always writes ticket.json: either the
       # ticket fields, or {"available": false} so a missing/unfetchable ticket degrades
       # to a diff-based review instead of failing the review. Also records the parent
@@ -314,6 +396,7 @@ jobs:
           }
 
           { urls_from pr.json pr
+            urls_from stack.json stack
             urls_from ticket.json ticket
             urls_from epic.json epic
             urls_from conversations.json discussion
@@ -368,6 +451,7 @@ jobs:
             --arg base_ref "$BASE_REF" \
             --argjson diff_lines "$(wc -l < pr.diff | tr -d " ")" \
             --slurpfile pr pr.json \
+            --slurpfile stack stack.json \
             --slurpfile ticket ticket.json \
             --slurpfile epic epic.json \
             --slurpfile conversations conversations.json \
@@ -377,6 +461,7 @@ jobs:
               base_ref: $base_ref,
               diff: {file: "pr.diff", lines: $diff_lines},
               pr: {file: "pr.json", available: true, commits: ($pr[0].commits | length), files: ($pr[0].files | length)},
+              stack: {file: "stack.json", stacked: $stack[0].stacked, depth: $stack[0].depth, default_branch: $stack[0].default_branch, ancestors: [$stack[0].ancestors[].number]},
               ticket: {file: "ticket.json", available: $ticket[0].available, key: ($ticket[0].key // null), reason: ($ticket[0].reason // null), has_acceptance_criteria: ((($ticket[0].acceptance_criteria // {}) | [.. | objects | select(.type == "text") | .text] | length) > 0)},
               epic: {file: "epic.json", available: $epic[0].available, key: ($epic[0].key // null), reason: ($epic[0].reason // null)},
               conversations: {file: "conversations.json", issue_comments: ($conversations[0].issue_comments | length), review_comments: ($conversations[0].review_comments | length), reviews: ($conversations[0].reviews | length)},
@@ -407,9 +492,9 @@ jobs:
             echo "CONTEXT_END_NS=$(date +%s%N)"
           } > review-context.env
 
-      # The raw API responses are deliberately NOT uploaded: they carry fields nobody
-      # reviews (assignee, reporter, watchers) and the reshaped files above are what the
-      # prompts are written against.
+      # The raw API responses (and the per-ancestor stack-<n>.json the walk fetched) are
+      # deliberately NOT uploaded: they carry fields nobody reviews (assignee, reporter,
+      # watchers) and the reshaped files above are what the prompts are written against.
       - name: Upload review handoff
         uses: actions/upload-artifact@v4
         with:
@@ -417,6 +502,7 @@ jobs:
           path: |
             pr.diff
             pr.json
+            stack.json
             ticket.json
             epic.json
             conversations.json
