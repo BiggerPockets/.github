@@ -582,7 +582,10 @@ jobs:
           verdict=$(jq -r '.verdict' verdict.json)
           summary=$(jq -r '.summary' verdict.json)
 
-          printf '## BiggiePockets assisted review\n\n%s\n' "$summary" > review-body.md
+          # The review body is the arbitrator's summary verbatim — no heading. GitHub
+          # already attributes the review to BiggiePockets in its own chrome, so a title
+          # restating that just pushes the verdict below the fold.
+          printf '%s\n' "$summary" > review-body.md
 
           case "$verdict" in
             approve)
