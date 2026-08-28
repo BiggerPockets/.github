@@ -4,16 +4,20 @@ name: BiggiePockets Code Review (reusable)
 # service account submitting the resulting approve / request-changes decision.
 #
 # A review runs in three stages:
-#   1. Context     — gathers what the panel judges against: the diff, the PR's JIRA ticket
-#                    and its acceptance criteria, and the PR discussion. No model reviews
-#                    the code here. Nothing reads the diff ahead of the panel, so no
-#                    finding is planted in front of the auditors whose independence is the
-#                    whole point of the panel.
+#   1. Context     — gathers everything the panel judges against and uploads it as one
+#                    immutable handoff: the diff, the PR itself (body, labels, commits,
+#                    touched files), the JIRA ticket and its acceptance criteria, that
+#                    ticket's epic, the PR discussion, and any design references found in
+#                    those texts. Whatever isn't available is recorded as unavailable, in
+#                    context-manifest.json, so an auditor can tell "there is no epic" from
+#                    "the epic fetch failed". No model reviews the code here: nothing
+#                    reads the diff ahead of the panel, so no finding is planted in front
+#                    of the auditors whose independence is the whole point.
 #   2. Panel       — three auditors (caspar, balthazar, melchior) each audit the change
-#                    INDEPENDENTLY, in separate jobs, running the SAME auditor prompt,
-#                    and each writes its own verdict. No auditor can see another's
-#                    verdict: a seat's output is uploaded per seat and downloaded only by
-#                    stage 3.
+#                    INDEPENDENTLY, each in a job of its own named for the seat, all
+#                    running the SAME auditor prompt, and each writing its own verdict.
+#                    No auditor can see another's verdict: a seat's output is uploaded per
+#                    seat and downloaded only by stage 3.
 #   3. Arbitration — one arbitrator reads all three verdicts, verifies the blocking
 #                    findings against the code, and issues the ONE verdict that is posted.
 #                    It is the only stage whose output reaches the pull request.
@@ -33,9 +37,10 @@ name: BiggiePockets Code Review (reusable)
 #   MAGI_MODEL_BALTHAZAR  balthazar     (default google/gemini-3.7-flash)
 #   MAGI_MODEL_MELCHIOR   melchior      (default z-ai/glm-5.3-flash)
 #   ARBITER_MODEL         arbitration   (default openai/gpt-5.6-sol)
-# Every seat needs its own entry. There is no fallback model on purpose: a seat quietly
-# running the same model as another seat is a panel that has lost a voice while still
-# reporting three verdicts, which is worse than a matrix leg that fails and says so.
+# Every seat carries its own model in its own job. There is no shared fallback on
+# purpose: a seat quietly running the same model as another seat is a panel that has lost
+# a voice while still reporting three verdicts, which is worse than a seat that fails and
+# says so.
 # The three seats run different models on purpose: the auditor prompt is identical, so
 # what a disagreement between seats measures is the models, and three runs of one model
 # would mostly agree trivially and leave the arbitrator nothing to weigh.
@@ -78,13 +83,14 @@ jobs:
   # same commit and context.
   #
   # NOTE for callers: this job was previously named `codex`. A repo that lists it as a
-  # required status check must switch that check to `context`.
+  # required status check must switch that check to `context`. The panel's checks were
+  # likewise `audit (caspar)` and friends when the seats were matrix legs; they are now
+  # `caspar`, `balthazar` and `melchior`.
   context:
     runs-on: ubuntu-latest
     outputs:
       head_sha: ${{ steps.pr_head.outputs.sha }}
       registry_sha: ${{ steps.registry_head.outputs.sha }}
-      auditors: ${{ steps.resolve.outputs.auditors }}
     permissions:
       contents: read
       pull-requests: read
@@ -131,16 +137,40 @@ jobs:
       - name: Record review start time
         run: echo "REVIEW_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
 
-      # Resolve PR context (base ref and title) from the API.
-      - name: Resolve PR context
+      # Everything from here to the upload is context gathering. Each source writes one
+      # artifact file and nothing more: no step reads another's output to form a view of
+      # the code. A source that isn't there degrades to {"available": false, "reason": ...}
+      # instead of failing the review — a PR with no ticket, no epic and no designs is
+      # still reviewable, just with less to judge intent against.
+      #
+      # No artifact carries an author, assignee or reporter. The panel judges the change,
+      # not who wrote it, and leaving identities out keeps them off the handoff and out of
+      # telemetry. The PR discussion is the one exception: attribution is what makes
+      # "a human reviewer objected and it was never resolved" legible.
+      - name: Gather PR metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          base=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json baseRefName -q .baseRefName)
-          title=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json title -q .title)
+          gh pr view "$PR" --repo "$GITHUB_REPOSITORY" \
+            --json number,title,body,baseRefName,headRefName,isDraft,labels,additions,deletions,changedFiles,commits,files \
+            > pr-raw.json
+
+          jq '{
+            available: true,
+            number, title, body,
+            base_ref: .baseRefName,
+            head_ref: .headRefName,
+            draft: .isDraft,
+            labels: [.labels[].name],
+            additions, deletions,
+            changed_files: .changedFiles,
+            commits: [.commits[] | {message: .messageHeadline, body: .messageBody}],
+            files: [.files[] | {path, additions, deletions}]
+          }' pr-raw.json > pr.json
+
+          base=$(jq -r '.base_ref' pr.json)
           echo "BASE_REF=$base" >> "$GITHUB_ENV"
-          echo "PR_TITLE=$title" >> "$GITHUB_ENV"
-          echo "Reviewing PR #$PR (base $base): $title"
+          echo "Reviewing PR #$PR (base $base): $(jq -r '.title' pr.json)"
 
       - name: Compute PR diff
         run: |
@@ -150,13 +180,14 @@ jobs:
 
       # Anchor the review on the work's intent. Always writes ticket.json: either the
       # ticket fields, or {"available": false} so a missing/unfetchable ticket degrades
-      # to a diff-based review instead of failing the review.
+      # to a diff-based review instead of failing the review. Also records the parent
+      # key, which is what the epic step below fetches.
       - name: Fetch JIRA ticket for intent
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
-          key=$(printf '%s' "$PR_TITLE" | grep -oE 'BIG-[0-9]+' | head -1 || true)
+          key=$(jq -r '.title' pr.json | grep -oE 'BIG-[0-9]+' | head -1 || true)
           if [ -z "$key" ]; then
             echo '{"available": false, "reason": "no BIG-XXXXX key in PR title"}' > ticket.json
             echo "No JIRA ticket key in PR title; falling back to diff-based review."
@@ -165,16 +196,70 @@ jobs:
 
           http=$(curl -sS -w '%{http_code}' -o ticket-raw.json \
             -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H 'Accept: application/json' \
-            "https://biggerpockets.atlassian.net/rest/api/3/issue/$key?fields=summary,description,customfield_11557") \
+            "https://biggerpockets.atlassian.net/rest/api/3/issue/$key?fields=summary,description,customfield_11557,status,issuetype,labels,parent,attachment") \
             || http="000"
 
           if [ "$http" = "200" ]; then
-            jq --arg key "$key" '{available: true, key: $key, summary: .fields.summary, description: .fields.description, acceptance_criteria: .fields.customfield_11557}' \
-              ticket-raw.json > ticket.json
+            jq --arg key "$key" '{
+              available: true,
+              key: $key,
+              summary: .fields.summary,
+              description: .fields.description,
+              acceptance_criteria: .fields.customfield_11557,
+              status: .fields.status.name,
+              issue_type: .fields.issuetype.name,
+              labels: .fields.labels,
+              parent: (if .fields.parent then {key: .fields.parent.key, summary: .fields.parent.fields.summary, type: .fields.parent.fields.issuetype.name} else null end)
+            }' ticket-raw.json > ticket.json
+            echo "PARENT_KEY=$(jq -r '.parent.key // ""' ticket.json)" >> "$GITHUB_ENV"
             echo "Wrote ticket.json for $key"
           else
             echo "{\"available\": false, \"reason\": \"fetch failed (HTTP $http) for $key\"}" > ticket.json
             echo "Could not fetch $key (HTTP $http); falling back to diff-based review."
+          fi
+
+      # The epic is where the wider goal usually lives: a ticket's own description is
+      # often a slice of work whose purpose only makes sense against the epic it belongs
+      # to. Fetched separately because a ticket can have no parent, or a parent the token
+      # can't read, and neither is a reason to fail a review.
+      - name: Fetch the ticket's epic for wider intent
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          # Distinguish the three ways there can be no epic. "No epic" and "I could not
+          # read the epic" are different pieces of evidence, and an auditor that cannot
+          # tell them apart cannot say which one it judged without.
+          if [ "$(jq -r '.available' ticket.json)" != "true" ]; then
+            echo '{"available": false, "reason": "no ticket was available, so no epic to fetch"}' > epic.json
+            echo "No ticket, so no epic to fetch."
+            exit 0
+          fi
+          if [ -z "${PARENT_KEY:-}" ]; then
+            echo '{"available": false, "reason": "ticket has no parent epic"}' > epic.json
+            echo "No parent epic to fetch."
+            exit 0
+          fi
+
+          http=$(curl -sS -w '%{http_code}' -o epic-raw.json \
+            -u "$JIRA_EMAIL:$JIRA_API_TOKEN" -H 'Accept: application/json' \
+            "https://biggerpockets.atlassian.net/rest/api/3/issue/$PARENT_KEY?fields=summary,description,issuetype,status,labels") \
+            || http="000"
+
+          if [ "$http" = "200" ]; then
+            jq --arg key "$PARENT_KEY" '{
+              available: true,
+              key: $key,
+              summary: .fields.summary,
+              description: .fields.description,
+              issue_type: .fields.issuetype.name,
+              status: .fields.status.name,
+              labels: .fields.labels
+            }' epic-raw.json > epic.json
+            echo "Wrote epic.json for $PARENT_KEY"
+          else
+            echo "{\"available\": false, \"reason\": \"fetch failed (HTTP $http) for $PARENT_KEY\"}" > epic.json
+            echo "Could not fetch parent $PARENT_KEY (HTTP $http)."
           fi
 
       # Gather the existing PR discussion so the review accounts for context that lives
@@ -202,18 +287,115 @@ jobs:
             > conversations.json
           echo "Wrote conversations.json ($(jq '.issue_comments | length' conversations.json) comments, $(jq '.review_comments | length' conversations.json) review comments, $(jq '.reviews | length' conversations.json) reviews)"
 
+      # Design references, harvested from the text already gathered above — the PR body
+      # and commit messages, the ticket and epic (description and acceptance criteria
+      # included, since a Figma link is usually pasted into one of them), and the
+      # discussion — plus the ticket's own attachments.
+      #
+      # Links are RECORDED, never followed. The panel has no Figma credentials, and
+      # pulling design or member-facing content into a review artifact is not something a
+      # code review needs. What a recorded link buys the auditors is the knowledge that a
+      # design exists for this work, which is the difference between "no design was
+      # specified" and "a design was specified and I can't see it".
+      - name: Collect design references
+        run: |
+          # Every URL appearing anywhere in one of the context files. `..|strings` walks
+          # the whole document, which is what reaches Atlassian Document Format nodes
+          # without having to know their shape.
+          # `|| true` because "this file contains no URLs" is the ordinary case, and grep
+          # exits 1 on no match — without it a ticket with no links would fail the step.
+          urls_from() { # file source-label
+            [ -f "$1" ] || return 0
+            jq -r '[.. | strings] | .[]' "$1" 2>/dev/null \
+              | grep -oE 'https?://[^][ )"'"'"'<>,]+' \
+              | sed 's/[.,;:)]*$//' \
+              | sort -u \
+              | jq -R --arg source "$2" '{url: ., source: $source}' || true
+          }
+
+          { urls_from pr.json pr
+            urls_from ticket.json ticket
+            urls_from epic.json epic
+            urls_from conversations.json discussion
+          } | jq -s '.' > urls.json
+
+          if [ -f ticket-raw.json ]; then
+            jq '[.fields.attachment // [] | .[] | {filename, mime_type: .mimeType, size, url: .content, source: "ticket"}]' \
+              ticket-raw.json > attachments.json
+          else
+            echo '[]' > attachments.json
+          fi
+
+          # Keep only URLs that are plausibly a design artifact. An unclassified link is
+          # dropped rather than listed: a designs.json full of Jira and CI links would
+          # bury the one Figma URL that matters.
+          jq -n \
+            --slurpfile urls urls.json \
+            --slurpfile attachments attachments.json \
+            '
+            def kind:
+              if test("figma\\.com") then "figma"
+              elif test("zeplin\\.io|invisionapp\\.com|sketch\\.com|miro\\.com|framer\\.com|abstract\\.com") then "design_tool"
+              elif test("loom\\.com|youtube\\.com|youtu\\.be|vimeo\\.com") then "walkthrough_video"
+              elif test("user-attachments|user-images\\.githubusercontent\\.com") then "screenshot"
+              elif test("\\.(png|jpe?g|gif|webp|svg|pdf)([?#]|$)") then "image"
+              else empty end;
+            # One entry per URL, listing every place it appeared: the same Figma link is
+            # usually in the ticket AND the PR body AND the discussion, and three copies
+            # of one link say nothing that one link with three sources does not.
+            ($urls[0]
+              | map(. + {kind: (.url | kind)})
+              | group_by(.url)
+              | map({url: .[0].url, kind: .[0].kind, sources: (map(.source) | unique)})
+            ) as $links
+            | ($attachments[0]) as $att
+            | {
+                available: ((($links | length) + ($att | length)) > 0),
+                links: $links,
+                attachments: $att,
+                note: "Links and attachments are recorded, not fetched: this review has no credentials for design tools. Treat a reference as evidence that a design exists for this work, not as something you can open, and never treat an unopenable reference as a defect."
+              }' > designs.json
+          echo "Wrote designs.json ($(jq '.links | length' designs.json) link(s), $(jq '.attachments | length' designs.json) attachment(s))"
+
+      # One file that says what the panel actually got. Without it an auditor cannot tell
+      # "there is no epic for this work" from "the epic fetch failed", and both read as
+      # silence — which is how a review ends up judging intent against nothing and not
+      # saying so.
+      - name: Write the context manifest
+        run: |
+          jq -n \
+            --arg head_sha "${{ steps.pr_head.outputs.sha }}" \
+            --arg base_ref "$BASE_REF" \
+            --argjson diff_lines "$(wc -l < pr.diff | tr -d " ")" \
+            --slurpfile pr pr.json \
+            --slurpfile ticket ticket.json \
+            --slurpfile epic epic.json \
+            --slurpfile conversations conversations.json \
+            --slurpfile designs designs.json \
+            '{
+              head_sha: $head_sha,
+              base_ref: $base_ref,
+              diff: {file: "pr.diff", lines: $diff_lines},
+              pr: {file: "pr.json", available: true, commits: ($pr[0].commits | length), files: ($pr[0].files | length)},
+              ticket: {file: "ticket.json", available: $ticket[0].available, key: ($ticket[0].key // null), reason: ($ticket[0].reason // null), has_acceptance_criteria: ((($ticket[0].acceptance_criteria // {}) | [.. | objects | select(.type == "text") | .text] | length) > 0)},
+              epic: {file: "epic.json", available: $epic[0].available, key: ($epic[0].key // null), reason: ($epic[0].reason // null)},
+              conversations: {file: "conversations.json", issue_comments: ($conversations[0].issue_comments | length), review_comments: ($conversations[0].review_comments | length), reviews: ($conversations[0].reviews | length)},
+              designs: {file: "designs.json", available: $designs[0].available, links: ($designs[0].links | length), attachments: ($designs[0].attachments | length)}
+            }' > context-manifest.json
+          cat context-manifest.json
+
       # Resolve the prompts from the registry — the single auditor prompt every seat runs
       # and the arbitrator prompt — each with its shared-rule blocks expanded and a
-      # content-derived prompt_version. Also emits the panel seats, which drive the audit
-      # job's fan-out matrix.
+      # content-derived prompt_version. Also emits the panel seats, which the arbitrator
+      # uses to know how many verdicts to expect.
       - name: Resolve review prompts
         id: resolve
         env:
           REGISTRY_DIR: registry
         run: registry/scripts/resolve-prompts.sh
 
-      # Persist the handoff. Every auditor consumes the same diff and ticket/discussion
-      # context, on every retry.
+      # Persist the handoff. Every auditor consumes the same diff, ticket, epic,
+      # discussion and design references, on every retry.
       # No `if: always()` on this or the upload: a stage that failed part-way through
       # must not hand the panel a half-built context. Fail here and the whole review
       # stops, which is the correct outcome.
@@ -225,47 +407,55 @@ jobs:
             echo "CONTEXT_END_NS=$(date +%s%N)"
           } > review-context.env
 
+      # The raw API responses are deliberately NOT uploaded: they carry fields nobody
+      # reviews (assignee, reporter, watchers) and the reshaped files above are what the
+      # prompts are written against.
       - name: Upload review handoff
         uses: actions/upload-artifact@v4
         with:
           name: review-context-${{ github.run_id }}
           path: |
             pr.diff
+            pr.json
             ticket.json
+            epic.json
             conversations.json
+            designs.json
+            context-manifest.json
             review-context.env
           if-no-files-found: error
           retention-days: 7
           overwrite: true
 
-  # Stage 2. One job per panel seat, fanned out over the seats the registry declares.
-  # Separate jobs are what make the audits independent: each runs on its own runner, sees
-  # only the stage-1 handoff, and writes only its own verdict. Nothing an auditor can read
-  # contains another auditor's output.
+  # Stage 2. Three wise men, three jobs, one prompt.
   #
-  # fail-fast is off so one seat's failure doesn't cancel the others mid-audit, and the
-  # model step is continue-on-error so a rate-limited seat still leaves a recorded status
-  # for the arbitrator. "Re-run failed jobs" re-runs only the seats that failed.
-  audit:
+  # Each seat is its own job, written out rather than fanned out from a matrix, so a seat
+  # is an independent unit end to end: its own runner, its own model, its own status check
+  # (`caspar`, `balthazar`, `melchior`), re-runnable on its own without touching the
+  # others. The only thing a seat can read is stage 1's handoff — nothing available to an
+  # auditor contains another auditor's output, which is what makes the three verdicts
+  # independent rather than merely concurrent.
+  #
+  # The three `steps:` blocks below are BYTE-IDENTICAL on purpose. Everything that differs
+  # between seats lives in the `env:` above them, so what a disagreement between seats
+  # measures is the models — a difference in harness would corrupt that comparison, and
+  # three copies of a block is exactly the kind of thing that drifts. Validation of that
+  # invariant is not left to reviewers: .github/workflows/validate-prompts.yml fails if
+  # the blocks stop matching, or if the set of seat jobs stops matching the registry.
+  #
+  # The model step is continue-on-error so a rate-limited seat still records a status for
+  # the arbitrator instead of taking the whole review down with it.
+  caspar:
     needs: context
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        auditor: ${{ fromJSON(needs.context.outputs.auditors) }}
     permissions:
       contents: read
       pull-requests: read
       id-token: write # claude-code-action authenticates via OIDC
     env:
       PR: ${{ inputs.pr }}
-      AUDITOR: ${{ matrix.auditor }}
-      # One OpenRouter slug per seat, each overrideable by the matching repository
-      # variable. A seat with no entry here has no model and fails its matrix leg — see
-      # the note in the header on why there is no fallback.
-      MAGI_MODEL_CASPAR: ${{ vars.MAGI_MODEL_CASPAR || 'openai/gpt-5.6-luna' }}
-      MAGI_MODEL_BALTHAZAR: ${{ vars.MAGI_MODEL_BALTHAZAR || 'google/gemini-3.7-flash' }}
-      MAGI_MODEL_MELCHIOR: ${{ vars.MAGI_MODEL_MELCHIOR || 'z-ai/glm-5.3-flash' }}
+      AUDITOR: caspar
+      AUDITOR_MODEL: ${{ vars.MAGI_MODEL_CASPAR || 'openai/gpt-5.6-luna' }}
     steps:
       - name: Checkout reviewed PR head
         uses: actions/checkout@v4
@@ -282,6 +472,8 @@ jobs:
           persist-credentials: false
           path: registry
 
+      # The whole of stage 1: the diff, the PR, the ticket, its epic, the discussion, the
+      # design references, and the manifest saying which of those were available.
       - name: Download review handoff
         uses: actions/download-artifact@v4
         with:
@@ -299,29 +491,19 @@ jobs:
           REGISTRY_DIR: registry
         run: registry/scripts/resolve-prompts.sh
 
-      # Look the seat's model up by name rather than hard-coding a model per matrix leg,
-      # so an override is a repository variable rather than a workflow edit. A seat with
-      # no MAGI_MODEL_<SEAT> of its own fails here: adding a seat to registry.json is
-      # deliberately a two-part change, because the seat only earns its cost if it runs a
-      # model no other seat is running.
-      - name: Select seat model
-        id: seat
+      # A seat with no model is a lost voice, not a fallback — fail before the panel can
+      # report a verdict short of a seat it claimed to have.
+      - name: Confirm seat model
         run: |
-          var="MAGI_MODEL_$(printf '%s' "$AUDITOR" | tr '[:lower:]-' '[:upper:]_')"
-          model="${!var:-}"
-          if [ -z "$model" ]; then
-            echo "::error::Auditor '$AUDITOR' has no model: set $var as a repository variable, or give it a default in this workflow's audit job." >&2
+          if [ -z "$AUDITOR_MODEL" ]; then
+            echo "::error::Auditor '$AUDITOR' has no model: set MAGI_MODEL_$(printf '%s' "$AUDITOR" | tr '[:lower:]-' '[:upper:]_') as a repository variable, or give this job a default." >&2
             exit 1
           fi
-          echo "model=$model" >> "$GITHUB_OUTPUT"
-          echo "Auditor $AUDITOR runs $model"
+          echo "Auditor $AUDITOR runs $AUDITOR_MODEL"
 
       - name: Record audit start time
         run: echo "AUDIT_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
 
-      # The auditor prompt is identical for every seat — the resolver emits it once and
-      # substitutes nothing seat-specific — so the three audits differ only by model and
-      # by the independent judgment of the run.
       - name: Audit independently
         id: audit
         continue-on-error: true
@@ -334,7 +516,7 @@ jobs:
           # by the claude bot are rejected with "Workflow initiated by non-human
           # actor: claude (type: Bot). Add bot to allowed_bots list."
           allowed_bots: 'claude'
-          claude_args: '--allowedTools "Read,Grep,Glob,Bash,Write" --model ${{ steps.seat.outputs.model }}'
+          claude_args: '--allowedTools "Read,Grep,Glob,Bash,Write" --model ${{ env.AUDITOR_MODEL }}'
           prompt: ${{ steps.resolve.outputs.auditor_prompt }}
         env:
           ANTHROPIC_BASE_URL: "https://openrouter.ai/api"
@@ -363,27 +545,270 @@ jobs:
           # Shell-safe seat name so the arbitrator can source every seat's file at once.
           key=$(printf '%s' "$AUDITOR" | tr '[:lower:]-' '[:upper:]_')
           {
-            echo "AUDIT_${key}_START_NS=$AUDIT_START_NS"
+            echo "AUDIT_${key}_START_NS=${AUDIT_START_NS:-$audit_end_ns}"
             echo "AUDIT_${key}_END_NS=$audit_end_ns"
             echo "AUDIT_${key}_STATUS=$status"
-            echo "AUDIT_${key}_MODEL=${{ steps.seat.outputs.model }}"
+            echo "AUDIT_${key}_MODEL=$AUDITOR_MODEL"
           } > "audit-$AUDITOR.env"
 
       - name: Upload seat verdict
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: audit-${{ matrix.auditor }}-${{ github.run_id }}
+          name: audit-${{ env.AUDITOR }}-${{ github.run_id }}
           path: |
-            audit-${{ matrix.auditor }}.json
-            audit-${{ matrix.auditor }}.env
+            audit-${{ env.AUDITOR }}.json
+            audit-${{ env.AUDITOR }}.env
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+  balthazar:
+    needs: context
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write # claude-code-action authenticates via OIDC
+    env:
+      PR: ${{ inputs.pr }}
+      AUDITOR: balthazar
+      AUDITOR_MODEL: ${{ vars.MAGI_MODEL_BALTHAZAR || 'google/gemini-3.7-flash' }}
+    steps:
+      - name: Checkout reviewed PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.context.outputs.head_sha }}
+          fetch-depth: 0
+
+      - name: Checkout prompt registry
+        uses: actions/checkout@v4
+        with:
+          repository: BiggerPockets/.github
+          ref: ${{ needs.context.outputs.registry_sha }}
+          token: ${{ secrets.BIGGIEPOCKETS_PAT }}
+          persist-credentials: false
+          path: registry
+
+      # The whole of stage 1: the diff, the PR, the ticket, its epic, the discussion, the
+      # design references, and the manifest saying which of those were available.
+      - name: Download review handoff
+        uses: actions/download-artifact@v4
+        with:
+          name: review-context-${{ github.run_id }}
+          path: .
+
+      - name: Restore review context
+        run: cat review-context.env >> "$GITHUB_ENV"
+
+      # Resolve again from the same pinned registry ref. Prompt text stays out of job
+      # outputs (which are size-limited), while the artifact carries all model inputs.
+      - name: Resolve review prompts
+        id: resolve
+        env:
+          REGISTRY_DIR: registry
+        run: registry/scripts/resolve-prompts.sh
+
+      # A seat with no model is a lost voice, not a fallback — fail before the panel can
+      # report a verdict short of a seat it claimed to have.
+      - name: Confirm seat model
+        run: |
+          if [ -z "$AUDITOR_MODEL" ]; then
+            echo "::error::Auditor '$AUDITOR' has no model: set MAGI_MODEL_$(printf '%s' "$AUDITOR" | tr '[:lower:]-' '[:upper:]_') as a repository variable, or give this job a default." >&2
+            exit 1
+          fi
+          echo "Auditor $AUDITOR runs $AUDITOR_MODEL"
+
+      - name: Record audit start time
+        run: echo "AUDIT_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+
+      - name: Audit independently
+        id: audit
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          # The action requires this input for launch validation. ANTHROPIC_AUTH_TOKEN
+          # below is what makes Claude Code send the OpenRouter key as a bearer token.
+          anthropic_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          # Allow the `claude` bot to trigger this review. Without this, PRs opened
+          # by the claude bot are rejected with "Workflow initiated by non-human
+          # actor: claude (type: Bot). Add bot to allowed_bots list."
+          allowed_bots: 'claude'
+          claude_args: '--allowedTools "Read,Grep,Glob,Bash,Write" --model ${{ env.AUDITOR_MODEL }}'
+          prompt: ${{ steps.resolve.outputs.auditor_prompt }}
+        env:
+          ANTHROPIC_BASE_URL: "https://openrouter.ai/api"
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
+
+      # Name the verdict for its seat before it leaves this job. The arbitrator reads
+      # audit-<seat>.json, and a seat that produced no usable verdict must be visible as
+      # such rather than absent: the recorded status is what stops a failed seat from
+      # being mistaken for a silent approval.
+      - name: Record seat verdict
+        if: always()
+        run: |
+          audit_end_ns=$(date +%s%N)
+          status="ok"
+          [ "${{ steps.audit.outcome }}" != "success" ] && status="error"
+
+          if [ -f verdict.json ] && jq -e '.verdict == "approve" or .verdict == "request_changes"' verdict.json >/dev/null 2>&1; then
+            mv verdict.json "audit-$AUDITOR.json"
+            echo "$AUDITOR: $(jq -r '.verdict' "audit-$AUDITOR.json") (confidence $(jq -r '.confidence // "unstated"' "audit-$AUDITOR.json"), $(jq -r '.blocking_findings // [] | length' "audit-$AUDITOR.json") blocking finding(s))"
+          else
+            status="error"
+            rm -f verdict.json
+            echo "::warning::Auditor $AUDITOR produced no valid verdict.json; the arbitrator will arbitrate without this seat."
+          fi
+
+          # Shell-safe seat name so the arbitrator can source every seat's file at once.
+          key=$(printf '%s' "$AUDITOR" | tr '[:lower:]-' '[:upper:]_')
+          {
+            echo "AUDIT_${key}_START_NS=${AUDIT_START_NS:-$audit_end_ns}"
+            echo "AUDIT_${key}_END_NS=$audit_end_ns"
+            echo "AUDIT_${key}_STATUS=$status"
+            echo "AUDIT_${key}_MODEL=$AUDITOR_MODEL"
+          } > "audit-$AUDITOR.env"
+
+      - name: Upload seat verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-${{ env.AUDITOR }}-${{ github.run_id }}
+          path: |
+            audit-${{ env.AUDITOR }}.json
+            audit-${{ env.AUDITOR }}.env
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+  melchior:
+    needs: context
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write # claude-code-action authenticates via OIDC
+    env:
+      PR: ${{ inputs.pr }}
+      AUDITOR: melchior
+      AUDITOR_MODEL: ${{ vars.MAGI_MODEL_MELCHIOR || 'z-ai/glm-5.3-flash' }}
+    steps:
+      - name: Checkout reviewed PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.context.outputs.head_sha }}
+          fetch-depth: 0
+
+      - name: Checkout prompt registry
+        uses: actions/checkout@v4
+        with:
+          repository: BiggerPockets/.github
+          ref: ${{ needs.context.outputs.registry_sha }}
+          token: ${{ secrets.BIGGIEPOCKETS_PAT }}
+          persist-credentials: false
+          path: registry
+
+      # The whole of stage 1: the diff, the PR, the ticket, its epic, the discussion, the
+      # design references, and the manifest saying which of those were available.
+      - name: Download review handoff
+        uses: actions/download-artifact@v4
+        with:
+          name: review-context-${{ github.run_id }}
+          path: .
+
+      - name: Restore review context
+        run: cat review-context.env >> "$GITHUB_ENV"
+
+      # Resolve again from the same pinned registry ref. Prompt text stays out of job
+      # outputs (which are size-limited), while the artifact carries all model inputs.
+      - name: Resolve review prompts
+        id: resolve
+        env:
+          REGISTRY_DIR: registry
+        run: registry/scripts/resolve-prompts.sh
+
+      # A seat with no model is a lost voice, not a fallback — fail before the panel can
+      # report a verdict short of a seat it claimed to have.
+      - name: Confirm seat model
+        run: |
+          if [ -z "$AUDITOR_MODEL" ]; then
+            echo "::error::Auditor '$AUDITOR' has no model: set MAGI_MODEL_$(printf '%s' "$AUDITOR" | tr '[:lower:]-' '[:upper:]_') as a repository variable, or give this job a default." >&2
+            exit 1
+          fi
+          echo "Auditor $AUDITOR runs $AUDITOR_MODEL"
+
+      - name: Record audit start time
+        run: echo "AUDIT_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+
+      - name: Audit independently
+        id: audit
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          # The action requires this input for launch validation. ANTHROPIC_AUTH_TOKEN
+          # below is what makes Claude Code send the OpenRouter key as a bearer token.
+          anthropic_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          # Allow the `claude` bot to trigger this review. Without this, PRs opened
+          # by the claude bot are rejected with "Workflow initiated by non-human
+          # actor: claude (type: Bot). Add bot to allowed_bots list."
+          allowed_bots: 'claude'
+          claude_args: '--allowedTools "Read,Grep,Glob,Bash,Write" --model ${{ env.AUDITOR_MODEL }}'
+          prompt: ${{ steps.resolve.outputs.auditor_prompt }}
+        env:
+          ANTHROPIC_BASE_URL: "https://openrouter.ai/api"
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
+
+      # Name the verdict for its seat before it leaves this job. The arbitrator reads
+      # audit-<seat>.json, and a seat that produced no usable verdict must be visible as
+      # such rather than absent: the recorded status is what stops a failed seat from
+      # being mistaken for a silent approval.
+      - name: Record seat verdict
+        if: always()
+        run: |
+          audit_end_ns=$(date +%s%N)
+          status="ok"
+          [ "${{ steps.audit.outcome }}" != "success" ] && status="error"
+
+          if [ -f verdict.json ] && jq -e '.verdict == "approve" or .verdict == "request_changes"' verdict.json >/dev/null 2>&1; then
+            mv verdict.json "audit-$AUDITOR.json"
+            echo "$AUDITOR: $(jq -r '.verdict' "audit-$AUDITOR.json") (confidence $(jq -r '.confidence // "unstated"' "audit-$AUDITOR.json"), $(jq -r '.blocking_findings // [] | length' "audit-$AUDITOR.json") blocking finding(s))"
+          else
+            status="error"
+            rm -f verdict.json
+            echo "::warning::Auditor $AUDITOR produced no valid verdict.json; the arbitrator will arbitrate without this seat."
+          fi
+
+          # Shell-safe seat name so the arbitrator can source every seat's file at once.
+          key=$(printf '%s' "$AUDITOR" | tr '[:lower:]-' '[:upper:]_')
+          {
+            echo "AUDIT_${key}_START_NS=${AUDIT_START_NS:-$audit_end_ns}"
+            echo "AUDIT_${key}_END_NS=$audit_end_ns"
+            echo "AUDIT_${key}_STATUS=$status"
+            echo "AUDIT_${key}_MODEL=$AUDITOR_MODEL"
+          } > "audit-$AUDITOR.env"
+
+      - name: Upload seat verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-${{ env.AUDITOR }}-${{ github.run_id }}
+          path: |
+            audit-${{ env.AUDITOR }}.json
+            audit-${{ env.AUDITOR }}.env
           if-no-files-found: error
           retention-days: 7
           overwrite: true
 
   # Stage 3. Weighs the three verdicts and issues the one that gets posted.
+  #
+  # Runs whenever stage 1 succeeded, even if a seat job failed outright: a seat that
+  # never started (no model configured, runner lost) would otherwise skip arbitration and
+  # leave the PR with no review at all. Whether a panel short a seat is still a panel is
+  # decided by the quorum check below, which says so out loud, rather than by GitHub
+  # silently skipping this job.
   arbitrate:
-    needs: [context, audit]
+    needs: [context, caspar, balthazar, melchior]
+    if: ${{ !cancelled() && needs.context.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

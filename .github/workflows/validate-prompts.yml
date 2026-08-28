@@ -173,10 +173,10 @@ jobs:
           done
           echo "arbiter prompt names every seat"
 
-      # The audit job fans out over this value via fromJSON, so it must be a JSON array
-      # of strings — a malformed one fails the matrix at run time, after stage 1 has
-      # already been paid for.
-      - name: Auditors output is a matrix-ready JSON array
+      # The arbitrator is told the panel roster through these outputs, and the quorum
+      # check counts against auditor_count. A malformed roster surfaces mid-review, after
+      # stage 1 and three audits have already been paid for.
+      - name: Auditors output is a well-formed panel roster
         env:
           PR: '12345'
         run: |
@@ -188,10 +188,60 @@ jobs:
           count=$(sed -n '/^auditor_count<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p' /tmp/o8.txt | sed '1d;$d')
           test "$count" = "$(printf '%s' "$auditors" | jq 'length')" \
             || { echo "auditor_count ($count) disagrees with auditors array" >&2; exit 1; }
-          # Single line, so it survives being interpolated into the matrix expression.
+          # Single line, so it survives being interpolated into a workflow expression.
           test "$(printf '%s' "$auditors" | wc -l | tr -d ' ')" = "0" \
             || { echo "auditors output must be compact single-line JSON" >&2; exit 1; }
-          echo "auditors matrix-ready ($auditors)"
+          echo "auditors roster well-formed ($auditors)"
+
+      # Each seat is a job of its own, so the panel's shape now lives in two files. These
+      # are the two ways that can go wrong, and both are invisible on inspection:
+      #
+      #   - The roster and the jobs disagree. A seat in registry.json with no job never
+      #     runs, and the arbitrator's quorum check reports a panel one seat short of the
+      #     one it was promised. A job with no roster entry runs an audit nobody counts.
+      #   - The seat jobs drift apart. What a disagreement between seats measures is the
+      #     models, so the harness around them has to be identical; three copies of a
+      #     steps block is exactly the kind of thing that drifts one seat at a time.
+      #     Everything seat-specific belongs in the job's `env`, which is why the
+      #     `steps:` blocks can be — and must stay — byte-identical.
+      - name: Seat jobs match the roster and each other
+        run: |
+          wf=.github/workflows/biggiepockets-review.yml
+          seats=$(jq -r '.auditors[]' prompts/registry.json)
+
+          # A job block runs from `  <seat>:` to the next line at that indent.
+          job_block() { awk -v start="  $1:" '
+            index($0, start) == 1 { inside = 1; next }
+            inside && /^  [^ ]/ { exit }
+            inside { print }' "$wf"; }
+
+          for seat in $seats; do
+            grep -qE "^  $seat:$" "$wf" \
+              || { echo "registry seat '$seat' has no job in $wf" >&2; exit 1; }
+            key=$(printf '%s' "$seat" | tr '[:lower:]-' '[:upper:]_')
+            job_block "$seat" | grep -q "MAGI_MODEL_$key" \
+              || { echo "job '$seat' does not read MAGI_MODEL_$key" >&2; exit 1; }
+            # Byte-identical means identical including the seat name, so nothing is
+            # normalized away here: the seat name must not appear in the steps at all.
+            job_block "$seat" | sed -n '/^    steps:$/,$p' > "/tmp/steps-$seat.txt"
+            test -s "/tmp/steps-$seat.txt" \
+              || { echo "job '$seat' has no steps block" >&2; exit 1; }
+          done
+
+          first=$(printf '%s\n' $seats | head -1)
+          for seat in $seats; do
+            diff -u "/tmp/steps-$first.txt" "/tmp/steps-$seat.txt" \
+              || { echo "seat job '$seat' has drifted from '$first'" >&2; exit 1; }
+          done
+
+          # And the other direction: every seat job the workflow defines is on the roster.
+          declared=$(grep -oE 'MAGI_MODEL_[A-Z0-9_]+' "$wf" | sort -u)
+          for var in $declared; do
+            seat=$(printf '%s' "${var#MAGI_MODEL_}" | tr '[:upper:]_' '[:lower:]-')
+            printf '%s\n' $seats | grep -qx "$seat" \
+              || { echo "$wf declares $var but '$seat' is not on the roster" >&2; exit 1; }
+          done
+          echo "seat jobs match the roster ($(printf '%s\n' $seats | wc -l | tr -d ' ') seats) and each other"
 
       - name: Resolver rejects a broken registry
         run: |

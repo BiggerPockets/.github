@@ -7,9 +7,11 @@ Org-wide GitHub defaults and shared reusable workflows.
 `.github/workflows/biggiepockets-review.yml` is a **reusable** workflow that reviews a pull
 request with a **panel** of independent auditors and an arbitrator:
 
-1. **Context** — gathers what the panel judges against: the diff, the PR's JIRA ticket and
-   its acceptance criteria, and the PR's existing discussion. **No model reviews the code
-   here.**
+1. **Context** — gathers everything the panel judges against and uploads it as one
+   immutable handoff: the diff, the PR itself, the JIRA ticket and its acceptance criteria,
+   that ticket's **epic**, the PR's existing discussion, and any **design references** found
+   in those texts — plus a manifest saying which of them were actually available. **No model
+   reviews the code here.**
 2. **Panel** — three auditors named **caspar**, **balthazar**, and **melchior** each audit
    the change *independently*, running the *same* auditor prompt, and each writes its own
    verdict (`approve` / `request_changes`, plus a stated confidence and its blocking
@@ -27,8 +29,8 @@ arbitrator's.
 
 ```mermaid
 flowchart LR
-  ctx["1 · context<br/>diff · ticket + AC · discussion<br/>(no model)"]
-  subgraph panel["2 · panel — one prompt, three separate jobs"]
+  ctx["1 · context<br/>diff · PR · ticket + AC · epic<br/>discussion · designs · manifest<br/>(no model)"]
+  subgraph panel["2 · panel — one prompt, three independent jobs"]
     direction TB
     caspar["caspar<br/>openai/gpt-5.6-luna"]
     balthazar["balthazar<br/>google/gemini-3.7-flash"]
@@ -49,12 +51,20 @@ The **BiggiePockets** service account then submits that `approve` / `request_cha
 on the PR. If the PR has no `BIG-XXXXX` key in its title (or the ticket can't be fetched),
 the review degrades gracefully to a diff-based review instead of failing.
 
-**What makes the audits independent.** Each seat runs in its own GitHub Actions job, on its
-own runner, and can read only the stage-1 handoff — never another seat's output. A seat
-writes its verdict to `audit-<seat>.json` and uploads it; the arbitration job is the first
-and only place in the run where more than one verdict exists together. So when two auditors
-disagree, they disagree because they judged the code differently, not because one saw the
-other's answer.
+**What makes the audits independent.** Each seat is a job of its own — `caspar`,
+`balthazar`, `melchior`, each named for the seat and each written out in the workflow rather
+than fanned out from a matrix. A seat runs on its own runner, can read only the stage-1
+handoff, and never another seat's output. It writes its verdict to `audit-<seat>.json` and
+uploads it; the arbitration job is the first and only place in the run where more than one
+verdict exists together. So when two auditors disagree, they disagree because they judged the
+code differently, not because one saw the other's answer.
+
+Everything that differs between the three jobs lives in the job's `env` — the seat name and
+its model — which leaves their `steps:` blocks byte-identical. That is load-bearing: a split
+between seats is only evidence about the models if the harness around them is the same, and
+three copies of a block drift one seat at a time. CI diffs the blocks and fails if they stop
+matching, and fails too if the set of seat jobs stops matching the roster in
+`prompts/registry.json`.
 
 The seats run **different models** on the identical prompt (see *Models* below). That is the
 point: with the prompt held fixed, a split between seats is signal about the change, whereas
@@ -69,8 +79,8 @@ but may not introduce a blocking issue no auditor found — it arbitrates rather
 a fourth reviewer. The posted summary closes with a `Panel:` line recording how the seats
 split and where the arbitrator overrode them.
 
-**Retries.** Stage 1 uploads the reviewed commit's diff and ticket/discussion context as one
-short-lived artifact; every later job downloads that immutable handoff, so all three auditors
+**Retries.** Stage 1 uploads the reviewed commit's whole context as one short-lived
+artifact; every later job downloads that immutable handoff, so all three auditors
 judge the exact same commit even if the PR is pushed to mid-review. If a seat is rate-limited,
 use **Re-run failed jobs** on the workflow run: GitHub re-runs only the failed seats, reusing
 the context stage that already succeeded. A seat that produces
@@ -84,6 +94,39 @@ those two can split 1-1. That is the case where the arbitrator decides alone, so
 `arbiter_followed_panel:no_majority` rather than scored as overriding a majority that never
 existed. The alternative — demanding all three seats — would let one rate-limited seat fail
 an entire review.
+
+### What the panel is given
+
+Stage 1 gathers context and nothing else — it never reads the diff to form a view of it. Each
+source becomes one file in the handoff every seat downloads:
+
+| File | What it holds |
+| --- | --- |
+| `context-manifest.json` | What was gathered, and which sources were unavailable and why |
+| `pr.diff` | The diff of the reviewed commit against its base |
+| `pr.json` | Title, body, labels, commit messages, and the touched files with line counts |
+| `ticket.json` | The `BIG-XXXXX` ticket from the PR title: summary, description, acceptance criteria, status, type, and its parent's key |
+| `epic.json` | That parent — where the wider goal usually lives, when a ticket's own description reads as a fragment |
+| `conversations.json` | The PR's existing discussion: comments, inline review threads, prior reviews |
+| `designs.json` | Design references found in all of the above: Figma and other design-tool links, screenshots, walkthrough videos, ticket attachments |
+
+A source that isn't there is recorded as `{"available": false, "reason": …}` rather than
+failing the review: a PR with no ticket, no epic and no designs is still reviewable, just with
+less to judge intent against. The manifest exists so an auditor can tell *"there is no epic
+for this work"* from *"the epic fetch failed"* — both otherwise read as silence, which is how
+a review ends up judging intent against nothing and not saying so. The prompts require an
+auditor to name context it did not have and what it could not judge without it.
+
+Design links are **recorded, never followed**. The panel has no Figma credentials, and a code
+review has no reason to pull design or member-facing content into a build artifact. What a
+recorded link buys an auditor is the knowledge that a design exists for this work — the
+difference between "no design was specified" and "a design was specified and I can't see it" —
+and the prompts forbid treating a reference it can't open as a defect.
+
+No handoff file carries an author, assignee or reporter: the panel judges the change, not who
+wrote it, and leaving identities out keeps them off the artifacts and out of telemetry. The
+PR discussion is the one exception, because attribution is what makes *"a human reviewer
+objected and it was never resolved"* legible to the panel.
 
 ### Models
 
@@ -99,10 +142,10 @@ repo. An unset or empty variable keeps the default. Stage 1 runs no model, so it
 | Arbitration | `ARBITER_MODEL` | `openai/gpt-5.6-sol` |
 
 There is no fallback model. A seat listed in `prompts/registry.json` with no
-`MAGI_MODEL_<SEAT>` of its own fails its matrix leg with an explicit error, so adding a seat
-is deliberately a two-part change: registry entry plus model. A seat that quietly ran the
-same model as another seat would be a panel that had lost a voice while still reporting three
-verdicts — worse than a leg that fails and says why.
+`MAGI_MODEL_<SEAT>` of its own fails its own job with an explicit error, so adding a seat is
+deliberately a three-part change: roster entry, job, model. A seat that quietly ran the same
+model as another seat would be a panel that had lost a voice while still reporting three
+verdicts — worse than a seat that fails and says why.
 
 Changing a seat's model never touches the prompt — the auditor prompt is seat-agnostic by
 construction, and CI asserts it.
@@ -208,9 +251,10 @@ write access.
 ### Using it
 
 If your repo lists a review job as a **required status check**, the job names are `context`,
-`audit (<seat>)` per seat, and `arbitrate`. Stage 1 was previously named `codex`; a branch
-protection rule still requiring `codex` will block merges forever, since no job by that name
-runs any more.
+one per seat (`caspar`, `balthazar`, `melchior`), and `arbitrate`. Two of those changed: stage
+1 was once named `codex`, and the seats were once matrix legs reported as `audit (caspar)` and
+friends. A branch protection rule still requiring `codex` or `audit (…)` will block merges
+forever, since no job by those names runs any more.
 
 Once installed, trigger a review either way:
 
@@ -248,11 +292,13 @@ prompts/
   shared blocks it includes — it changes only when that prompt's text changes, not per PR
   and not per seat. One `auditor_prompt_version` therefore covers all three audit spans, and
   Datadog LLM Obs can attribute quality to the exact prompt text that ran.
-- **Panel seats.** `registry.json` lists the seats under `auditors`. The workflow fans its
-  audit job out over that list, so adding or removing a seat is a one-line registry change —
-  no workflow edit. The resolver rejects a panel of fewer than two seats, duplicate seat
-  names, and seat names that aren't safe as artifact names, file names, and env-var suffixes.
-  Seat models are set in the workflow, never here (see *Models* above).
+- **Panel seats.** `registry.json` lists the seats under `auditors`. That roster is what
+  tells the arbitrator how many verdicts to expect, so a seat that failed reads as a gap
+  rather than an absence. Each seat also has a job of its own in the workflow, which means
+  adding or removing one is a change in both files — CI fails if they disagree. The resolver
+  rejects a panel of fewer than two seats, duplicate seat names, and seat names that aren't
+  safe as artifact names, file names, and env-var suffixes. Seat models are set in the
+  workflow, never here (see *Models* above).
 - **Prompt Tracking.** Every LLM span carries the prompt that produced it under
   `meta.input.prompt` — the registry template with its `{{PR}}`-style placeholders intact,
   plus the values that filled them as `variables`, plus `id`/`name`/`version`. Keeping the

@@ -32,8 +32,8 @@
 #
 # Inputs (env): REGISTRY_DIR, PR.
 # Outputs: auditor_prompt{,_name,_version,_template}; arbiter_prompt{,_name,_version,_template};
-# auditors (JSON array of seat names, which the workflow feeds straight into its fan-out
-# matrix); auditor_count.
+# auditors (JSON array of seat names — the panel roster the arbitrator is told to expect,
+# one job per seat in the workflow); auditor_count.
 
 set -euo pipefail
 
@@ -176,7 +176,8 @@ write_output() { # name value — multiline-safe via GITHUB_OUTPUT heredoc; fixe
 emit_prompt "auditor" "$AUDITOR_NAME"
 emit_prompt "arbiter" "$ARBITER_NAME"
 
-# Emitted as compact JSON so the workflow can hand it directly to a matrix `include`.
+# Emitted as compact JSON, on one line, so it survives interpolation into a workflow
+# expression.
 write_output "auditors" "$(jq -c '.auditors' "$REGISTRY_FILE")"
 write_output "auditor_count" "${#AUDITORS[@]}"
 

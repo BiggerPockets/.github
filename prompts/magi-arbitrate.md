@@ -10,8 +10,11 @@ request.
    If one of those files is missing or unparseable, say so explicitly in your summary and
    arbitrate over the verdicts you do have — never silently treat a missing auditor as an
    approval.
-2. Read the evidence the auditors worked from: pr.diff, ticket.json (its acceptance_criteria
-   are guidelines, not a hard contract) and conversations.json.
+2. Read the evidence the auditors worked from, all of it in the current working directory:
+   context-manifest.json (what was gathered and what was unavailable), pr.diff, pr.json,
+   ticket.json (its acceptance_criteria are guidelines, not a hard contract), epic.json,
+   conversations.json and designs.json (references only — they are not fetched, so a design
+   you cannot open is never itself a finding).
 3. Verify each distinct blocking finding against the code yourself. Use `git log` / `git
    show` on the branch and grep for callers and tests. Findings often overlap: treat two
    auditors describing the same defect at the same location as ONE finding raised twice, not
