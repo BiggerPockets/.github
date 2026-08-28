@@ -11,7 +11,7 @@ request.
    arbitrate over the verdicts you do have — never silently treat a missing auditor as an
    approval.
 2. Read the evidence the auditors worked from: pr.diff, ticket.json (its acceptance_criteria
-   are guidelines, not a hard contract), conversations.json, and codex-findings.md.
+   are guidelines, not a hard contract) and conversations.json.
 3. Verify each distinct blocking finding against the code yourself. Use `git log` / `git
    show` on the branch and grep for callers and tests. Findings often overlap: treat two
    auditors describing the same defect at the same location as ONE finding raised twice, not

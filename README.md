@@ -7,15 +7,23 @@ Org-wide GitHub defaults and shared reusable workflows.
 `.github/workflows/biggiepockets-review.yml` is a **reusable** workflow that reviews a pull
 request with a **panel** of independent auditors and an arbitrator:
 
-1. **First pass** — Codex reviews the diff against the PR's JIRA ticket and writes leads to
-   `codex-findings.md`.
+1. **Context** — gathers what the panel judges against: the diff, the PR's JIRA ticket and
+   its acceptance criteria, and the PR's existing discussion. **No model reviews the code
+   here.**
 2. **Panel** — three auditors named **caspar**, **balthazar**, and **melchior** each audit
    the change *independently*, running the *same* auditor prompt, and each writes its own
    verdict (`approve` / `request_changes`, plus a stated confidence and its blocking
-   findings). Each verifies the first-pass leads itself, greps for callers and tests, and
-   factors in the existing PR discussion and the ticket's intent.
+   findings). Each reads the diff cold, greps for callers and tests, and factors in the
+   existing PR discussion and the ticket's intent.
 3. **Arbitration** — one arbitrator reads all three verdicts, verifies each blocking finding
    against the code, weighs the panel, and issues the single verdict that gets posted.
+
+**Nothing reviews the diff ahead of the panel.** The auditors are the first thing to form an
+opinion about the code, and stage 1 is deliberately model-free. A pre-pass that handed the
+panel a list of findings would get three auditors agreeing about one model's opinion, which
+is exactly the failure a panel exists to avoid — so CI asserts no prompt reads a
+pre-existing findings file and the registry declares no prompt but the auditor's and the
+arbitrator's.
 
 The **BiggiePockets** service account then submits that `approve` / `request_changes` review
 on the PR. If the PR has no `BIG-XXXXX` key in its title (or the ticket can't be fetched),
@@ -41,11 +49,11 @@ but may not introduce a blocking issue no auditor found — it arbitrates rather
 a fourth reviewer. The posted summary closes with a `Panel:` line recording how the seats
 split and where the arbitrator overrode them.
 
-**Retries.** Stage 1 uploads the reviewed commit's diff, ticket/discussion context, and
-first-pass findings as one short-lived artifact; every later job downloads that immutable
-handoff, so all three auditors judge the exact same commit even if the PR is pushed to
-mid-review. If a seat is rate-limited, use **Re-run failed jobs** on the workflow run:
-GitHub re-runs only the failed seats, reusing the completed first pass. A seat that produces
+**Retries.** Stage 1 uploads the reviewed commit's diff and ticket/discussion context as one
+short-lived artifact; every later job downloads that immutable handoff, so all three auditors
+judge the exact same commit even if the PR is pushed to mid-review. If a seat is rate-limited,
+use **Re-run failed jobs** on the workflow run: GitHub re-runs only the failed seats, reusing
+the context stage that already succeeded. A seat that produces
 no valid verdict is recorded as failed rather than counted as an approval, and arbitration
 requires a **majority of seats** to have reported — below that it fails loudly instead of
 quietly downgrading to a one-reviewer review.
@@ -59,13 +67,12 @@ an entire review.
 
 ### Models
 
-Every stage's model is an OpenRouter slug with a default pinned in the workflow, overrideable
-per repo by setting the matching **Actions variable** (Settings → Actions → Variables) in the
-calling repo. An unset or empty variable keeps the default.
+Every model an OpenRouter slug with a default pinned in the workflow, overrideable per repo
+by setting the matching **Actions variable** (Settings → Actions → Variables) in the calling
+repo. An unset or empty variable keeps the default. Stage 1 runs no model, so it has no entry.
 
 | Stage | Variable | Default |
 | --- | --- | --- |
-| First pass | `CODEX_MODEL` | `openai/gpt-5.6-sol` |
 | caspar | `MAGI_MODEL_CASPAR` | `openai/gpt-5.6-luna` |
 | balthazar | `MAGI_MODEL_BALTHAZAR` | `google/gemini-3.7-flash` |
 | melchior | `MAGI_MODEL_MELCHIOR` | `z-ai/glm-5.3-flash` |
@@ -137,8 +144,8 @@ jobs:
 #### 3. Make the secrets available
 
 The reusable workflow consumes several secrets via `secrets: inherit`: credentials for the
-AI review provider (`OPENROUTER_API_KEY`, shared by every stage — the first pass, all three
-seats, and arbitration), an Atlassian email + API token to fetch the PR's JIRA ticket for
+AI review provider (`OPENROUTER_API_KEY`, shared by all three seats and arbitration), an
+Atlassian email + API token to fetch the PR's JIRA ticket for
 intent, and a personal access token for the BiggiePockets service account that submits the
 review. Configure them as **organization secrets** (recommended — set once, available to
 every repo) or as per-repo secrets if you prefer to scope them.
@@ -146,8 +153,8 @@ every repo) or as per-repo secrets if you prefer to scope them.
 It also reports per-review traces to the `biggiepockets-review` app in Datadog LLM
 Observability via `secrets.DATADOG_API_KEY`: the arbitrated verdict, how the panel split,
 each seat's own verdict and confidence, timing per stage, prompt template and version
-(tracked as prompts, see below), the model each stage ran, the first-pass findings text, and
-the summary the arbitrator wrote — so review quality is inspectable, not just counted. This
+(tracked as prompts, see below), the model each stage ran, and the summary the arbitrator
+wrote — so review quality is inspectable, not just counted. This
 secret is optional; reviews still run and post normally without it, but no metrics are
 reported.
 
@@ -176,6 +183,11 @@ write access.
 
 ### Using it
 
+If your repo lists a review job as a **required status check**, the job names are `context`,
+`audit (<seat>)` per seat, and `arbitrate`. Stage 1 was previously named `codex`; a branch
+protection rule still requiring `codex` will block merges forever, since no job by that name
+runs any more.
+
 Once installed, trigger a review either way:
 
 - **Request a review** — add **BiggiePockets** as a reviewer on the PR. The workflow fires
@@ -193,15 +205,14 @@ resolved at runtime by `scripts/resolve-prompts.sh`:
 ```
 prompts/
   registry.json                # which prompt runs at each stage + the panel seats
-  codex-first-pass.md          # stage 1 prompt (template)
   magi-audit.md                # stage 2 prompt — every seat runs this one text (template)
   magi-arbitrate.md            # stage 3 prompt (template)
   _shared/{completeness,privacy,migration-data,perf,parsing,navigation}-rules.md  # shared rule blocks
 ```
 
 - **Templates + shared blocks.** Each prompt references the shared rule blocks via
-  `{{@prompts/_shared/<name>.md}}`, so the first-pass and auditor prompts can never drift
-  out of sync. Prompts also resolve `{{PR}}`, `{{PROMPT_NAME}}`, `{{PROMPT_VERSION}}`, and
+  `{{@prompts/_shared/<name>.md}}`, so one edit updates every prompt that enforces that
+  rule. Prompts also resolve `{{PR}}`, `{{PROMPT_NAME}}`, `{{PROMPT_VERSION}}`, and
   `{{AUDITORS}}` (the seat list, which the arbitrator needs so a missing verdict reads as a
   gap rather than an absence).
 - **One auditor prompt, three seats.** The resolver emits `auditor_prompt` **once** and
@@ -230,7 +241,6 @@ prompts/
 
   ```
   biggiepockets.review
-    ├── codex.review
     ├── magi.audit.caspar
     ├── magi.audit.balthazar
     ├── magi.audit.melchior
@@ -255,12 +265,13 @@ prompts/
 
   Spans carrying `arm`, `arm_role`, `arm_agreement`, `experiment_verdict`, or
   `label_assignment` tags came from the earlier A/B setup and are not comparable to these;
-  exclude them when querying.
+  neither are spans carrying `codex_model` or a `codex.review` child, which came from a
+  pre-panel first pass that no longer runs. Exclude both when querying.
 
 **Registry operations:**
 
 - **Roll** — edit a prompt or shared-rule file; its content-derived `prompt_version` bumps.
-- **Apply** — point `codex_prompt`, `auditor_prompt`, or `arbiter_prompt` at a different
+- **Apply** — point `auditor_prompt` or `arbiter_prompt` at a different
   stored prompt (no version change). Callers tracking `@main` pick the change up on their
   next run. A caller that pins `uses:` to a tag or SHA needs BOTH that `@ref` and its
   `registry_ref` input bumped in lockstep — Apply owns that ref-bump explicitly.

@@ -25,9 +25,8 @@ jobs:
 
       - name: Validate registry config
         run: |
-          jq -e '.version == 3' prompts/registry.json >/dev/null
-          jq -e '.codex_prompt == "codex-first-pass"' prompts/registry.json >/dev/null
-          for field in codex_prompt auditor_prompt arbiter_prompt; do
+          jq -e '.version == 4' prompts/registry.json >/dev/null
+          for field in auditor_prompt arbiter_prompt; do
             name=$(jq -r --arg f "$field" '.[$f] // empty' prompts/registry.json)
             test -n "$name" || { echo "registry.json missing $field"; exit 1; }
             test -f "prompts/$name.md" || { echo "prompts/$name.md missing for $field"; exit 1; }
@@ -81,7 +80,7 @@ jobs:
           # Only the *resolved* prompts must be marker-free. The *_prompt_template
           # outputs keep their {{PR}}/{{PROMPT_NAME}}/{{PROMPT_VERSION}}/{{AUDITORS}}
           # placeholders on purpose — that is the template Datadog Prompt Tracking records.
-          for out in codex_prompt auditor_prompt arbiter_prompt; do
+          for out in auditor_prompt arbiter_prompt; do
             resolved=$(sed -n "/^$out<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p" /tmp/o4.txt | sed '1d;$d')
             test -n "$resolved" || { echo "$out resolved to empty text" >&2; exit 1; }
             if printf '%s' "$resolved" | grep -qE '\{\{'; then
@@ -103,7 +102,7 @@ jobs:
           # template. They keep {{PR}}-style placeholders, but a shared-rule include
           # must already be expanded — an unexpanded {{@...}} would ship a template
           # that no longer matches the text the model actually saw.
-          for out in codex_prompt_template auditor_prompt_template arbiter_prompt_template; do
+          for out in auditor_prompt_template arbiter_prompt_template; do
             tmpl=$(sed -n "/^$out<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p" /tmp/o5.txt | sed '1d;$d')
             test -n "$tmpl" || { echo "$out is empty" >&2; exit 1; }
             if printf '%s' "$tmpl" | grep -qE '\{\{@'; then
@@ -113,6 +112,26 @@ jobs:
             fi
           done
           echo "templates include-expanded"
+
+      # Independence is only real if the auditors are the FIRST thing to read the diff.
+      # A pre-pass that hands the panel a list of findings makes three auditors agree
+      # about one model's opinion, which is the failure the panel exists to avoid. Assert
+      # the registry declares no prompt other than the auditor's and the arbitrator's, and
+      # that no prompt tells a model to read a pre-existing findings file.
+      - name: Nothing reviews the diff ahead of the panel
+        run: |
+          extra=$(jq -r 'to_entries
+            | map(select(.key | test("_prompt$")))
+            | map(.key)
+            | map(select(. != "auditor_prompt" and . != "arbiter_prompt"))
+            | join(", ")' prompts/registry.json)
+          test -z "$extra" \
+            || { echo "registry.json declares a pre-panel prompt: $extra" >&2; exit 1; }
+          if grep -rniE 'codex-findings|first[- ]pass|pre-?pass' prompts/; then
+            echo "a prompt references a pre-panel review pass" >&2
+            exit 1
+          fi
+          echo "no pre-panel review stage"
 
       # The whole point of the panel is three INDEPENDENT judgments of the same question.
       # If the resolver ever parameterized the auditor prompt by seat, the seats would be

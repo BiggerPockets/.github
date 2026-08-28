@@ -4,8 +4,11 @@ name: BiggiePockets Code Review (reusable)
 # service account submitting the resulting approve / request-changes decision.
 #
 # A review runs in three stages:
-#   1. First pass  — Codex reads the diff against the ticket and writes leads to
-#                    codex-findings.md.
+#   1. Context     — gathers what the panel judges against: the diff, the PR's JIRA ticket
+#                    and its acceptance criteria, and the PR discussion. No model reviews
+#                    the code here. Nothing reads the diff ahead of the panel, so no
+#                    finding is planted in front of the auditors whose independence is the
+#                    whole point of the panel.
 #   2. Panel       — three auditors (caspar, balthazar, melchior) each audit the change
 #                    INDEPENDENTLY, in separate jobs, running the SAME auditor prompt,
 #                    and each writes its own verdict. No auditor can see another's
@@ -22,11 +25,10 @@ name: BiggiePockets Code Review (reusable)
 #   BIGGIEPOCKETS_PAT, DATADOG_API_KEY (optional; enables review-quality
 #   metrics in Datadog LLM Obs).
 #
-# Models: every stage's model is an OpenRouter slug pinned below and overrideable per
-# repository without editing this workflow — set the matching Actions *variable* in the
-# calling repo (Settings → Actions → Variables), which the `vars` context below reads.
-# An unset or empty variable keeps the pinned default.
-#   CODEX_MODEL           first pass    (default openai/gpt-5.6-sol)
+# Models: every model-running stage's model is an OpenRouter slug pinned below and
+# overrideable per repository without editing this workflow — set the matching Actions
+# *variable* in the calling repo (Settings → Actions → Variables), which the `vars`
+# context below reads. An unset or empty variable keeps the pinned default.
 #   MAGI_MODEL_CASPAR     caspar        (default openai/gpt-5.6-luna)
 #   MAGI_MODEL_BALTHAZAR  balthazar     (default google/gemini-3.7-flash)
 #   MAGI_MODEL_MELCHIOR   melchior      (default z-ai/glm-5.3-flash)
@@ -36,8 +38,8 @@ name: BiggiePockets Code Review (reusable)
 # what a disagreement between seats measures is the models, and three runs of one model
 # would mostly agree trivially and leave the arbitrator nothing to weigh.
 #
-# Prompt versioning: every prompt lives in this repo's prompts/ registry
-# (BiggerPockets/.github) as a versioned template, plus one shared rule block per
+# Prompt versioning: both prompts live in this repo's prompts/ registry
+# (BiggerPockets/.github) as versioned templates, plus one shared rule block per
 # concern under prompts/_shared/ injected via {{@path}}. Prompts are resolved by
 # scripts/resolve-prompts.sh into step outputs; a derived prompt_version (content hash)
 # identifies each prompt in Datadog LLM Obs. Each LLM span also carries its template and
@@ -64,15 +66,18 @@ on:
         type: string
 
 jobs:
-  # Stage 1. Gathers every input the panel reads and runs the Codex first pass, then
-  # uploads the lot as one immutable handoff. Separate from the panel jobs because GitHub
-  # can only re-run a failed JOB (not an individual step): this boundary lets a
-  # rate-limited auditor be retried without paying for another Codex pass or re-fetching
-  # the diff, and guarantees all three auditors judge the exact same commit and context.
+  # Stage 1. Gathers every input the panel reads — the diff, the JIRA ticket, the PR
+  # discussion — and uploads the lot as one immutable handoff. No model runs here: the
+  # panel is the first thing that forms an opinion about the code.
   #
-  # Job id stays `codex` so a repo that has this stage as a required status check keeps
-  # matching it.
-  codex:
+  # Separate from the panel jobs because GitHub can only re-run a failed JOB (not an
+  # individual step): this boundary lets a rate-limited auditor be retried without
+  # re-fetching the diff and ticket, and guarantees all three auditors judge the exact
+  # same commit and context.
+  #
+  # NOTE for callers: this job was previously named `codex`. A repo that lists it as a
+  # required status check must switch that check to `context`.
+  context:
     runs-on: ubuntu-latest
     outputs:
       head_sha: ${{ steps.pr_head.outputs.sha }}
@@ -81,14 +86,8 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      id-token: write # claude-code-action authenticates via OIDC
     env:
       PR: ${{ inputs.pr }}
-      # The first pass runs through OpenRouter, so its model must be an OpenRouter model
-      # slug and must be set explicitly — Codex's own default model name is not one
-      # OpenRouter accepts.
-      CODEX_MODEL: ${{ vars.CODEX_MODEL || 'openai/gpt-5.6-sol' }}
-      CODEX_RESPONSES_ENDPOINT: "https://openrouter.ai/api/v1/responses"
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
@@ -96,8 +95,9 @@ jobs:
           ref: refs/pull/${{ inputs.pr }}/head
           fetch-depth: 0
 
-      # Pin every later job to the exact commit the first pass read. This matters when a
-      # failed audit or arbitration job is retried after the PR has received another push.
+      # Pin every later job to the exact commit this context was gathered from. This
+      # matters when a failed audit or arbitration job is retried after the PR has
+      # received another push.
       - name: Record PR head SHA
         id: pr_head
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -200,81 +200,30 @@ jobs:
             > conversations.json
           echo "Wrote conversations.json ($(jq '.issue_comments | length' conversations.json) comments, $(jq '.review_comments | length' conversations.json) review comments, $(jq '.reviews | length' conversations.json) reviews)"
 
-      # Resolve the prompts from the registry — the first-pass prompt, the single auditor
-      # prompt every seat runs, and the arbitrator prompt — each with its shared-rule
-      # blocks expanded and a content-derived prompt_version. Also emits the panel seats,
-      # which drive the audit job's fan-out matrix.
+      # Resolve the prompts from the registry — the single auditor prompt every seat runs
+      # and the arbitrator prompt — each with its shared-rule blocks expanded and a
+      # content-derived prompt_version. Also emits the panel seats, which drive the audit
+      # job's fan-out matrix.
       - name: Resolve review prompts
         id: resolve
         env:
           REGISTRY_DIR: registry
         run: registry/scripts/resolve-prompts.sh
 
-      # Stage 1: Codex reviews the diff against the ticket intent and writes leads to
-      # codex-findings.md (the `output-file`, which captures Codex's final message). The
-      # panel treats these as leads to verify, not conclusions to adopt.
-      #
-      # Codex reviews the diff directly here rather than shelling out to the `codex review`
-      # subcommand. `codex review` starts its own in-process app-server that needs both a
-      # writable runtime home AND a localhost connection to the action's Responses API proxy.
-      # When it was launched as a child of `codex exec`, that child inherited the exec sandbox,
-      # which grants neither by default: under `sandbox: read-only` it died writing runtime
-      # state ("failed to initialize in-process app-server client: Read-only file system
-      # (os error 30)"), and under a writable profile it then died reaching the proxy
-      # ("stream disconnected before completion: error sending request for url
-      # http://127.0.0.1.../v1/responses"), because that profile grants filesystem writes but
-      # no network. Either way Codex produced no findings and every review silently degraded to
-      # a panel-only pass. Reviewing inline via this step's own `codex exec` model call avoids
-      # the nested subprocess entirely: it needs only to read files, so a read-only sandbox is
-      # sufficient and there is no child process to sandbox.
-      #
-      # continue-on-error keeps a Codex failure (e.g. an OpenAI "Quota exceeded" error) from
-      # blocking the review: the panel proceeds on its own when codex-findings.md is missing or
-      # empty. The next step still surfaces the failure as a warning so a genuinely broken Codex
-      # (e.g. a bad key) doesn't silently disappear.
-      - name: Record codex start time
-        run: echo "CODEX_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
-
-      - name: Codex first-pass review
-        id: codex
-        continue-on-error: true
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ secrets.OPENROUTER_API_KEY }}
-          responses-api-endpoint: ${{ env.CODEX_RESPONSES_ENDPOINT }}
-          model: ${{ env.CODEX_MODEL }}
-          sandbox: read-only
-          output-file: codex-findings.md
-          prompt: ${{ steps.resolve.outputs.codex_prompt }}
-
-      # If Codex failed (it exits nonzero and writes no codex-findings.md — e.g. on a quota
-      # error), leave an empty findings file so the panel cleanly takes its no-findings path,
-      # and record a warning for observability.
-      - name: Note skipped Codex first pass
-        if: steps.codex.outcome == 'failure'
+      # Persist the handoff. Every auditor consumes the same diff and ticket/discussion
+      # context, on every retry.
+      # No `if: always()` on this or the upload: a stage that failed part-way through
+      # must not hand the panel a half-built context. Fail here and the whole review
+      # stops, which is the correct outcome.
+      - name: Record context metadata
         run: |
-          echo "::warning::Codex first-pass review failed (commonly an OpenAI quota error); continuing with a panel-only review."
-          : > codex-findings.md
-
-      # Persist the handoff even when Codex failed. Every auditor consumes the same diff,
-      # ticket/discussion context, and (possibly empty) findings, on every retry.
-      - name: Record Codex completion metadata
-        if: always()
-        run: |
-          codex_end_ns=$(date +%s%N)
-          echo "CODEX_END_NS=$codex_end_ns" >> "$GITHUB_ENV"
           {
             echo "BASE_REF=$BASE_REF"
             echo "REVIEW_START_NS=$REVIEW_START_NS"
-            echo "CODEX_START_NS=$CODEX_START_NS"
-            echo "CODEX_END_NS=$codex_end_ns"
-            echo "CODEX_STATUS=${{ steps.codex.outcome }}"
-            echo "CODEX_MODEL_USED=$CODEX_MODEL"
+            echo "CONTEXT_END_NS=$(date +%s%N)"
           } > review-context.env
-          touch codex-findings.md
 
       - name: Upload review handoff
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: review-context-${{ github.run_id }}
@@ -282,7 +231,6 @@ jobs:
             pr.diff
             ticket.json
             conversations.json
-            codex-findings.md
             review-context.env
           if-no-files-found: error
           retention-days: 7
@@ -297,12 +245,12 @@ jobs:
   # model step is continue-on-error so a rate-limited seat still leaves a recorded status
   # for the arbitrator. "Re-run failed jobs" re-runs only the seats that failed.
   audit:
-    needs: codex
+    needs: context
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        auditor: ${{ fromJSON(needs.codex.outputs.auditors) }}
+        auditor: ${{ fromJSON(needs.context.outputs.auditors) }}
     permissions:
       contents: read
       pull-requests: read
@@ -321,14 +269,14 @@ jobs:
       - name: Checkout reviewed PR head
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.codex.outputs.head_sha }}
+          ref: ${{ needs.context.outputs.head_sha }}
           fetch-depth: 0
 
       - name: Checkout prompt registry
         uses: actions/checkout@v4
         with:
           repository: BiggerPockets/.github
-          ref: ${{ needs.codex.outputs.registry_sha }}
+          ref: ${{ needs.context.outputs.registry_sha }}
           token: ${{ secrets.BIGGIEPOCKETS_PAT }}
           persist-credentials: false
           path: registry
@@ -433,7 +381,7 @@ jobs:
 
   # Stage 3. Weighs the three verdicts and issues the one that gets posted.
   arbitrate:
-    needs: [codex, audit]
+    needs: [context, audit]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -446,14 +394,14 @@ jobs:
       - name: Checkout reviewed PR head
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.codex.outputs.head_sha }}
+          ref: ${{ needs.context.outputs.head_sha }}
           fetch-depth: 0
 
       - name: Checkout prompt registry
         uses: actions/checkout@v4
         with:
           repository: BiggerPockets/.github
-          ref: ${{ needs.codex.outputs.registry_sha }}
+          ref: ${{ needs.context.outputs.registry_sha }}
           token: ${{ secrets.BIGGIEPOCKETS_PAT }}
           persist-credentials: false
           path: registry
@@ -631,7 +579,6 @@ jobs:
       # blocks/fails/delays the review itself.
       #
       #   root biggiepockets.review
-      #     ├── codex.review
       #     ├── magi.audit.<seat>   (one span per auditor)
       #     └── magi.arbitrate
       #
@@ -644,7 +591,6 @@ jobs:
         continue-on-error: true
         env:
           DD_API_KEY: ${{ secrets.DATADOG_API_KEY }}
-          CODEX_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.codex_prompt_template }}
           AUDITOR_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.auditor_prompt_template }}
           ARBITER_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.arbiter_prompt_template }}
           AUDITORS_JSON: ${{ steps.resolve.outputs.auditors }}
@@ -656,23 +602,15 @@ jobs:
 
           now_ns=$(date +%s%N)
           review_start_ns="${REVIEW_START_NS:-$now_ns}"
-          codex_start_ns="${CODEX_START_NS:-$review_start_ns}"
-          codex_end_ns="${CODEX_END_NS:-$codex_start_ns}"
-          arbiter_start_ns="${ARBITER_START_NS:-$codex_end_ns}"
+          context_end_ns="${CONTEXT_END_NS:-$review_start_ns}"
+          arbiter_start_ns="${ARBITER_START_NS:-$context_end_ns}"
           arbiter_end_ns="${ARBITER_END_NS:-$arbiter_start_ns}"
 
           verdict="${VERDICT:-unknown}"
-          codex_prompt_name="${{ steps.resolve.outputs.codex_prompt_name }}"
-          codex_prompt_version="${{ steps.resolve.outputs.codex_prompt_version }}"
           auditor_prompt_name="${{ steps.resolve.outputs.auditor_prompt_name }}"
           auditor_prompt_version="${{ steps.resolve.outputs.auditor_prompt_version }}"
           arbiter_prompt_name="${{ steps.resolve.outputs.arbiter_prompt_name }}"
           arbiter_prompt_version="${{ steps.resolve.outputs.arbiter_prompt_version }}"
-
-          codex_status="ok"
-          [ "${CODEX_STATUS:-failure}" != "success" ] && codex_status="error"
-          codex_findings=$(cat codex-findings.md 2>/dev/null || true)
-          codex_findings_lines=$(wc -l < codex-findings.md 2>/dev/null || echo 0)
 
           arbiter_status="ok"
           [ "${{ steps.arbiter.outcome }}" != "success" ] && arbiter_status="error"
@@ -683,9 +621,9 @@ jobs:
           summary=""
           [ -f verdict.json ] && summary=$(jq -r '.summary // ""' verdict.json 2>/dev/null) || summary=""
 
-          # Cap free-text fields sent to Datadog so one outsized findings report can't
-          # blow past the LLM Obs payload limit; the untruncated text is always still in
-          # this step's own job logs.
+          # Cap free-text fields sent to Datadog so one outsized summary can't blow past
+          # the LLM Obs payload limit; the untruncated text is always still in this step's
+          # own job logs.
           truncate() {
             local text="$1" max=4000
             if [ "${#text}" -gt "$max" ]; then
@@ -694,7 +632,6 @@ jobs:
               printf '%s' "$text"
             fi
           }
-          codex_findings_excerpt=$(truncate "$codex_findings")
           summary_excerpt=$(truncate "$summary")
 
           # Prompt Tracking: each LLM span carries the registry template that produced it,
@@ -724,18 +661,15 @@ jobs:
                 )
               }'
           }
-          codex_prompt_obj=$(prompt_json "$codex_prompt_name" "$codex_prompt_version" "$CODEX_PROMPT_TEMPLATE")
           auditor_prompt_obj=$(prompt_json "$auditor_prompt_name" "$auditor_prompt_version" "$AUDITOR_PROMPT_TEMPLATE")
           arbiter_prompt_obj=$(prompt_json "$arbiter_prompt_name" "$arbiter_prompt_version" "$ARBITER_PROMPT_TEMPLATE")
 
-          codex_model_tag="${CODEX_MODEL_USED:-unspecified}"
           arbiter_model_tag="${ARBITER_MODEL:-unspecified}"
 
           run_id="$GITHUB_REPOSITORY-pr$PR-${{ github.run_id }}"
 
           trace_id=$(openssl rand -hex 16)
           root_span_id=$(openssl rand -hex 8)
-          codex_span_id=$(openssl rand -hex 8)
           arbiter_span_id=$(openssl rand -hex 8)
 
           # One span per seat, built from that seat's own recorded verdict and timing, so
@@ -747,7 +681,7 @@ jobs:
             [ -f "$f" ] || continue
             seat="${f#audit-}"; seat="${seat%.json}"
             key=$(printf '%s' "$seat" | tr '[:lower:]-' '[:upper:]_')
-            eval "s_start=\${AUDIT_${key}_START_NS:-$codex_end_ns}"
+            eval "s_start=\${AUDIT_${key}_START_NS:-$context_end_ns}"
             eval "s_end=\${AUDIT_${key}_END_NS:-\$s_start}"
             eval "s_status=\${AUDIT_${key}_STATUS:-error}"
             eval "s_model=\${AUDIT_${key}_MODEL:-unspecified}"
@@ -804,26 +738,19 @@ jobs:
           fixed_spans=$(jq -n \
             --arg trace_id "$trace_id" \
             --arg root_span_id "$root_span_id" \
-            --arg codex_span_id "$codex_span_id" \
             --arg arbiter_span_id "$arbiter_span_id" \
             --arg repo "$GITHUB_REPOSITORY" \
             --arg pr "$PR" \
             --arg base_ref "${BASE_REF:-unknown}" \
-            --arg codex_model "$codex_model_tag" \
             --arg arbiter_model "$arbiter_model_tag" \
             --argjson review_start_ns "$review_start_ns" \
             --argjson root_duration "$((now_ns - review_start_ns))" \
-            --argjson codex_start_ns "$codex_start_ns" \
-            --argjson codex_duration "$((codex_end_ns - codex_start_ns))" \
             --argjson arbiter_start_ns "$arbiter_start_ns" \
             --argjson arbiter_duration "$((arbiter_end_ns - arbiter_start_ns))" \
-            --arg codex_status "$codex_status" \
             --arg arbiter_status "$arbiter_status" \
             --arg root_status "$root_status" \
-            --arg codex_findings_excerpt "$codex_findings_excerpt" \
             --arg summary_excerpt "$summary_excerpt" \
             --arg seat_verdicts "${PANEL_SEAT_VERDICTS:-none}" \
-            --argjson codex_prompt "$codex_prompt_obj" \
             --argjson arbiter_prompt "$arbiter_prompt_obj" \
             '[
               {
@@ -838,25 +765,6 @@ jobs:
                   kind: "workflow",
                   input: {value: "repo:\($repo) pr:\($pr) base_ref:\($base_ref)"},
                   output: {value: $summary_excerpt}
-                }
-              },
-              {
-                parent_id: $root_span_id,
-                trace_id: $trace_id,
-                span_id: $codex_span_id,
-                name: "codex.review",
-                start_ns: $codex_start_ns,
-                duration: $codex_duration,
-                status: $codex_status,
-                meta: {
-                  kind: "llm",
-                  model_name: $codex_model,
-                  model_provider: "openrouter",
-                  input: {
-                    messages: [{role: "user", content: "Review pr:\($pr) against ticket.json/pr.diff"}],
-                    prompt: $codex_prompt
-                  },
-                  output: {messages: [{role: "assistant", content: $codex_findings_excerpt}]}
                 }
               },
               {
@@ -899,10 +807,6 @@ jobs:
             --arg arbiter_prompt_name "$arbiter_prompt_name" \
             --arg arbiter_prompt_version "$arbiter_prompt_version" \
             --arg arbiter_model "$arbiter_model_tag" \
-            --arg codex_model "$codex_model_tag" \
-            --arg codex_prompt_name "$codex_prompt_name" \
-            --arg codex_prompt_version "$codex_prompt_version" \
-            --argjson codex_findings_lines "$codex_findings_lines" \
             --argjson seat_tags "$seat_tags" \
             --argjson spans "$spans" \
             '{
@@ -925,11 +829,7 @@ jobs:
                     "auditor_prompt_version:\($auditor_prompt_version)",
                     "arbiter_prompt_name:\($arbiter_prompt_name)",
                     "arbiter_prompt_version:\($arbiter_prompt_version)",
-                    "arbiter_model:\($arbiter_model)",
-                    "codex_model:\($codex_model)",
-                    "codex_findings_lines:\($codex_findings_lines)",
-                    "codex_prompt_name:\($codex_prompt_name)",
-                    "codex_prompt_version:\($codex_prompt_version)"
+                    "arbiter_model:\($arbiter_model)"
                   ] + $seat_tags),
                   spans: $spans
                 }

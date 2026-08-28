@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # resolve-prompts.sh — resolve the BiggiePockets review prompts from the registry.
 #
-# prompts/registry.json declares the codex prompt, the auditor prompt, the arbitrator
-# prompt, and the panel seats. A review runs the auditor prompt once per seat (caspar,
-# balthazar, melchior) in independent jobs, then the arbitrator prompt once over the
-# three verdicts those jobs produced. This script emits every prompt each review needs;
-# the workflow decides which model runs in which seat.
+# prompts/registry.json declares the auditor prompt, the arbitrator prompt, and the
+# panel seats. A review runs the auditor prompt once per seat (caspar, balthazar,
+# melchior) in independent jobs, then the arbitrator prompt once over the three verdicts
+# those jobs produced. Those are the only two prompts a review runs — nothing reviews the
+# diff ahead of the panel. This script emits both; the workflow decides which model runs
+# in which seat.
 #
 # The auditor prompt is emitted ONCE and every seat runs that same text. Nothing in it
 # is parameterized by seat, so the three audits differ only by model and by the
@@ -13,7 +14,7 @@
 #
 # Shared rule blocks (privacy, migration-data, perf) are stored once in
 # prompts/_shared/ and injected into every prompt that references them via {{@path}}
-# markers, so the Codex and auditor prompts can never drift out of sync.
+# markers, so one edit updates every prompt that enforces that rule.
 #
 # The resolved text substitutes late-binding placeholders used for provenance only:
 #   {{PR}}, {{PROMPT_NAME}}, {{PROMPT_VERSION}}, {{AUDITORS}}
@@ -30,9 +31,9 @@
 # review quality to the exact prompt text that produced it.
 #
 # Inputs (env): REGISTRY_DIR, PR.
-# Outputs: codex_prompt{,_name,_version,_template}; auditor_prompt{,_name,_version,_template};
-# arbiter_prompt{,_name,_version,_template}; auditors (JSON array of seat names, which the
-# workflow feeds straight into its fan-out matrix); auditor_count.
+# Outputs: auditor_prompt{,_name,_version,_template}; arbiter_prompt{,_name,_version,_template};
+# auditors (JSON array of seat names, which the workflow feeds straight into its fan-out
+# matrix); auditor_count.
 
 set -euo pipefail
 
@@ -46,14 +47,13 @@ if [ ! -f "$REGISTRY_FILE" ]; then
 fi
 
 MAP_VERSION=$(jq -r '.version // empty' "$REGISTRY_FILE")
-CODEX_NAME=$(jq -r '.codex_prompt // empty' "$REGISTRY_FILE")
 AUDITOR_NAME=$(jq -r '.auditor_prompt // empty' "$REGISTRY_FILE")
 ARBITER_NAME=$(jq -r '.arbiter_prompt // empty' "$REGISTRY_FILE")
 
 # Validate the config so a bad edit is caught at review time instead of silently
 # running a stale prompt or an undersized panel.
 : "${MAP_VERSION:?registry.json missing version}"
-for field in codex_prompt auditor_prompt arbiter_prompt; do
+for field in auditor_prompt arbiter_prompt; do
   name=$(jq -r --arg f "$field" '.[$f] // empty' "$REGISTRY_FILE")
   if [ -z "$name" ]; then
     echo "::error::registry.json is missing $field" >&2
@@ -173,7 +173,6 @@ write_output() { # name value — multiline-safe via GITHUB_OUTPUT heredoc; fixe
   printf '%s<<_BIGGIEPOCKETS_PROMPT_EOF_\n%s\n_BIGGIEPOCKETS_PROMPT_EOF_\n' "$name" "$value" >> "$GITHUB_OUTPUT"
 }
 
-emit_prompt "codex" "$CODEX_NAME"
 emit_prompt "auditor" "$AUDITOR_NAME"
 emit_prompt "arbiter" "$ARBITER_NAME"
 
@@ -181,4 +180,4 @@ emit_prompt "arbiter" "$ARBITER_NAME"
 write_output "auditors" "$(jq -c '.auditors' "$REGISTRY_FILE")"
 write_output "auditor_count" "${#AUDITORS[@]}"
 
-echo "Resolved v$MAP_VERSION prompts: codex=$CODEX_NAME auditor=$AUDITOR_NAME arbiter=$ARBITER_NAME panel=[$AUDITOR_LIST]"
+echo "Resolved v$MAP_VERSION prompts: auditor=$AUDITOR_NAME arbiter=$ARBITER_NAME panel=[$AUDITOR_LIST]"
