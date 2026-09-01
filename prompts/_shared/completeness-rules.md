@@ -32,6 +32,24 @@ treat this as a blocking issue and request changes.
      admission of incomplete work.
    - Unless the ticket or PR discussion explicitly documented and accepted scoping down the
      work, any unilateral deferral of required functionality must be rejected.
+   - Exempt a deferral only by quoting its granting sentence from the ticket or from the PR
+     body or an author-written PR comment. A reviewer cannot grant acceptance.
+   - Treat a reviewer or earlier review pass raising the deferral as corroboration of a
+     defect, never proof of agreement.
+   - Silence is not acceptance. An out-of-scope list of other items does not include this
+     one implicitly.
+   - Treat a clear, detailed TODO as worse: its quality proves the author knew of the gap.
+   - Do not use these rationalizations, verbatim or paraphrased:
+     - "deliberate", "intentional", "a design choice", "a considered trade-off", or
+       "deliberate separation of concerns"
+     - "a documented backlog item", "tracked separately", or "a known follow-up" without a
+       ticket or quoted author statement
+     - "not incomplete PR scope", "orthogonal", or "belongs to a different layer"
+     - "the comment explains why", "clearly documented", or "the author was transparent"
+     - "an accepted boundary trade-off", "a pragmatic cut", or "does not warrant blocking"
+   - Call a first-pass completeness finding invalid or already resolved only after checking
+     the diff; name the file and line checked.
+   - If you want to explain why a TODO is acceptable, request changes instead.
 
 3. Placeholders, stubs, and mock implementations:
    - Flag any placeholder functions, stub implementations, hardcoded dummy return values,
