@@ -31,7 +31,10 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
 8. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
    tag, per these rules:
    {{@prompts/_shared/navigation-rules.md}}
-9. Report concrete issues — bugs, regressions, security problems, member-privacy
+9. Check whether the diff renames, moves, or deletes a name that is persisted outside
+   the codebase and read back after deploy, per these rules:
+   {{@prompts/_shared/rename-compatibility-rules.md}}
+10. Report concrete issues — bugs, regressions, security problems, member-privacy
    violations, incomplete tasks/half-measures/placeholders/deferred work, and genuine misses
    of the ticket's intent or clear scope creep — each with a file/line reference and a brief
    rationale. Do not list "doesn't match acceptance criteria" as an issue by itself; only
