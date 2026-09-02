@@ -34,7 +34,10 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
 9. Check whether the diff renames, moves, or deletes a name that is persisted outside
    the codebase and read back after deploy, per these rules:
    {{@prompts/_shared/rename-compatibility-rules.md}}
-10. Report concrete issues — bugs, regressions, security problems, member-privacy
+10. Check whether new feature-flag exposure tracking reinvents the existing shared mechanism,
+   per these rules:
+   {{@prompts/_shared/analytics-tracking-rules.md}}
+11. Report concrete issues — bugs, regressions, security problems, member-privacy
    violations, incomplete tasks/half-measures/placeholders/deferred work, and genuine misses
    of the ticket's intent or clear scope creep — each with a file/line reference and a brief
    rationale. Do not list "doesn't match acceptance criteria" as an issue by itself; only
