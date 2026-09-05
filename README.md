@@ -142,7 +142,7 @@ prompts/
   codex-first-pass.md                        # Stage 1 prompt (template)
   claude-synthesize.md                       # Stage 2 control arm (template)
   claude-synthesize-thesis-first.md          # Stage 2 thesis-first arm (template)
-  _shared/{completeness,privacy,migration-data,perf,parsing,navigation}-rules.md  # shared rule blocks
+  _shared/{completeness,privacy,migration-data,perf,parsing,navigation,rename-compatibility,nullability-boundary}-rules.md  # shared rule blocks
 ```
 
 - **Templates + shared blocks.** Each prompt references the shared rule blocks via
