@@ -55,12 +55,15 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
 16. Check whether new feature-flag exposure tracking reinvents the existing shared mechanism,
    per these rules:
    {{@prompts/_shared/analytics-tracking-rules.md}}
-17. Report concrete issues — bugs, regressions, security problems, member-privacy
+17. Check how the diff carries a value across a DB column / serializer / TypeScript API
+   type / component boundary, per these rules:
+   {{@prompts/_shared/nullability-boundary-rules.md}}
+18. Report concrete issues — bugs, regressions, security problems, member-privacy
    violations, incomplete tasks/half-measures/placeholders/deferred work, specs that cannot
    fail usefully, and genuine misses of the ticket's intent or clear scope creep — each with
    a file/line reference and a brief rationale. Do not list "doesn't match acceptance criteria" as an issue by itself; only
    raise it when the deviation harms the intent. If nothing is blocking, say so briefly.
-18. End the report with every finding listed again as one fenced `findings` block of JSON, in
+19. End the report with every finding listed again as one fenced `findings` block of JSON, in
    the same order as the prose. It is read by machine, so it must parse and hold exactly the
    findings above:
 
@@ -77,7 +80,7 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
      - `completeness` (step 3), `privacy` (4), `email` (5), `data` (6), `performance`
        (7 and 8), `parsing` (9), `navigation` (10), `compatibility` (11), `configuration`
        (12), `routing` (13), `interface` (14), `tests` (15),
-       `analytics` (16).
+       `analytics` (16), `correctness` (17).
      - Otherwise `correctness` for a wrong result, crash or regression; `security` for a
        vulnerability; `intent` for a miss of the ticket's intent or scope creep;
        `maintainability` for code that works but will mislead or trap the next change.
