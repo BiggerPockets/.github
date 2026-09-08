@@ -46,14 +46,18 @@ Synthesize a single review decision for pull request #{{PR}}.
 12. Check whether the diff renames, moves, or deletes a name that is persisted outside
    the codebase and read back after deploy, per these rules:
    {{@prompts/_shared/rename-compatibility-rules.md}}
-13. Validate which of Codex's findings are real (discard false positives), add any genuine
+13. Judge the value of the specs the diff adds or changes, per these rules, and report a
+   useless spec with a file/line reference and the assertion that would make it fail:
+   {{@prompts/_shared/spec-value-rules.md}}
+14. Validate which of Codex's findings are real (discard false positives), add any genuine
    issues Codex missed, and (when a ticket is available) judge genuine misses of the ticket's
    intent or clear scope creep — but give credit when the author went beyond the literal
    acceptance criteria in a sound way rather than flagging it as non-compliant.
-14. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
+15. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
    genuine, blocking issue (such as a bug, regression, privacy violation, half-finished task,
-   placeholder, or deferred work); otherwise "approve". A change that exceeds the AC without
-   breaking the ticket's intent is a reason to approve, not to block.
+   placeholder, or deferred work); otherwise "approve". A useless spec is reported, never
+   blocking. A change that exceeds the AC without breaking the ticket's intent is a reason
+   to approve, not to block.
 
 Write a file named verdict.json in the current working directory with EXACTLY this shape:
   {"verdict": "approve" | "request_changes", "summary": "<concise markdown>"}
