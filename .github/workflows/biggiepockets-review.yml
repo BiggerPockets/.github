@@ -339,6 +339,29 @@ jobs:
           ANTHROPIC_BASE_URL: "https://openrouter.ai/api"
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
 
+      - name: Capture review failure diagnostics
+        if: ${{ always() && steps.claude.outcome == 'failure' }}
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          DIAGNOSTIC_TOKEN_PROVIDER: ${{ secrets.OPENROUTER_API_KEY }}
+          DIAGNOSTIC_TOKEN_APP: ${{ steps.claude.outputs.github_token }}
+          DIAGNOSTIC_TOKEN_GITHUB: ${{ github.token }}
+          DIAGNOSTIC_TOKEN_REVIEW: ${{ secrets.BIGGIEPOCKETS_PAT }}
+        run: |
+          # The action may fail before exposing its execution_file output.
+          execution_file="${EXECUTION_FILE:-$RUNNER_TEMP/claude-execution-output.json}"
+          python3 registry/scripts/review-diagnostics.py "$execution_file" \
+            "$RUNNER_TEMP/review-diagnostics/diagnostics.json"
+
+      - name: Upload review failure diagnostics
+        if: ${{ always() && steps.claude.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/review-diagnostics/diagnostics.json
+          retention-days: 7
+          if-no-files-found: warn
+
       - name: Record Claude end time
         if: always()
         run: echo "CLAUDE_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
