@@ -1,6 +1,6 @@
 name: BiggiePockets Code Review (reusable)
 
-# Reusable two-stage AI review (Codex first pass, then Claude verifies and
+# Reusable two-stage AI review (Codex first pass, then pi verifies and
 # synthesizes) anchored on the PR's JIRA ticket, with the BiggiePockets service
 # account submitting the resulting approve / request-changes decision.
 #
@@ -27,9 +27,9 @@ name: BiggiePockets Code Review (reusable)
 #
 # Prompt A/B test (BIG-21717): prompts/registry.json declares the arms, the control
 # arm, and what share of pull requests an experiment arm gets. Each review runs ONE
-# Claude pass, using the arm that scripts/resolve-prompts.sh assigns to that PR by
+# Stage-2 pass, using the arm that scripts/resolve-prompts.sh assigns to that PR by
 # hashing '<repo>:<pr>' — so the arms are compared BETWEEN pull requests and a review
-# never costs a second Claude pass. The assigned arm writes both the posted summary
+# never costs a second Stage-2 pass. The assigned arm writes both the posted summary
 # and the approve / request-changes decision, which means an experiment prompt does
 # affect real outcomes on its share of PRs. Assignment is deterministic, so a re-run
 # reviews with the same arm. Set experiment_split_percent to 0 in registry.json to
@@ -65,7 +65,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      id-token: write # claude-code-action authenticates via OIDC
     env:
       PR: ${{ inputs.pr }}
       # Explicit model per stage, threaded into both the actual invocation below and the
@@ -78,7 +77,7 @@ jobs:
       # one OpenRouter accepts.
       CODEX_MODEL: "openai/gpt-5.6-sol"
       CODEX_RESPONSES_ENDPOINT: "https://openrouter.ai/api/v1/responses"
-      CLAUDE_MODEL: "deepseek/deepseek-v4.1-flash"
+      PI_MODEL: "deepseek/deepseek-v4.1-flash"
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
@@ -281,19 +280,18 @@ jobs:
           retention-days: 7
           overwrite: true
 
-  # A failed/rate-limited Claude run can be retried with "Re-run failed jobs". The
+  # A failed/rate-limited Stage 2 run can be retried with "Re-run failed jobs". The
   # successful Codex job is not re-executed; this job downloads its immutable handoff.
-  claude:
+  pi:
     needs: codex
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
-      id-token: write # claude-code-action authenticates via OIDC
     env:
       PR: ${{ inputs.pr }}
       CODEX_MODEL: "openai/gpt-5.6-sol"
-      CLAUDE_MODEL: "deepseek/deepseek-v4.1-flash"
+      PI_MODEL: "deepseek/deepseek-v4.1-flash"
     steps:
       - name: Checkout reviewed PR head
         uses: actions/checkout@v4
@@ -327,45 +325,77 @@ jobs:
           REGISTRY_DIR: registry
         run: registry/scripts/resolve-prompts.sh
 
-      # Stage 2: Claude verifies Codex's findings, reviews independently, and decides.
-      # This is the only Claude pass, running whichever arm's prompt was assigned to
-      # this PR. Its verdict is the review.
-      - name: Record Claude start time
-        run: echo "CLAUDE_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+      # Stage 2: pi verifies Codex's findings, reviews independently, and decides.
+      # This is the only Stage-2 pass, running whichever arm's prompt was assigned to
+      # this PR. Its verdict is the review. pi is the @earendil-works/pi-coding-agent
+      # CLI (a plain npm package — no GitHub app, no OIDC), authenticated to OpenRouter
+      # with the same OPENROUTER_API_KEY the Codex stage uses.
+      - name: Install pi
+        run: |
+          npm install -g "@earendil-works/pi-coding-agent@0.84.3"
+          echo "$(npm config get prefix)/bin" >> "$GITHUB_PATH"
 
-      - name: Claude verify and synthesize
-        id: claude
-        uses: anthropics/claude-code-action@v1
-        with:
-          # The action requires this input for launch validation. ANTHROPIC_AUTH_TOKEN
-          # below is what makes Claude Code send the OpenRouter key as a bearer token.
-          anthropic_api_key: ${{ secrets.OPENROUTER_API_KEY }}
-          # Allow the `claude` bot to trigger this review. Without this, PRs opened
-          # by the claude bot are rejected with "Workflow initiated by non-human
-          # actor: claude (type: Bot). Add bot to allowed_bots list."
-          allowed_bots: 'claude'
-          claude_args: ${{ env.CLAUDE_MODEL != '' && format('--allowedTools "Read,Grep,Glob,Bash,Write" --model {0}', env.CLAUDE_MODEL) || '--allowedTools "Read,Grep,Glob,Bash,Write"' }}
-          prompt: ${{ steps.resolve.outputs.arm_prompt }}
+      # pi resolves its models from a config dir (PI_CODING_AGENT_DIR). Point it at a
+      # writable scratch dir seeded with the pinned OpenRouter provider from
+      # scripts/pi/models.json: the pinned model + rates are what make a FRESH runner
+      # deterministic — the model is absent from the catalog pi ships, and the live
+      # catalog refresh is a background fetch, not a startup step we can rely on.
+      - name: Configure pi
+        run: |
+          mkdir -p "$RUNNER_TEMP/pi-config"
+          cp registry/scripts/pi/models.json "$RUNNER_TEMP/pi-config/models.json"
+          echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-config" >> "$GITHUB_ENV"
+
+      - name: Record pi start time
+        run: echo "PI_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+
+      - name: pi verify and synthesize
+        id: pi
         env:
-          ANTHROPIC_BASE_URL: "https://openrouter.ai/api"
-          ANTHROPIC_AUTH_TOKEN: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ARM_PROMPT: ${{ steps.resolve.outputs.arm_prompt }}
+        run: |
+          printf '%s' "$ARM_PROMPT" > arm-prompt.txt
+          # One headless pass in JSON event-stream mode. Tools are allowlisted to the
+          # same read/grep/glob/bash/write set the Claude stage had; context files,
+          # skills, and extensions are disabled so nothing in the untrusted PR checkout
+          # can steer the run. Stderr is captured so a failure carries pi's own error
+          # text into the diagnostics step without polluting the JSONL that
+          # llm-usage.py parses.
+          timeout 1500 pi --mode json \
+            --model "$PI_MODEL" \
+            --tools read,grep,glob,bash,write \
+            --no-context-files --no-skills --no-extensions \
+            --no-themes --no-prompt-templates \
+            @arm-prompt.txt \
+            > pi-output.jsonl 2> pi-error.log || pi_exit=$?
+          pi_exit="${pi_exit:-0}"
+
+          echo "PI_OUTPUT_FILE=$GITHUB_WORKSPACE/pi-output.jsonl" >> "$GITHUB_ENV"
+          echo "PI_EXIT=$pi_exit" >> "$GITHUB_ENV"
+          # pi may exit 0 on a retried-but-still-failed session (e.g. an upstream 429
+          # that exhausted its retries), so the verdict file is the contract. Fail the
+          # step so "Re-run failed jobs" retries just this pass.
+          if [ ! -f verdict.json ]; then
+            echo "::error::pi review run produced no verdict.json (pi exit $pi_exit)" >&2
+            tail -60 pi-error.log >&2 || true
+            exit 1
+          fi
 
       - name: Capture review failure diagnostics
-        if: ${{ always() && steps.claude.outcome == 'failure' }}
+        if: ${{ always() && steps.pi.outcome == 'failure' }}
         env:
-          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
           DIAGNOSTIC_TOKEN_PROVIDER: ${{ secrets.OPENROUTER_API_KEY }}
-          DIAGNOSTIC_TOKEN_APP: ${{ steps.claude.outputs.github_token }}
           DIAGNOSTIC_TOKEN_GITHUB: ${{ github.token }}
           DIAGNOSTIC_TOKEN_REVIEW: ${{ secrets.BIGGIEPOCKETS_PAT }}
         run: |
-          # The action may fail before exposing its execution_file output.
-          execution_file="${EXECUTION_FILE:-$RUNNER_TEMP/claude-execution-output.json}"
+          execution_file="${PI_OUTPUT_FILE:-$GITHUB_WORKSPACE/pi-output.jsonl}"
           python3 registry/scripts/review-diagnostics.py "$execution_file" \
-            "$RUNNER_TEMP/review-diagnostics/diagnostics.json"
+            "$RUNNER_TEMP/review-diagnostics/diagnostics.json" \
+            "$GITHUB_WORKSPACE/pi-error.log"
 
       - name: Upload review failure diagnostics
-        if: ${{ always() && steps.claude.outcome == 'failure' }}
+        if: ${{ always() && steps.pi.outcome == 'failure' }}
         uses: actions/upload-artifact@v4
         with:
           name: review-failure-${{ github.run_id }}-${{ github.run_attempt }}
@@ -373,9 +403,9 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-      - name: Record Claude end time
+      - name: Record pi end time
         if: always()
-        run: echo "CLAUDE_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+        run: echo "PI_END_NS=$(date +%s%N)" >> "$GITHUB_ENV"
 
       # Submit the review under the arm this PR was assigned. The arm is not disclosed
       # in the comment: a reviewer who knows which prompt wrote a summary can't rate it
@@ -389,7 +419,7 @@ jobs:
           ASSIGNED_ARM: ${{ steps.resolve.outputs.assigned_arm }}
         run: |
           if [ ! -f verdict.json ]; then
-            echo "::error::Claude review run did not produce verdict.json" >&2
+            echo "::error::pi review run did not produce verdict.json" >&2
             exit 1
           fi
 
@@ -420,7 +450,7 @@ jobs:
       # `arm`/`prompt_name`/`prompt_version` are payload-level tags, which is where a tag
       # key resolves to one value — one arm per review, so one value each.
       #
-      #   root biggiepockets.review -> codex.review, claude.synthesize
+      #   root biggiepockets.review -> codex.review, pi.synthesize
       #
       # Compare arms by grouping on `arm` across pull requests (verdict rate, latency,
       # tokens).
@@ -433,7 +463,6 @@ jobs:
           # org identifier is committed here; both fall back to public defaults.
           DD_SITE: ${{ vars.DD_SITE }}
           DD_LLMOBS_ML_APP: ${{ vars.DD_LLMOBS_ML_APP }}
-          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
           CODEX_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.codex_prompt_template }}
           ARM_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.arm_prompt_template }}
         run: |
@@ -446,8 +475,8 @@ jobs:
           review_start_ns="${REVIEW_START_NS:-$now_ns}"
           codex_start_ns="${CODEX_START_NS:-$review_start_ns}"
           codex_end_ns="${CODEX_END_NS:-$codex_start_ns}"
-          claude_start_ns="${CLAUDE_START_NS:-$codex_end_ns}"
-          claude_end_ns="${CLAUDE_END_NS:-$claude_start_ns}"
+          pi_start_ns="${PI_START_NS:-$codex_end_ns}"
+          pi_end_ns="${PI_END_NS:-$pi_start_ns}"
 
           verdict="${VERDICT:-unknown}"
           codex_prompt_name="${{ steps.resolve.outputs.codex_prompt_name }}"
@@ -470,8 +499,8 @@ jobs:
           codex_findings=$(cat codex-findings.md 2>/dev/null || true)
           codex_findings_lines=$(wc -l < codex-findings.md 2>/dev/null || echo 0)
 
-          claude_status="ok"
-          [ "${{ steps.claude.outcome }}" != "success" ] && claude_status="error"
+          pi_status="ok"
+          [ "${{ steps.pi.outcome }}" != "success" ] && pi_status="error"
 
           root_status="ok"
           [ "${{ steps.submit.outcome }}" != "success" ] && root_status="error"
@@ -522,7 +551,7 @@ jobs:
           arm_prompt_obj=$(prompt_json "$arm_prompt_name" "$arm_prompt_version" "$ARM_PROMPT_TEMPLATE")
 
           codex_model_tag="${CODEX_MODEL:-unspecified}"
-          claude_model_tag="${CLAUDE_MODEL:-unspecified}"
+          pi_model_tag="${PI_MODEL:-unspecified}"
 
           dd_site="${DD_SITE:-datadoghq.com}"
           ml_app="${DD_LLMOBS_ML_APP:-biggiepockets-review}"
@@ -530,52 +559,56 @@ jobs:
           # Cost tracking. Each pass carries its own usage as span metrics plus a
           # model identity split into the bare name and originating provider that
           # Datadog's pricing catalog keys on ("openai/gpt-5.6-sol" -> gpt-5.6-sol +
-          # openai); the OpenRouter gateway is kept as a tag instead. Datadog then
-          # prices a catalogued model from its token counts, and takes the reported
-          # `total_cost` at face value for one it doesn't carry. Both numbers come
-          # from what the tools recorded — OpenRouter reports what it charged, and
-          # llm-usage.py holds no rate table of its own.
+          # openai; "deepseek/deepseek-v4.1-flash" -> deepseek-v4.1-flash + deepseek);
+          # the OpenRouter gateway is kept as a tag instead. Datadog then prices a
+          # catalogued model from its token counts, and takes the reported `total_cost`
+          # at face value for one it doesn't carry.
           #
-          # Only usage objects are read, never message content. The Codex pass's
-          # counters travel from its own job in CODEX_USAGE_JSON, since the action
-          # exposes no usage output and its rollout stays on that runner.
+          # Both numbers come from what the tools recorded. pi records a usage object
+          # (tokens + a cost.total computed from the model's OpenRouter list rates on
+          # the runner, pinned in scripts/pi/models.json) on every pass — that is the
+          # same rate table OpenRouter bills against, so cost.total is the amount the
+          # pass is charged. The Codex pass's counters travel from its own job in
+          # CODEX_USAGE_JSON, since the action exposes no usage output and its rollout
+          # stays on that runner.
+          # Only usage objects are read, never message content.
           # Fall back to an empty object if the helper can't run at all, so a cost
           # problem can't cost us the quality metrics in the same payload.
           no_fields='{"model_name":"unspecified","model_provider":"unspecified","metrics":{}}'
           codex_fields="${CODEX_USAGE_JSON:-}"
-          claude_fields=$(python3 registry/scripts/llm-usage.py claude "$claude_model_tag" "${EXECUTION_FILE:-}") || claude_fields="$no_fields"
+          pi_fields=$(python3 registry/scripts/llm-usage.py pi "$pi_model_tag" "${PI_OUTPUT_FILE:-}") || pi_fields="$no_fields"
           usable='has("model_name") and has("model_provider") and has("metrics")'
           echo "$codex_fields" | jq -e "$usable" >/dev/null 2>&1 || codex_fields="$no_fields"
-          echo "$claude_fields" | jq -e "$usable" >/dev/null 2>&1 || claude_fields="$no_fields"
+          echo "$pi_fields" | jq -e "$usable" >/dev/null 2>&1 || pi_fields="$no_fields"
 
           run_id="$GITHUB_REPOSITORY-pr$PR-${{ github.run_id }}"
 
           trace_id=$(openssl rand -hex 16)
           root_span_id=$(openssl rand -hex 8)
           codex_span_id=$(openssl rand -hex 8)
-          claude_span_id=$(openssl rand -hex 8)
+          pi_span_id=$(openssl rand -hex 8)
 
           spans=$(jq -n \
             --arg trace_id "$trace_id" \
             --arg root_span_id "$root_span_id" \
             --arg codex_span_id "$codex_span_id" \
-            --arg claude_span_id "$claude_span_id" \
+            --arg pi_span_id "$pi_span_id" \
             --arg repo "$GITHUB_REPOSITORY" \
             --arg pr "$PR" \
             --arg base_ref "${BASE_REF:-unknown}" \
             --arg codex_model "$codex_model_tag" \
-            --arg claude_model "$claude_model_tag" \
+            --arg pi_model "$pi_model_tag" \
             --argjson review_start_ns "$review_start_ns" \
             --argjson root_duration "$((now_ns - review_start_ns))" \
             --argjson codex_start_ns "$codex_start_ns" \
             --argjson codex_duration "$((codex_end_ns - codex_start_ns))" \
-            --argjson claude_start_ns "$claude_start_ns" \
-            --argjson claude_duration "$((claude_end_ns - claude_start_ns))" \
+            --argjson pi_start_ns "$pi_start_ns" \
+            --argjson pi_duration "$((pi_end_ns - pi_start_ns))" \
             --arg codex_status "$codex_status" \
-            --arg claude_status "$claude_status" \
+            --arg pi_status "$pi_status" \
             --arg root_status "$root_status" \
             --argjson codex_fields "$codex_fields" \
-            --argjson claude_fields "$claude_fields" \
+            --argjson pi_fields "$pi_fields" \
             --arg codex_findings_excerpt "$codex_findings_excerpt" \
             --arg summary_excerpt "$summary_excerpt" \
             --argjson codex_prompt "$codex_prompt_obj" \
@@ -618,16 +651,16 @@ jobs:
               {
                 parent_id: $root_span_id,
                 trace_id: $trace_id,
-                span_id: $claude_span_id,
-                name: "claude.synthesize",
-                start_ns: $claude_start_ns,
-                duration: $claude_duration,
-                status: $claude_status,
-                metrics: $claude_fields.metrics,
+                span_id: $pi_span_id,
+                name: "pi.synthesize",
+                start_ns: $pi_start_ns,
+                duration: $pi_duration,
+                status: $pi_status,
+                metrics: $pi_fields.metrics,
                 meta: {
                   kind: "llm",
-                  model_name: $claude_fields.model_name,
-                  model_provider: $claude_fields.model_provider,
+                  model_name: $pi_fields.model_name,
+                  model_provider: $pi_fields.model_provider,
                   input: {
                     messages: [{role: "user", content: $codex_findings_excerpt}],
                     prompt: $arm_prompt
@@ -651,7 +684,7 @@ jobs:
             --arg assignment_bucket "$assignment_bucket" \
             --arg split_percent "$split_percent" \
             --arg codex_model "$codex_model_tag" \
-            --arg claude_model "$claude_model_tag" \
+            --arg pi_model "$pi_model_tag" \
             --arg codex_prompt_name "$codex_prompt_name" \
             --arg codex_prompt_version "$codex_prompt_version" \
             --argjson codex_findings_lines "$codex_findings_lines" \
@@ -675,7 +708,7 @@ jobs:
                     "experiment_split_percent:\($split_percent)",
                     "gateway:openrouter",
                     "codex_model:\($codex_model)",
-                    "claude_model:\($claude_model)",
+                    "pi_model:\($pi_model)",
                     "codex_findings_lines:\($codex_findings_lines)",
                     "codex_prompt_name:\($codex_prompt_name)",
                     "codex_prompt_version:\($codex_prompt_version)"

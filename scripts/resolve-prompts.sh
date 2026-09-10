@@ -6,7 +6,7 @@
 # experiment arm gets. This script picks ONE arm per review — hash('<repo>:<pr>')
 # mod 100, below experiment_split_percent means the experiment arm — and emits only
 # that arm's prompt. The assigned arm both posts its summary and decides the review,
-# so arms are compared BETWEEN pull requests and each review costs one Claude pass.
+# so arms are compared BETWEEN pull requests and each review costs one Stage-2 pass.
 #
 # Shared rule blocks (privacy, migration-data, perf) are stored once in
 # prompts/_shared/ and injected into every prompt that references them via {{@path}}

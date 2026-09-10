@@ -1,0 +1,38 @@
+{
+  "//": "pi config for the Stage 2 review pass (BiggiePockets/.github).",
+  "//": "",
+  "//": "pi resolves models from the config dir pointed at by PI_CODING_AGENT_DIR. This file",
+  "//": "declares the OpenRouter provider and the single pinned Stage 2 model with its",
+  "//": "OpenRouter list rates, so a FRESH CI runner (no cached models-store.json) resolves",
+  "//": "the model deterministically. The model is absent from the catalog pi ships and the",
+  "//": "live catalog refresh is a background fetch, not a startup step we can rely on.",
+  "//": "",
+  "//": "Rates: $/1M tokens as published by OpenRouter for deepseek/deepseek-v4.1-flash at",
+  "//": "the time of pinning (input 0.15, output 0.6, input cache read 0.003; no cache write",
+  "//": "rate). pi computes cost.total from these, so it is exactly what OpenRouter bills for",
+  "//": "standard usage. If you roll the model, update the id AND these rates together.",
+  "//": "",
+  "//": "The apiKey interpolation reads OPENROUTER_API_KEY from the workflow environment",
+  "//": "(the same org secret the Codex stage uses) — no interactive login or OAuth is",
+  "//": "involved. api/api identify the OpenAI-compatible endpoint pi uses.",
+  "providers": {
+    "openrouter": {
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "apiKey": "$OPENROUTER_API_KEY",
+      "api": "openai-completions",
+      "models": [
+        {
+          "id": "deepseek/deepseek-v4.1-flash",
+          "name": "DeepSeek V4.1 Flash",
+          "reasoning": true,
+          "cost": {
+            "input": 0.15,
+            "output": 0.6,
+            "cacheRead": 0.003,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    }
+  }
+}

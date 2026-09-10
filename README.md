@@ -8,7 +8,7 @@ Org-wide GitHub defaults and shared reusable workflows.
 two-stage AI code review on a pull request:
 
 1. **Codex first pass** — reviews the diff against the PR's JIRA ticket and writes findings.
-2. **Claude verify & synthesize** — validates Codex's findings, reviews the diff
+2. **pi verify & synthesize** — validates Codex's findings, reviews the diff
    independently (grepping for callers/tests, factoring in the existing PR discussion),
    checks the change against the ticket's acceptance criteria, and decides a single verdict.
 
@@ -17,10 +17,10 @@ The **BiggiePockets** service account then submits the resulting `approve` /
 ticket can't be fetched), the review degrades gracefully to a diff-based review instead of
 failing.
 
-Codex and Claude run as separate GitHub Actions jobs. Codex uploads the reviewed commit's
-diff, ticket/discussion context, and findings as a short-lived artifact; Claude downloads
-that immutable handoff. If Claude is rate-limited, use **Re-run failed jobs** on the workflow
-run. GitHub reruns only the Claude job, reusing the completed Codex pass instead of invoking
+Codex and pi run as separate GitHub Actions jobs. Codex uploads the reviewed commit's
+diff, ticket/discussion context, and findings as a short-lived artifact; pi downloads
+that immutable handoff. If the pi pass is rate-limited, use **Re-run failed jobs** on the workflow
+run. GitHub reruns only the pi job, reusing the completed Codex pass instead of invoking
 Codex again.
 
 The review logic lives centrally in this repo. Each consuming repo only adds a thin
@@ -30,13 +30,13 @@ The review logic lives centrally in this repo. Each consuming repo only adds a t
 
 Do this once per repo you want BiggiePockets to review.
 
-#### 1. Install the Claude GitHub app
+#### 1. Install nothing
 
-The Claude verification stage uses [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action).
-Install the official [Claude GitHub app](https://github.com/apps/claude) for the organization
-once; you do **not** need to reinstall it per repo. Claude's model requests authenticate
-through OpenRouter using the shared `OPENROUTER_API_KEY` described below, so no personal
-Claude Code OAuth token is required.
+The Stage-2 verification stage runs [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent),
+a plain npm CLI that the workflow installs onto the runner itself (`npm install -g`).
+There is no GitHub app, no OIDC, and no per-repo installation. pi authenticates to
+OpenRouter with the shared `OPENROUTER_API_KEY` described below — no OAuth login or
+personal token is required.
 
 #### 2. Add the caller workflow
 
@@ -57,12 +57,11 @@ on:
         required: true
         type: string
 
-# The reusable workflow's jobs need these scopes. Declare them explicitly so the
+# The reusable workflow's jobs need read scopes. Declare them explicitly so the
 # caller works regardless of the repo's default token permissions.
 permissions:
   contents: read
   pull-requests: read
-  id-token: write
 
 jobs:
   review:
@@ -83,7 +82,7 @@ jobs:
 #### 3. Make the secrets available
 
 The reusable workflow consumes several secrets via `secrets: inherit`: credentials for the
-the AI review provider (`OPENROUTER_API_KEY`, shared by both the Codex and Claude stages),
+the AI review provider (`OPENROUTER_API_KEY`, shared by both the Codex and pi stages),
 an Atlassian email + API token to fetch the PR's JIRA ticket for intent, and a personal access
 token for the BiggiePockets service account that submits the review. Configure them as
 **organization secrets** (recommended — set once, available to every repo) or as per-repo
@@ -92,8 +91,8 @@ secrets if you prefer to scope them.
 It also reports per-review traces to the `biggiepockets-review` app in Datadog LLM
 Observability via `secrets.DATADOG_API_KEY`: verdict, timing, prompt template and version
 (tracked as prompts, see below), the model each
-stage ran (`CODEX_MODEL`/`CLAUDE_MODEL` env vars in the workflow — both are OpenRouter
-model slugs and must be set), and the actual findings text from Codex and the summary Claude wrote,
+stage ran (`CODEX_MODEL`/`PI_MODEL` env vars in the workflow — both are OpenRouter
+model slugs and must be set), and the actual findings text from Codex and the summary pi wrote,
 so review quality is inspectable, not just counted. This secret is optional — reviews still
 run and post normally without it, but no metrics are reported.
 
@@ -114,21 +113,25 @@ OpenRouter, whose slugs look like `openai/gpt-5.6-sol`, so `scripts/llm-usage.py
 splits the slug into `model_name: gpt-5.6-sol` / `model_provider: openai` and records
 the routing as a `gateway:openrouter` tag.
 
-Cost itself is never computed here, and there is no rate table in the repository: a
-list price committed to a file goes stale silently and would be reported with the same
-confidence as a real one. Instead each span carries whichever of the two things
-Datadog needs. For a model in the catalog, token counts are enough. For one it does
-not carry, the span reports a `total_cost` metric — the amount OpenRouter says it
-charged, taken from the `cost` field it returns on every response, where that figure
-survives into what the tool wrote to disk.
+Cost is never computed in the reporting script: `scripts/llm-usage.py` holds no rate
+table. Instead each span carries whichever of the two things Datadog needs. For a model
+in the catalog, token counts are enough. For one it does not carry, the span reports a
+`total_cost` metric taken at face value.
 
-The two passes record their usage differently. Claude Code writes a `usage` object to
-its execution output. Codex writes running token counters to a session rollout on its
-own runner, and since its action exposes no usage output, the workflow reads that
-rollout in the Codex job and hands the totals to the reporting job. In both cases only
-usage objects are read — never message content, transcripts, prompts, or diffs. Claude
-Code's own `total_cost_usd` is ignored: it is computed against Anthropic's list prices,
-while these passes are billed by OpenRouter for a non-Anthropic model.
+The two passes record their usage differently. pi runs in `--mode json` and writes a
+JSON event stream; every assistant message carries a usage object with token counts and
+`cost.total` — a price computed by pi from the model's OpenRouter list rates, the same
+rates OpenRouter bills against, so it is the amount the pass is charged. The Stage-2
+model and its rates are pinned in `scripts/pi/models.json` (the catalog pi ships
+predates the model, and the live catalog refresh is a background fetch, not a startup
+step — a committed pin is what makes a fresh runner deterministic); if you roll the
+Stage-2 model, update that file in the same commit. Codex writes running token counters
+to a session rollout on its own runner, and since its action exposes no usage output,
+the workflow reads that rollout in the Codex job and hands the totals to the reporting
+job. In both cases only usage objects are read — never message content, transcripts,
+prompts, or diffs. (The Claude Code harness that previously ran Stage 2 translated
+usage into Anthropic's schema, so OpenRouter's reported cost regularly did not survive
+to the span — the pi pass records usage itself and is what this repo now trusts.)
 
 Two **organization-level variables** (`vars`, not secrets — **Settings → Secrets and
 variables → Actions → Variables** at the org level) configure where the trace lands.
@@ -141,22 +144,18 @@ Both are optional, and nothing here is committed to the repository:
   Defaults to `biggiepockets-review`.
 
 Cost tracking is best-effort and never fails a review. With no `DATADOG_API_KEY` the
-whole reporting step is skipped, and a missing execution file, an absent rollout, or
+whole reporting step is skipped, and a missing event stream, an absent rollout, or
 malformed usage data degrades to fewer metrics on the span.
 
 #### 4. Set workflow permissions
 
-The reusable workflow's jobs need `pull-requests: read` and `id-token: write` (OIDC
-authentication for `claude-code-action`). The caller YAML declares these in its
-`permissions` block, but GitHub caps those declarations at whatever the repo's default
-token setting allows. Repos set to **"Read repository contents"** (the restrictive
-default) deny `id-token: write` regardless of what the YAML says — the workflow fails
-with `startup_failure` before any job runs.
-
-Go to **Settings → Actions → General → Workflow permissions** on the target repo and set:
-
-- **"Read and write permissions"**
-- **"Allow GitHub Actions to create and approve pull requests"** (checked)
+With the move off `claude-code-action`, the review no longer needs OIDC (`id-token`),
+so the default **"Read repository contents"** setting is fine — repos that previously
+had to loosen their workflow permissions for the review can leave them restrictive.
+The reusable workflow's jobs declare `contents: read` and `pull-requests: read` only;
+the review itself is submitted with the `BIGGIEPOCKETS_PAT` secret, not the repo's
+`GITHUB_TOKEN`. Callers that already declare `id-token: write` in their caller file can
+remove it, but leaving it is harmless.
 
 #### 5. Give BiggiePockets access
 
@@ -190,16 +189,16 @@ prompts/
 ```
 
 - **Templates + shared blocks.** Each prompt references the shared rule blocks via
-  `{{@prompts/_shared/<name>.md}}`, so the Codex and Claude prompts can never drift out of
+  `{{@prompts/_shared/<name>.md}}`, so the Codex and Stage-2 prompts can never drift out of
   sync. Prompts resolve `{{PR}}`, `{{PROMPT_NAME}}`, `{{PROMPT_VERSION}}` too.
 - **Content-derived versions.** `prompt_version` is a content hash of the template plus the
   shared blocks it includes — it changes only when that prompt's text changes, not per PR
   or per arm, so Datadog LLM Obs can attribute quality to the exact prompt text that ran.
-- **One arm per pull request.** Two Claude prompts sit in the registry — `control` and
+- **One arm per pull request.** Two Stage-2 prompts sit in the registry — `control` and
   `thesis-first` — and each review runs exactly one of them. `scripts/resolve-prompts.sh`
   hashes `<repo>:<pr>` into a bucket 0-99 and assigns the PR to the experiment arm when
   that bucket falls under `experiment_split_percent` (50 today), so the arms split traffic
-  evenly and every review costs a single Claude pass. Assignment is a pure function of
+  evenly and every review costs a single Stage-2 pass. Assignment is a pure function of
   repo and PR number: re-running a review reuses the same arm, and one PR never sees two
   review styles.
 - **The assigned arm decides.** Whichever arm a PR draws writes the posted summary *and*
@@ -223,7 +222,7 @@ prompts/
 - **Datadog.** Each review is one trace, tagged with the arm that ran it:
 
   ```
-  biggiepockets.review → codex.review, claude.synthesize
+  biggiepockets.review → codex.review, pi.synthesize
   ```
 
   A tag key resolves to one value per submitted payload, so an `arm` tag is only
