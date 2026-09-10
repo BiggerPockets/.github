@@ -22,19 +22,22 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
 4. Enforce these BiggerPockets member-privacy rules and flag any violation with a
    file/line reference:
    {{@prompts/_shared/privacy-rules.md}}
-5. {{@prompts/_shared/migration-data-rule.md}}
-6. Check the diff for batch/task performance hot spots per these rules, and flag each
+5. Enforce the email-deliverability rules and flag any violation with a
+   file/line reference:
+   {{@prompts/_shared/email-deliverability-rules.md}}
+6. {{@prompts/_shared/migration-data-rule.md}}
+7. Check the diff for batch/task performance hot spots per these rules, and flag each
    genuine one with a file/line reference and a suggested fix:
    {{@prompts/_shared/perf-rules.md}}
-7. Check how the diff parses structured values, per these rules:
+8. Check how the diff parses structured values, per these rules:
    {{@prompts/_shared/parsing-rules.md}}
-8. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
+9. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
    tag, per these rules:
    {{@prompts/_shared/navigation-rules.md}}
-9. Check whether the diff renames, moves, or deletes a name that is persisted outside
+10. Check whether the diff renames, moves, or deletes a name that is persisted outside
    the codebase and read back after deploy, per these rules:
    {{@prompts/_shared/rename-compatibility-rules.md}}
-10. Report concrete issues — bugs, regressions, security problems, member-privacy
+11. Report concrete issues — bugs, regressions, security problems, member-privacy
    violations, incomplete tasks/half-measures/placeholders/deferred work, and genuine misses
    of the ticket's intent or clear scope creep — each with a file/line reference and a brief
    rationale. Do not list "doesn't match acceptance criteria" as an issue by itself; only
