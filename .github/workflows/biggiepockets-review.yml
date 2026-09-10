@@ -9,7 +9,13 @@ name: BiggiePockets Code Review (reusable)
 # Secrets are supplied by the caller via `secrets: inherit`:
 #   OPENROUTER_API_KEY, JIRA_EMAIL, JIRA_API_TOKEN,
 #   BIGGIEPOCKETS_PAT, DATADOG_API_KEY (optional; enables review-quality
-#   metrics in Datadog LLM Obs).
+#   metrics and cost tracking in Datadog LLM Obs).
+#
+# Cost tracking: each LLM span in the review trace carries the token counts and,
+# where OpenRouter reported one, the cost the pass was charged, so Datadog attributes
+# spend per model on the same trace as the quality metrics. Two optional org-level
+# variables say where that lands: DD_SITE and DD_LLMOBS_ML_APP. No Datadog endpoint
+# or org identifier is committed here. See README.md.
 #
 # Prompt versioning: every review-stage prompt lives in this repo's prompts/
 # registry (BiggerPockets/.github) as a versioned template, plus one shared rule
@@ -246,12 +252,17 @@ jobs:
         run: |
           codex_end_ns=$(date +%s%N)
           echo "CODEX_END_NS=$codex_end_ns" >> "$GITHUB_ENV"
+          # Codex writes its token counters to a session rollout on this runner, and
+          # the action exposes no usage output, so read them here and hand them to the
+          # job that reports the trace. One line, because the handoff is read as env.
+          codex_usage=$(python3 registry/scripts/llm-usage.py codex "${CODEX_MODEL:-unspecified}" | tr -d '\n') || codex_usage=""
           {
             echo "BASE_REF=$BASE_REF"
             echo "REVIEW_START_NS=$REVIEW_START_NS"
             echo "CODEX_START_NS=$CODEX_START_NS"
             echo "CODEX_END_NS=$codex_end_ns"
             echo "CODEX_STATUS=${{ steps.codex.outcome }}"
+            echo "CODEX_USAGE_JSON=$codex_usage"
           } > review-context.env
           touch codex-findings.md
 
@@ -418,6 +429,11 @@ jobs:
         continue-on-error: true
         env:
           DD_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+          # Site and ml_app come from org-level variables so no Datadog endpoint or
+          # org identifier is committed here; both fall back to public defaults.
+          DD_SITE: ${{ vars.DD_SITE }}
+          DD_LLMOBS_ML_APP: ${{ vars.DD_LLMOBS_ML_APP }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
           CODEX_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.codex_prompt_template }}
           ARM_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.arm_prompt_template }}
         run: |
@@ -508,6 +524,30 @@ jobs:
           codex_model_tag="${CODEX_MODEL:-unspecified}"
           claude_model_tag="${CLAUDE_MODEL:-unspecified}"
 
+          dd_site="${DD_SITE:-datadoghq.com}"
+          ml_app="${DD_LLMOBS_ML_APP:-biggiepockets-review}"
+
+          # Cost tracking. Each pass carries its own usage as span metrics plus a
+          # model identity split into the bare name and originating provider that
+          # Datadog's pricing catalog keys on ("openai/gpt-5.6-sol" -> gpt-5.6-sol +
+          # openai); the OpenRouter gateway is kept as a tag instead. Datadog then
+          # prices a catalogued model from its token counts, and takes the reported
+          # `total_cost` at face value for one it doesn't carry. Both numbers come
+          # from what the tools recorded — OpenRouter reports what it charged, and
+          # llm-usage.py holds no rate table of its own.
+          #
+          # Only usage objects are read, never message content. The Codex pass's
+          # counters travel from its own job in CODEX_USAGE_JSON, since the action
+          # exposes no usage output and its rollout stays on that runner.
+          # Fall back to an empty object if the helper can't run at all, so a cost
+          # problem can't cost us the quality metrics in the same payload.
+          no_fields='{"model_name":"unspecified","model_provider":"unspecified","metrics":{}}'
+          codex_fields="${CODEX_USAGE_JSON:-}"
+          claude_fields=$(python3 registry/scripts/llm-usage.py claude "$claude_model_tag" "${EXECUTION_FILE:-}") || claude_fields="$no_fields"
+          usable='has("model_name") and has("model_provider") and has("metrics")'
+          echo "$codex_fields" | jq -e "$usable" >/dev/null 2>&1 || codex_fields="$no_fields"
+          echo "$claude_fields" | jq -e "$usable" >/dev/null 2>&1 || claude_fields="$no_fields"
+
           run_id="$GITHUB_REPOSITORY-pr$PR-${{ github.run_id }}"
 
           trace_id=$(openssl rand -hex 16)
@@ -534,6 +574,8 @@ jobs:
             --arg codex_status "$codex_status" \
             --arg claude_status "$claude_status" \
             --arg root_status "$root_status" \
+            --argjson codex_fields "$codex_fields" \
+            --argjson claude_fields "$claude_fields" \
             --arg codex_findings_excerpt "$codex_findings_excerpt" \
             --arg summary_excerpt "$summary_excerpt" \
             --argjson codex_prompt "$codex_prompt_obj" \
@@ -561,10 +603,11 @@ jobs:
                 start_ns: $codex_start_ns,
                 duration: $codex_duration,
                 status: $codex_status,
+                metrics: $codex_fields.metrics,
                 meta: {
                   kind: "llm",
-                  model_name: $codex_model,
-                  model_provider: "openrouter",
+                  model_name: $codex_fields.model_name,
+                  model_provider: $codex_fields.model_provider,
                   input: {
                     messages: [{role: "user", content: "Review pr:\($pr) against ticket.json/pr.diff"}],
                     prompt: $codex_prompt
@@ -580,10 +623,11 @@ jobs:
                 start_ns: $claude_start_ns,
                 duration: $claude_duration,
                 status: $claude_status,
+                metrics: $claude_fields.metrics,
                 meta: {
                   kind: "llm",
-                  model_name: $claude_model,
-                  model_provider: "openrouter",
+                  model_name: $claude_fields.model_name,
+                  model_provider: $claude_fields.model_provider,
                   input: {
                     messages: [{role: "user", content: $codex_findings_excerpt}],
                     prompt: $arm_prompt
@@ -594,7 +638,7 @@ jobs:
             ]')
 
           payload=$(jq -n \
-            --arg ml_app "biggiepockets-review" \
+            --arg ml_app "$ml_app" \
             --arg repo "$GITHUB_REPOSITORY" \
             --arg pr "$PR" \
             --arg run_id "$run_id" \
@@ -629,6 +673,7 @@ jobs:
                     "control_arm:\($control_arm)",
                     "assignment_bucket:\($assignment_bucket)",
                     "experiment_split_percent:\($split_percent)",
+                    "gateway:openrouter",
                     "codex_model:\($codex_model)",
                     "claude_model:\($claude_model)",
                     "codex_findings_lines:\($codex_findings_lines)",
@@ -641,7 +686,7 @@ jobs:
             }')
 
           http_code=$(curl -sS -o /tmp/dd_response.json -w '%{http_code}' \
-            -X POST "https://api.datadoghq.com/api/intake/llm-obs/v1/trace/spans" \
+            -X POST "https://api.${dd_site}/api/intake/llm-obs/v1/trace/spans" \
             -H "Content-Type: application/json" \
             -H "DD-API-KEY: $DD_API_KEY" \
             -d "$payload") || http_code="000"

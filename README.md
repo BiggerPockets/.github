@@ -100,6 +100,50 @@ run and post normally without it, but no metrics are reported.
 The exact secret names each step expects are visible in the `env:` and `with:` blocks of
 [`.github/workflows/biggiepockets-review.yml`](.github/workflows/biggiepockets-review.yml).
 
+#### Cost tracking (Datadog LLM Observability)
+
+`secrets.DATADOG_API_KEY` also turns on cost tracking. Every LLM span in the review
+trace carries its token usage — input, output, total, and cached-read counts — under
+`metrics`, and Datadog prices the span from its own model pricing catalog. Cost is
+therefore attributed per pass and per model on the same trace as the quality metrics,
+and shows up in LLM Observability's spend views without a separate report.
+
+For the catalog to recognise a model, a span has to name it the way Datadog does: the
+bare model and the provider that originated it. The workflow runs everything through
+OpenRouter, whose slugs look like `openai/gpt-5.6-sol`, so `scripts/llm-usage.py`
+splits the slug into `model_name: gpt-5.6-sol` / `model_provider: openai` and records
+the routing as a `gateway:openrouter` tag.
+
+Cost itself is never computed here, and there is no rate table in the repository: a
+list price committed to a file goes stale silently and would be reported with the same
+confidence as a real one. Instead each span carries whichever of the two things
+Datadog needs. For a model in the catalog, token counts are enough. For one it does
+not carry, the span reports a `total_cost` metric — the amount OpenRouter says it
+charged, taken from the `cost` field it returns on every response, where that figure
+survives into what the tool wrote to disk.
+
+The two passes record their usage differently. Claude Code writes a `usage` object to
+its execution output. Codex writes running token counters to a session rollout on its
+own runner, and since its action exposes no usage output, the workflow reads that
+rollout in the Codex job and hands the totals to the reporting job. In both cases only
+usage objects are read — never message content, transcripts, prompts, or diffs. Claude
+Code's own `total_cost_usd` is ignored: it is computed against Anthropic's list prices,
+while these passes are billed by OpenRouter for a non-Anthropic model.
+
+Two **organization-level variables** (`vars`, not secrets — **Settings → Secrets and
+variables → Actions → Variables** at the org level) configure where the trace lands.
+Both are optional, and nothing here is committed to the repository:
+
+- `DD_SITE` — the Datadog site to report to (e.g. `datadoghq.eu`, `us5.datadoghq.com`).
+  Defaults to the public `datadoghq.com`. Set this to the organization's actual site;
+  a private or internal Datadog hostname belongs in this variable and nowhere else.
+- `DD_LLMOBS_ML_APP` — the LLM Obs `ml_app` the review trace is grouped under.
+  Defaults to `biggiepockets-review`.
+
+Cost tracking is best-effort and never fails a review. With no `DATADOG_API_KEY` the
+whole reporting step is skipped, and a missing execution file, an absent rollout, or
+malformed usage data degrades to fewer metrics on the span.
+
 #### 4. Set workflow permissions
 
 The reusable workflow's jobs need `pull-requests: read` and `id-token: write` (OIDC
