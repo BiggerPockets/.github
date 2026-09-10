@@ -35,19 +35,22 @@ Synthesize a single review decision for pull request #{{PR}}.
    pattern on a full-table #process/#collection is a genuine finding, not a nitpick;
    flag it with a suggested fix:
    {{@prompts/_shared/perf-rules.md}}
-9. Check how the diff parses structured values, per these rules:
+9. Check whether the diff does per-element work inside a web request that belongs in a
+   background job, and whether a job it adds reports progress and is safe to retry:
+   {{@prompts/_shared/blocking-request-rules.md}}
+10. Check how the diff parses structured values, per these rules:
    {{@prompts/_shared/parsing-rules.md}}
-10. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
+11. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
    tag, per these rules:
    {{@prompts/_shared/navigation-rules.md}}
-11. Check whether the diff renames, moves, or deletes a name that is persisted outside
+12. Check whether the diff renames, moves, or deletes a name that is persisted outside
    the codebase and read back after deploy, per these rules:
    {{@prompts/_shared/rename-compatibility-rules.md}}
-12. Validate which of Codex's findings are real (discard false positives), add any genuine
+13. Validate which of Codex's findings are real (discard false positives), add any genuine
    issues Codex missed, and (when a ticket is available) judge genuine misses of the ticket's
    intent or clear scope creep — but give credit when the author went beyond the literal
    acceptance criteria in a sound way rather than flagging it as non-compliant.
-13. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
+14. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
    genuine, blocking issue (such as a bug, regression, privacy violation, half-finished task,
    placeholder, or deferred work); otherwise "approve". A change that exceeds the AC without
    breaking the ticket's intent is a reason to approve, not to block.

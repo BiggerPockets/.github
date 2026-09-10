@@ -29,15 +29,18 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
 7. Check the diff for batch/task performance hot spots per these rules, and flag each
    genuine one with a file/line reference and a suggested fix:
    {{@prompts/_shared/perf-rules.md}}
-8. Check how the diff parses structured values, per these rules:
+8. Check whether the diff does per-element work inside a web request that belongs in a
+   background job, and whether a job it adds reports progress and is safe to retry:
+   {{@prompts/_shared/blocking-request-rules.md}}
+9. Check how the diff parses structured values, per these rules:
    {{@prompts/_shared/parsing-rules.md}}
-9. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
+10. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
    tag, per these rules:
    {{@prompts/_shared/navigation-rules.md}}
-10. Check whether the diff renames, moves, or deletes a name that is persisted outside
+11. Check whether the diff renames, moves, or deletes a name that is persisted outside
    the codebase and read back after deploy, per these rules:
    {{@prompts/_shared/rename-compatibility-rules.md}}
-11. Report concrete issues — bugs, regressions, security problems, member-privacy
+12. Report concrete issues — bugs, regressions, security problems, member-privacy
    violations, incomplete tasks/half-measures/placeholders/deferred work, and genuine misses
    of the ticket's intent or clear scope creep — each with a file/line reference and a brief
    rationale. Do not list "doesn't match acceptance criteria" as an issue by itself; only
