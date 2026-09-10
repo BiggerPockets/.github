@@ -10,15 +10,21 @@ file would go stale silently and be reported with the same confidence as a real 
 
 Where the numbers come from:
 
-- Both passes reach models through OpenRouter, which reports what it charged in the
-  `cost` field of every response's usage object. Where that figure survives into what
-  the tool wrote to disk, it is the authoritative cost for the pass and is emitted as
-  `total_cost` — a real charge, not an estimate.
+- Both passes reach models through OpenRouter, which reports what it charged in
+  the `cost` field of every response's usage object. Where that figure survives into
+  what the tool wrote to disk, it is the authoritative cost for the pass and is
+  emitted as `total_cost` — a real charge, not an estimate.
 - The Codex pass writes token counters to its session rollout. Its model is in the
   catalog, so those counts are enough for Datadog to price it.
+- The pi pass records a usage object on every run (input/output/cacheRead/cacheWrite
+  plus `cost.total`, a price computed by pi from the model's OpenRouter list rates
+  pinned in scripts/pi/models.json — the same rates OpenRouter bills against, so
+  `cost.total` is the amount the pass is charged; verified against a live run
+  where 17,515 input tokens at $0.019/M priced exactly to what OpenRouter charges).
 - Claude Code's own `total_cost_usd` is deliberately ignored. It is computed against
   Anthropic's list prices, and these passes are billed by OpenRouter for a non-
-  Anthropic model, so it describes a bill nobody was sent.
+  Anthropic model, so it describes a bill nobody was sent. (The Claude Code harness
+  itself is no longer used for Stage 2, but the parser stays for historical files.)
 
 The workflow names models the way OpenRouter routes them ("openai/gpt-5.6-sol").
 Datadog's catalog keys on the bare model and its originating provider, so
@@ -30,6 +36,7 @@ transcripts, prompts, diffs, and responses are never read or emitted.
 
 Usage: llm-usage.py claude <model-slug> [execution-file]
        llm-usage.py codex  <model-slug> [rollout-dir]
+       llm-usage.py pi     <model-slug> [event-stream-file]
 Prints a JSON object on stdout for the workflow's jq to splice into a span:
   {"model_name": ..., "model_provider": ..., "gateway": ..., "metrics": {...}}
 `metrics` carries only what is actually known; it is `{}` when nothing is.
@@ -60,6 +67,16 @@ CODEX_USAGE_FIELDS = {
     "input_tokens": "input_tokens",
     "output_tokens": "output_tokens",
     "cached_input_tokens": "cache_read_input_tokens",
+}
+
+# pi's normalized usage object, as written to its JSON event stream (--mode json),
+# mapped to Datadog's metric names. `cost.total` (computed by pi from the model's
+# OpenRouter list rates) is handled separately below.
+PI_USAGE_FIELDS = {
+    "input": "input_tokens",
+    "output": "output_tokens",
+    "cacheRead": "cache_read_input_tokens",
+    "cacheWrite": "cache_write_input_tokens",
 }
 
 
@@ -189,6 +206,53 @@ def codex_usage(directory):
     return (collect(totals, CODEX_USAGE_FIELDS), openrouter_cost(totals))
 
 
+def pi_cost(usage):
+    """The amount pi computed for the pass from the model's OpenRouter list rates
+    (usage.cost.total), or None when it is absent, non-numeric, or zero. Zero is
+    treated as "nothing reported" — a free call or an absent rate table both
+    report no cost, matching the claude/codex conventions."""
+    if not isinstance(usage, dict):
+        return None
+    cost = usage.get("cost")
+    if not isinstance(cost, dict):
+        return None
+    total = read_number(cost.get("total"))
+    if total is None or total <= 0:
+        return None
+    return total
+
+
+def pi_usage(path):
+    """pi's JSON event stream (--mode json) -> (token counts, reported cost or None).
+    Every assistant message carries the cumulative usage of the turn so far; the last
+    one that finished cleanly is the whole pass. Events of interest are
+    message_end/turn_end (message under `message`) and agent_end (messages array)."""
+    candidates = []
+    for event in read_messages(path):
+        message = event.get("message")
+        if event.get("type") == "agent_end":
+            messages = event.get("messages")
+            if isinstance(messages, list) and messages:
+                message = messages[-1]
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        if not isinstance(message.get("usage"), dict):
+            continue
+        candidates.append(message)
+    if not candidates:
+        return ({}, None)
+    # Prefer the last message that finished cleanly; fall back to the last one with
+    # any usage; last resort is the last assistant message overall.
+    chosen = next(
+        (m for m in reversed(candidates) if m.get("stopReason") == "stop"),
+        next(
+            (m for m in reversed(candidates) if sum(
+                read_number(m["usage"].get(k)) or 0 for k in ("input", "output")) > 0),
+            candidates[-1]))
+    usage = chosen.get("usage") or {}
+    return (collect(usage, PI_USAGE_FIELDS), pi_cost(usage))
+
+
 def build_span_fields(slug, counts, cost):
     """Pure assembly of the span fields the workflow splices in: a catalog-matching
     model identity, whichever token counts are known, and a reported cost when there
@@ -216,6 +280,8 @@ def main(argv):
         counts, cost = codex_usage(source or DEFAULT_ROLLOUT_DIR)
     elif pass_name == "claude":
         counts, cost = claude_usage(source)
+    elif pass_name == "pi":
+        counts, cost = pi_usage(source)
     else:
         counts, cost = ({}, None)
     print(json.dumps(build_span_fields(slug, counts, cost)))

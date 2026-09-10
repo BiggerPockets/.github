@@ -1,7 +1,7 @@
 {
   "//": "Prompt registry config for the BiggiePockets review workflow.",
   "//": "",
-  "//": "Each review runs ONE Claude synthesize pass. Which arm's prompt it runs is",
+  "//": "Each review runs ONE Stage-2 synthesize pass (pi). Which arm's prompt it runs is",
   "//": "decided per pull request: scripts/resolve-prompts.sh hashes '<repo>:<pr>' into a",
   "//": "bucket 0-99, and a PR below experiment_split_percent is assigned the experiment",
   "//": "arm instead of control_arm. The assigned arm writes the summary that gets posted",
@@ -14,7 +14,7 @@
   "//": "",
   "//": "Comparison is BETWEEN pull requests: Datadog tags each review with its assigned",
   "//": "arm, so verdict rates and latency group by arm across PRs. No PR is ever reviewed",
-  "//": "by two arms, which is what keeps Claude token spend at one pass per review.",
+  "//": "by two arms, which is what keeps Stage-2 token spend at one pass per review.",
   "//": "",
   "//": "prompts/<name>.md are versioned templates; shared rule blocks live in",
   "//": "prompts/_shared/ and are injected via {{@path}} markers. Prompt versions are",

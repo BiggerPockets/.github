@@ -29,6 +29,29 @@ def token_count(**usage):
             'payload': {'type': 'token_count', 'info': {'total_token_usage': usage}}}
 
 
+def pi_message(stop_reason='stop', usage=None, text='', error=None, timestamp=2000):
+    message = {'role': 'assistant', 'stopReason': stop_reason, 'timestamp': timestamp}
+    if usage is not None:
+        message['usage'] = usage
+    if error:
+        message['errorMessage'] = error
+    elif text:
+        message['content'] = [{'type': 'text', 'text': text}]
+    return message
+
+
+def pi_stream(*messages):
+    """A minimal pi event stream: session, turn_start, one message_end per
+    assistant message, then turn_end and agent_end carrying all of them (the last
+    message is the terminal one)."""
+    events = [{'type': 'session'}, {'type': 'turn_start'}]
+    events += [{'type': 'message_end', 'message': message}
+               for message in messages]
+    events += [{'type': 'turn_end'},
+               {'type': 'agent_end', 'messages': list(messages)}]
+    return events
+
+
 class SplitModelTest(unittest.TestCase):
     def test_splits_openrouter_slug_into_catalog_name_and_provider(self):
         self.assertEqual(llm_usage.split_model('openai/gpt-5.6-sol'),
@@ -137,6 +160,62 @@ class CodexUsageTest(unittest.TestCase):
     def test_missing_session_directory_yields_nothing(self):
         self.assertEqual(llm_usage.codex_usage('/nonexistent/sessions'), ({}, None))
         self.assertEqual(llm_usage.codex_usage(''), ({}, None))
+
+
+class PiUsageTest(unittest.TestCase):
+    def test_reads_counts_and_computed_cost_from_the_last_finished_message(self):
+        usage = {'input': 17515, 'output': 17, 'cacheRead': 17024,
+                 'cacheWrite': 0, 'totalTokens': 34556,
+                 'cost': {'input': 0.000332785, 'output': 5.1e-07,
+                          'cacheRead': 0.000038966, 'cacheWrite': 0,
+                          'total': 0.000372255}}
+        path = write('\n'.join(json.dumps(e) for e in pi_stream(pi_message(usage=usage))))
+        counts, cost = llm_usage.pi_usage(path)
+        self.assertEqual(counts, {'input_tokens': 17515, 'output_tokens': 17,
+                                  'cache_read_input_tokens': 17024,
+                                  'cache_write_input_tokens': 0})
+        self.assertEqual(cost, 0.000372255)
+
+    def test_prefers_the_last_clean_message_over_a_failed_retry_after_it(self):
+        clean = pi_message(stop_reason='stop', text='review done', usage={
+            'input': 500, 'output': 100, 'cacheRead': 0, 'cacheWrite': 0,
+            'totalTokens': 600, 'cost': {'total': 0.9}})
+        failed = pi_message(stop_reason='error', error='429 rate limited', usage={
+            'input': 10, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0,
+            'totalTokens': 10, 'cost': {'total': 0.0}})
+        path = write('\n'.join(json.dumps(e) for e in pi_stream(clean, failed)))
+        counts, cost = llm_usage.pi_usage(path)
+        self.assertEqual(counts['input_tokens'], 500)
+        self.assertEqual(cost, 0.9)
+
+    def test_zero_cost_is_no_reported_cost(self):
+        usage = {'input': 10, 'output': 2, 'cacheRead': 0, 'cacheWrite': 0,
+                 'totalTokens': 12, 'cost': {'total': 0.0}}
+        path = write('\n'.join(json.dumps(e) for e in pi_stream(pi_message(usage=usage))))
+        _, cost = llm_usage.pi_usage(path)
+        self.assertIsNone(cost)
+
+    def test_missing_file_yields_nothing(self):
+        self.assertEqual(llm_usage.pi_usage('/nonexistent/pi-output.jsonl'), ({}, None))
+        self.assertEqual(llm_usage.pi_usage(''), ({}, None))
+
+    def test_stream_without_an_assistant_message_yields_nothing(self):
+        path = write('\n'.join(json.dumps(e) for e in [
+            {'type': 'session'}, {'type': 'turn_start'},
+            {'type': 'agent_end', 'messages': []},
+        ]))
+        self.assertEqual(llm_usage.pi_usage(path), ({}, None))
+
+    def test_agent_end_alone_is_enough_when_no_message_end_events_exist(self):
+        events = [{'type': 'session'},
+                  {'type': 'agent_end', 'messages': [
+                      pi_message(usage={'input': 7, 'output': 3, 'cacheRead': 0,
+                                        'cacheWrite': 0, 'totalTokens': 10,
+                                        'cost': {'total': 0.01}})]}]
+        path = write('\n'.join(json.dumps(e) for e in events))
+        counts, cost = llm_usage.pi_usage(path)
+        self.assertEqual(counts['input_tokens'], 7)
+        self.assertEqual(cost, 0.01)
 
 
 class BuildSpanFieldsTest(unittest.TestCase):
