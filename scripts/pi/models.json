@@ -2,15 +2,24 @@
   "//": "pi config for the Stage 2 review pass (BiggiePockets/.github).",
   "//": "",
   "//": "pi resolves models from the config dir pointed at by PI_CODING_AGENT_DIR. This file",
-  "//": "declares the OpenRouter provider and the single pinned Stage 2 model with its",
-  "//": "OpenRouter list rates, so a FRESH CI runner (no cached models-store.json) resolves",
-  "//": "the model deterministically. The model is absent from the catalog pi ships and the",
-  "//": "live catalog refresh is a background fetch, not a startup step we can rely on.",
+  "//": "declares the OpenRouter provider and every model Stage 2 is allowed to run on, each",
+  "//": "with its OpenRouter list rates, so a FRESH CI runner (no cached models-store.json)",
+  "//": "resolves them deterministically. These models are absent from the catalog pi ships",
+  "//": "and the live catalog refresh is a background fetch, not a startup step we can rely",
+  "//": "on.",
   "//": "",
-  "//": "Rates: $/1M tokens as published by OpenRouter for deepseek/deepseek-v4.1-flash at",
-  "//": "the time of pinning (input 0.15, output 0.6, input cache read 0.003; no cache write",
-  "//": "rate). pi computes cost.total from these, so it is exactly what OpenRouter bills for",
-  "//": "standard usage. If you roll the model, update the id AND these rates together.",
+  "//": "This is the allowlist behind the workflow.s pi_model input. A repo may point itself",
+  "//": "at any id listed here; the workflow fails early, by name, on a slug that is not.",
+  "//": "The default when a caller says nothing is deepseek/deepseek-v4.1-flash.",
+  "//": "",
+  "//": "Context: the DeepSeek models carry ~1M tokens, Claude Haiku 4.5 carries 200k. Stage 2",
+  "//": "reads a diff plus the Codex handoff, so a very large pull request has less headroom on",
+  "//": "Haiku than the numbers elsewhere in this file suggest.",
+  "//": "",
+  "//": "Rates are $/1M tokens exactly as OpenRouter publishes them at the time of pinning.",
+  "//": "pi computes cost.total from these, so they are what OpenRouter bills for standard",
+  "//": "usage and what Datadog attributes spend from. Adding a model means adding its id",
+  "//": "AND its published rates together; rolling one means updating both.",
   "//": "",
   "//": "The apiKey interpolation reads OPENROUTER_API_KEY from the workflow environment",
   "//": "(the same org secret the Codex stage uses) — no interactive login or OAuth is",
@@ -30,6 +39,17 @@
             "output": 0.6,
             "cacheRead": 0.003,
             "cacheWrite": 0
+          }
+        },
+        {
+          "id": "anthropic/claude-haiku-4.5",
+          "name": "Claude Haiku 4.5",
+          "reasoning": true,
+          "cost": {
+            "input": 1.0,
+            "output": 5.0,
+            "cacheRead": 0.1,
+            "cacheWrite": 1.25
           }
         }
       ]
