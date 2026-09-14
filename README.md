@@ -76,6 +76,11 @@ jobs:
       # so callers tracking `@main` can omit it. If you pin the `uses:` ref above to a tag
       # or SHA, pass the matching ref here too — otherwise prompts silently track main.
       registry_ref: main
+      # OpenRouter slug for the Stage 2 (pi) pass. Omit it to review on the org default.
+      # Set it to put this repo on a different model — the slug must be one of the models
+      # pinned in `scripts/pi/models.json`. Reading it from a repository variable lets the
+      # repo be moved between pinned models without a pull request.
+      pi_model: ${{ vars.PI_MODEL || 'deepseek/deepseek-v4.1-flash' }}
     secrets: inherit
 ```
 
@@ -92,7 +97,8 @@ It also reports per-review traces to the `biggiepockets-review` app in Datadog L
 Observability via `secrets.DATADOG_API_KEY`: verdict, timing, prompt template and version
 (tracked as prompts, see below), the model each
 stage ran (`CODEX_MODEL`/`PI_MODEL` env vars in the workflow — both are OpenRouter
-model slugs and must be set), and the actual findings text from Codex and the summary pi wrote,
+model slugs and must be set; `PI_MODEL` comes from the `pi_model` input, so a repo's
+Stage-2 model is visible in its own traces), and the actual findings text from Codex and the summary pi wrote,
 so review quality is inspectable, not just counted. This secret is optional — reviews still
 run and post normally without it, but no metrics are reported.
 
@@ -121,11 +127,11 @@ in the catalog, token counts are enough. For one it does not carry, the span rep
 The two passes record their usage differently. pi runs in `--mode json` and writes a
 JSON event stream; every assistant message carries a usage object with token counts and
 `cost.total` — a price computed by pi from the model's OpenRouter list rates, the same
-rates OpenRouter bills against, so it is the amount the pass is charged. The Stage-2
-model and its rates are pinned in `scripts/pi/models.json` (the catalog pi ships
-predates the model, and the live catalog refresh is a background fetch, not a startup
-step — a committed pin is what makes a fresh runner deterministic); if you roll the
-Stage-2 model, update that file in the same commit. Codex writes running token counters
+rates OpenRouter bills against, so it is the amount the pass is charged. Every model
+Stage 2 may run on is pinned with its rates in `scripts/pi/models.json` (the catalog pi
+ships predates them, and the live catalog refresh is a background fetch, not a startup
+step — a committed pin is what makes a fresh runner deterministic); adding or rolling a
+Stage-2 model means changing that file in the same commit. Codex writes running token counters
 to a session rollout on its own runner, and since its action exposes no usage output,
 the workflow reads that rollout in the Codex job and hands the totals to the reporting
 job. In both cases only usage objects are read — never message content, transcripts,

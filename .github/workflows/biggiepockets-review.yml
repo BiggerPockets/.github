@@ -52,6 +52,20 @@ on:
         required: false
         default: main
         type: string
+      pi_model:
+        description: >-
+          OpenRouter model slug for the Stage 2 (pi) pass. Defaults to the model the whole
+          org reviews on; a caller overrides it to put one repo on a different model —
+          e.g. to route around a provider that is failing upstream, or to trial a model on
+          a low-traffic repo before rolling it everywhere.
+
+          The slug MUST be one of the models pinned in scripts/pi/models.json. A fresh CI
+          runner resolves models only from that file, so an unlisted slug cannot be
+          resolved and the run is failed early, by name, rather than dying mid-review.
+          Adding a model is a one-line catalog entry plus its published OpenRouter rates.
+        required: false
+        default: deepseek/deepseek-v4.1-flash
+        type: string
 
 jobs:
   # Codex and Claude intentionally run in separate jobs. GitHub can only re-run a
@@ -77,7 +91,7 @@ jobs:
       # one OpenRouter accepts.
       CODEX_MODEL: "openai/gpt-5.6-sol"
       CODEX_RESPONSES_ENDPOINT: "https://openrouter.ai/api/v1/responses"
-      PI_MODEL: "deepseek/deepseek-v4.1-flash"
+      PI_MODEL: ${{ inputs.pi_model }}
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
@@ -291,7 +305,7 @@ jobs:
     env:
       PR: ${{ inputs.pr }}
       CODEX_MODEL: "openai/gpt-5.6-sol"
-      PI_MODEL: "deepseek/deepseek-v4.1-flash"
+      PI_MODEL: ${{ inputs.pi_model }}
     steps:
       - name: Checkout reviewed PR head
         uses: actions/checkout@v4
@@ -337,14 +351,27 @@ jobs:
 
       # pi resolves its models from a config dir (PI_CODING_AGENT_DIR). Point it at a
       # writable scratch dir seeded with the pinned OpenRouter provider from
-      # scripts/pi/models.json: the pinned model + rates are what make a FRESH runner
-      # deterministic — the model is absent from the catalog pi ships, and the live
+      # scripts/pi/models.json: the pinned models + rates are what make a FRESH runner
+      # deterministic — these models are absent from the catalog pi ships, and the live
       # catalog refresh is a background fetch, not a startup step we can rely on.
+      #
+      # That is also why the requested model is checked against the catalog here. An
+      # unlisted slug is unresolvable on a fresh runner, and pi would otherwise discover
+      # that only after the review had started, surfacing as an empty verdict rather than
+      # as the configuration mistake it is.
       - name: Configure pi
         run: |
           mkdir -p "$RUNNER_TEMP/pi-config"
           cp registry/scripts/pi/models.json "$RUNNER_TEMP/pi-config/models.json"
           echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-config" >> "$GITHUB_ENV"
+
+          if ! jq -e --arg m "$PI_MODEL" \
+            '.providers.openrouter.models[] | select(.id == $m)' \
+            "$RUNNER_TEMP/pi-config/models.json" > /dev/null; then
+            known=$(jq -r '.providers.openrouter.models[].id' "$RUNNER_TEMP/pi-config/models.json" | paste -sd, -)
+            echo "::error::pi_model '$PI_MODEL' is not pinned in scripts/pi/models.json (have: $known). Add it there with its published OpenRouter rates before pointing a repo at it." >&2
+            exit 1
+          fi
 
       - name: Record pi start time
         run: echo "PI_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
