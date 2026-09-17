@@ -10,9 +10,9 @@
   "//": "",
   "//": "This is the allowlist behind the workflow.s pi_model input. A repo may point itself",
   "//": "at any id listed here; the workflow fails early, by name, on a slug that is not.",
-  "//": "The default when a caller says nothing is deepseek/deepseek-v4.1-flash.",
+  "//": "The default when a caller says nothing is z-ai/glm-5.3-flash.",
   "//": "",
-  "//": "Context: the DeepSeek models carry ~1M tokens, Claude Haiku 4.5 carries 200k. Stage 2",
+  "//": "Context: the GLM Flash model carries ~1M tokens, Claude Haiku 4.5 carries 200k. Stage 2",
   "//": "reads a diff plus the Codex handoff, so a very large pull request has less headroom on",
   "//": "Haiku than the numbers elsewhere in this file suggest.",
   "//": "",
@@ -31,13 +31,13 @@
       "api": "openai-completions",
       "models": [
         {
-          "id": "deepseek/deepseek-v4.1-flash",
-          "name": "DeepSeek V4.1 Flash",
+          "id": "z-ai/glm-5.3-flash",
+          "name": "GLM 5.3 Flash",
           "reasoning": true,
           "cost": {
-            "input": 0.15,
-            "output": 0.6,
-            "cacheRead": 0.003,
+            "input": 0.09,
+            "output": 0.3,
+            "cacheRead": 0.018,
             "cacheWrite": 0
           }
         },

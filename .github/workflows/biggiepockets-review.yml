@@ -64,7 +64,7 @@ on:
           resolved and the run is failed early, by name, rather than dying mid-review.
           Adding a model is a one-line catalog entry plus its published OpenRouter rates.
         required: false
-        default: deepseek/deepseek-v4.1-flash
+        default: z-ai/glm-5.3-flash
         type: string
 
 jobs:
@@ -586,7 +586,7 @@ jobs:
           # Cost tracking. Each pass carries its own usage as span metrics plus a
           # model identity split into the bare name and originating provider that
           # Datadog's pricing catalog keys on ("openai/gpt-5.6-sol" -> gpt-5.6-sol +
-          # openai; "deepseek/deepseek-v4.1-flash" -> deepseek-v4.1-flash + deepseek);
+          # openai; "z-ai/glm-5.3-flash" -> glm-5.3-flash + z-ai);
           # the OpenRouter gateway is kept as a tag instead. Datadog then prices a
           # catalogued model from its token counts, and takes the reported `total_cost`
           # at face value for one it doesn't carry.

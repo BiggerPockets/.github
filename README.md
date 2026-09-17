@@ -80,7 +80,7 @@ jobs:
       # Set it to put this repo on a different model — the slug must be one of the models
       # pinned in `scripts/pi/models.json`. Reading it from a repository variable lets the
       # repo be moved between pinned models without a pull request.
-      pi_model: ${{ vars.PI_MODEL || 'deepseek/deepseek-v4.1-flash' }}
+      pi_model: ${{ vars.PI_MODEL || 'z-ai/glm-5.3-flash' }}
     secrets: inherit
 ```
 
