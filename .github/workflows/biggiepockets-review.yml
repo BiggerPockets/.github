@@ -389,7 +389,7 @@ jobs:
           # can steer the run. Stderr is captured so a failure carries pi's own error
           # text into the diagnostics step without polluting the JSONL that
           # llm-usage.py parses.
-          timeout 1500 pi --mode json \
+          timeout 900 pi --mode json \
             --model "$PI_MODEL" \
             --tools read,grep,glob,bash,write \
             --no-context-files --no-skills --no-extensions \
