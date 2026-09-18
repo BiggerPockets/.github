@@ -132,6 +132,14 @@ class GenerateSvgTest(unittest.TestCase):
         self.assertTrue(svg.startswith("<svg"))
         self.assertTrue(svg.endswith("</svg>"))
 
+    def test_pads_the_canvas_beyond_the_plot_dimensions(self):
+        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
+        svg = freshness.generate_svg(pinned, [], None)
+        padded_width = freshness.CHART_WIDTH + 2 * freshness.CHART_PADDING
+        padded_height = freshness.CHART_HEIGHT + 2 * freshness.CHART_PADDING
+        self.assertIn(f'width="{padded_width}" height="{padded_height}"', svg)
+        self.assertIn(f'<g transform="translate({freshness.CHART_PADDING} {freshness.CHART_PADDING})">', svg)
+
     def test_legend_sits_left_of_the_y_axis(self):
         pinned = [{"id": "z-ai/glm-5.3-flash", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
         svg = freshness.generate_svg(pinned, [], None)
@@ -157,29 +165,29 @@ class GenerateSvgTest(unittest.TestCase):
         self.assertIn("100k", svg)
         self.assertIn("1M", svg)
 
-    def test_draws_a_line_at_the_average_review_input_size(self):
+    def test_draws_a_line_at_the_max_review_input_size(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000}]
-        token_mix = {"avg_input_tokens": 200_000}
+        token_mix = {"max_input_tokens": 200_000}
         svg = freshness.generate_svg(pinned, [], token_mix)
-        self.assertIn("avg review input size", svg)
+        self.assertIn("max review input size", svg)
         self.assertIn("200k", svg)
 
-    def test_no_average_line_without_token_mix(self):
+    def test_no_max_line_without_token_mix(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000}]
         svg = freshness.generate_svg(pinned, [], None)
-        self.assertNotIn("avg review input size", svg)
+        self.assertNotIn("max review input size", svg)
 
-    def test_no_average_line_when_token_mix_has_no_sampled_spans(self):
+    def test_no_max_line_when_token_mix_has_no_sampled_spans(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000}]
-        svg = freshness.generate_svg(pinned, [], {"avg_input_tokens": 0})
-        self.assertNotIn("avg review input size", svg)
+        svg = freshness.generate_svg(pinned, [], {"max_input_tokens": 0})
+        self.assertNotIn("max review input size", svg)
 
-    def test_marks_points_smaller_than_average_review_input_size_as_inadequate(self):
+    def test_marks_points_smaller_than_max_total_review_size_as_inadequate(self):
         pinned = [{"id": "small/model", "effective_rate_per_million": 0.09, "context_length": 50_000}]
         candidates = [{"id": "big/model", "effective_rate_per_million": 0.02, "context_length": 500_000}]
-        token_mix = {"avg_input_tokens": 200_000}
+        token_mix = {"max_input_tokens": 150_000, "max_output_tokens": 50_000, "max_total_tokens": 200_000}
         svg = freshness.generate_svg(pinned, candidates, token_mix)
-        self.assertIn("too small for the average review", svg)
+        self.assertIn("too small for the worst-case review", svg)
         self.assertIn('fill="#d62728"', svg)
         self.assertIn("inadequate context", svg)
 
@@ -188,19 +196,28 @@ class GenerateSvgTest(unittest.TestCase):
         svg = freshness.generate_svg(pinned, [], None)
         self.assertNotIn("#d62728", svg)
 
-    def test_draws_a_line_at_the_average_review_output_size(self):
+    def test_draws_a_line_at_the_max_review_output_size(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000}]
-        token_mix = {"avg_output_tokens": 5_000}
+        token_mix = {"max_output_tokens": 5_000}
         svg = freshness.generate_svg(pinned, [], token_mix)
-        self.assertIn("avg review output size", svg)
+        self.assertIn("max review output size", svg)
         self.assertIn("5k", svg)
 
-    def test_widens_the_x_axis_to_include_averages_smaller_than_any_plotted_point(self):
+    def test_widens_the_x_axis_to_include_maxes_smaller_than_any_plotted_point(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
-        token_mix = {"avg_input_tokens": 10_000, "avg_output_tokens": 500}
+        token_mix = {"max_input_tokens": 10_000, "max_output_tokens": 500}
         svg = freshness.generate_svg(pinned, [], token_mix)
         self.assertIn("10k", svg)
         self.assertIn("500</text>", svg)
+
+    def test_uses_max_total_not_max_input_alone_for_the_inadequate_cutoff(self):
+        # A model's context only needs to beat max_input_tokens on its own, but the
+        # combined input+output of the worst single review (max_total_tokens) can
+        # exceed that, so a model sized for input alone should still be flagged.
+        pinned = [{"id": "borderline/model", "effective_rate_per_million": 0.09, "context_length": 120_000}]
+        token_mix = {"max_input_tokens": 100_000, "max_output_tokens": 50_000, "max_total_tokens": 150_000}
+        svg = freshness.generate_svg(pinned, [], token_mix)
+        self.assertIn('fill="#d62728"', svg)
 
 
 class WriteSvgTest(unittest.TestCase):
@@ -275,8 +292,9 @@ class FetchTokenMixTest(unittest.TestCase):
         self.assertAlmostEqual(mix["fresh_input_share"], 15 / total)
         self.assertAlmostEqual(mix["cache_read_share"], 120 / total)
         self.assertAlmostEqual(mix["output_share"], 8 / total)
-        self.assertAlmostEqual(mix["avg_input_tokens"], (15 + 120) / 2)
-        self.assertAlmostEqual(mix["avg_output_tokens"], 8 / 2)
+        self.assertEqual(mix["max_input_tokens"], 90)  # span 1: 10 + 80
+        self.assertEqual(mix["max_output_tokens"], 5)  # span 1
+        self.assertEqual(mix["max_total_tokens"], 95)  # span 1: 90 + 5
 
     def test_none_on_request_failure(self):
         freshness.os.environ["DD_API_KEY"] = "key"

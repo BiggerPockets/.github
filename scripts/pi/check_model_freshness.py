@@ -65,6 +65,7 @@ LEGEND_WIDTH = 140  # dedicated gutter left of the y-axis so the legend never si
 CHART_WIDTH = 640 + LEGEND_WIDTH
 CHART_HEIGHT = 420
 CHART_MARGIN = {"left": 60 + LEGEND_WIDTH, "right": 20, "top": 30, "bottom": 50}
+CHART_PADDING = 16  # blank border around the whole chart, outside CHART_WIDTH/CHART_HEIGHT
 
 # Real usage mix for the pi review pass, sampled from Datadog LLM Observability
 # spans. A longer window smooths out any single noisy week; refreshed on every
@@ -119,9 +120,15 @@ def fetch_token_mix():
     """Sum input/cache-read/output tokens across the pi review pass's own
     `pi.synthesize` spans over TOKEN_MIX_WINDOW, via Datadog's LLM Observability
     spans search API. Returns {"fresh_input_share", "cache_read_share",
-    "output_share", "sample_count", "window"} or None when DD_API_KEY/DD_APP_KEY
-    aren't set, the request fails, or no spans have usable metrics — callers
-    fall back to the raw input rate in that case.
+    "output_share", "max_input_tokens", "max_output_tokens", "max_total_tokens",
+    "sample_count", "window"} or None when DD_API_KEY/DD_APP_KEY aren't set, the
+    request fails, or no spans have usable metrics — callers fall back to the
+    raw input rate in that case.
+
+    max_input_tokens/max_output_tokens/max_total_tokens are the single largest
+    per-span values seen, not averages: a model only needs to worry about the
+    worst review it might see, not the typical one, so an average would
+    understate how much context is actually required.
 
     pi's own instrumentation reports `input_tokens` as fresh (non-cached) tokens
     only, disjoint from `cache_read_input_tokens` — unlike some other passes'
@@ -133,6 +140,7 @@ def fetch_token_mix():
         return None
 
     fresh_input = cache_read = output = sample_count = 0
+    max_input_tokens = max_output_tokens = max_total_tokens = 0
     cursor = None
     while sample_count < TOKEN_MIX_MAX_SPANS:
         filter_ = {"from": TOKEN_MIX_WINDOW, "to": "now", "query": TOKEN_MIX_QUERY}
@@ -161,10 +169,15 @@ def fetch_token_mix():
             metrics = (span.get("attributes") or {}).get("metrics")
             if not metrics or "input_tokens" not in metrics:
                 continue
+            span_input = metrics.get("input_tokens", 0) + metrics.get("cache_read_input_tokens", 0)
+            span_output = metrics.get("output_tokens", 0)
             fresh_input += metrics.get("input_tokens", 0)
             cache_read += metrics.get("cache_read_input_tokens", 0)
-            output += metrics.get("output_tokens", 0)
+            output += span_output
             sample_count += 1
+            max_input_tokens = max(max_input_tokens, span_input)
+            max_output_tokens = max(max_output_tokens, span_output)
+            max_total_tokens = max(max_total_tokens, span_input + span_output)
 
         cursor = ((payload.get("meta") or {}).get("page") or {}).get("after")
         if not cursor or not spans:
@@ -177,8 +190,9 @@ def fetch_token_mix():
         "fresh_input_share": fresh_input / total,
         "cache_read_share": cache_read / total,
         "output_share": output / total,
-        "avg_input_tokens": (fresh_input + cache_read) / sample_count,
-        "avg_output_tokens": output / sample_count,
+        "max_input_tokens": max_input_tokens,
+        "max_output_tokens": max_output_tokens,
+        "max_total_tokens": max_total_tokens,
         "sample_count": sample_count,
         "window": TOKEN_MIX_WINDOW,
     }
@@ -297,9 +311,10 @@ def generate_svg(pinned_points, candidate_points, token_mix):
     if not rates or not contexts:
         return None
 
-    avg_input_tokens = (token_mix or {}).get("avg_input_tokens") or 0
-    avg_output_tokens = (token_mix or {}).get("avg_output_tokens") or 0
-    x_values = contexts + [n for n in (avg_input_tokens, avg_output_tokens) if n > 0]
+    max_input_tokens = (token_mix or {}).get("max_input_tokens") or 0
+    max_output_tokens = (token_mix or {}).get("max_output_tokens") or 0
+    max_total_tokens = (token_mix or {}).get("max_total_tokens") or 0
+    x_values = contexts + [n for n in (max_input_tokens, max_output_tokens) if n > 0]
 
     plot_w = CHART_WIDTH - CHART_MARGIN["left"] - CHART_MARGIN["right"]
     plot_h = CHART_HEIGHT - CHART_MARGIN["top"] - CHART_MARGIN["bottom"]
@@ -325,10 +340,14 @@ def generate_svg(pinned_points, candidate_points, token_mix):
     plot_center_x = CHART_MARGIN["left"] + plot_w / 2
     y_title_x = CHART_MARGIN["left"] - 44
 
+    padded_width = CHART_WIDTH + 2 * CHART_PADDING
+    padded_height = CHART_HEIGHT + 2 * CHART_PADDING
+
     parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{CHART_WIDTH}" height="{CHART_HEIGHT}" '
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{padded_width}" height="{padded_height}" '
         f'font-family="sans-serif" font-size="11">',
-        f'<rect width="{CHART_WIDTH}" height="{CHART_HEIGHT}" fill="white"/>',
+        f'<rect width="{padded_width}" height="{padded_height}" fill="white"/>',
+        f'<g transform="translate({CHART_PADDING} {CHART_PADDING})">',
         f'<text x="{plot_center_x}" y="18" text-anchor="middle" font-size="13" font-weight="bold">'
         f'Price vs. context</text>',
         f'<line x1="{CHART_MARGIN["left"]}" y1="{CHART_MARGIN["top"]}" '
@@ -367,7 +386,7 @@ def generate_svg(pinned_points, candidate_points, token_mix):
             f'y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="#eee"/>'
         )
 
-    def draw_avg_line(value, label, label_y, dash_color):
+    def draw_max_line(value, label, label_y, dash_color):
         x = x_pos(value)
         parts.append(
             f'<line x1="{x:.1f}" y1="{CHART_MARGIN["top"]}" x2="{x:.1f}" '
@@ -379,10 +398,10 @@ def generate_svg(pinned_points, candidate_points, token_mix):
             f'{label} ({format_context(value)})</text>'
         )
 
-    if avg_input_tokens > 0:
-        draw_avg_line(avg_input_tokens, "avg review input size", CHART_MARGIN["top"] + 12, "#999")
-    if avg_output_tokens > 0:
-        draw_avg_line(avg_output_tokens, "avg review output size", CHART_MARGIN["top"] + 24, "#c49a00")
+    if max_input_tokens > 0:
+        draw_max_line(max_input_tokens, "max review input size", CHART_MARGIN["top"] + 12, "#999")
+    if max_output_tokens > 0:
+        draw_max_line(max_output_tokens, "max review output size", CHART_MARGIN["top"] + 24, "#c49a00")
 
     INADEQUATE_COLOR = "#d62728"
 
@@ -392,12 +411,12 @@ def generate_svg(pinned_points, candidate_points, token_mix):
             context_length = point.get("context_length")
             if not rate or rate <= 0 or not context_length or context_length <= 0:
                 continue
-            inadequate = bool(avg_input_tokens) and context_length < avg_input_tokens
+            inadequate = bool(max_total_tokens) and context_length < max_total_tokens
             point_color = INADEQUATE_COLOR if inadequate else color
             x, y = x_pos(context_length), y_pos(rate)
             title = xml_escape(f'{point["id"]}: ${rate}/1M effective, {context_length:,} context')
             if inadequate:
-                title += xml_escape(" (context too small for the average review)")
+                title += xml_escape(" (context too small for the worst-case review)")
             parts.append(
                 f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{point_color}" fill-opacity="0.85">'
                 f'<title>{title}</title></circle>'
@@ -418,10 +437,11 @@ def generate_svg(pinned_points, candidate_points, token_mix):
     parts.append(f'<text x="{legend_x + 10}" y="{legend_y + 4}">pinned</text>')
     parts.append(f'<circle cx="{legend_x}" cy="{legend_y + 16}" r="5" fill="#2ca02c"/>')
     parts.append(f'<text x="{legend_x + 10}" y="{legend_y + 20}">candidate</text>')
-    if avg_input_tokens:
+    if max_total_tokens:
         parts.append(f'<circle cx="{legend_x}" cy="{legend_y + 32}" r="5" fill="{INADEQUATE_COLOR}"/>')
         parts.append(f'<text x="{legend_x + 10}" y="{legend_y + 36}">inadequate context</text>')
 
+    parts.append('</g>')
     parts.append('</svg>')
     return "\n".join(parts)
 
