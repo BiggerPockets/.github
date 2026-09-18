@@ -373,8 +373,9 @@ class GenerateSvgCodingAxisTest(unittest.TestCase):
         self.assertIn("has/score", svg)
         self.assertIn("no/score", svg)
         self.assertIn("no coding score available", svg)
-        # hollow marker (fill="white", stroke=color), not the usual filled dot
-        self.assertIn('fill="white" stroke="#1f77b4"', svg)
+        # hollow marker (fill="white"), neutral stroke matching the legend
+        # swatch — pinned-vs-candidate still shows via the text label's color.
+        self.assertIn('fill="white" stroke="#666"', svg)
 
     def test_no_score_column_omitted_when_every_point_has_a_score(self):
         pinned = [{"id": "has/score", "effective_rate_per_million": 0.09, "context_length": 100_000,
@@ -382,6 +383,19 @@ class GenerateSvgCodingAxisTest(unittest.TestCase):
         svg = freshness.generate_svg(pinned, [], None)
         self.assertNotIn("no coding score available", svg)
         self.assertNotIn("no score", svg)
+
+    def test_no_score_ring_matches_the_legend_swatch_color_for_both_series(self):
+        # A candidate's ring shouldn't be green while the legend swatch is
+        # gray — same neutral color regardless of pinned vs. candidate.
+        pinned = [{"id": "pinned/no-score", "effective_rate_per_million": 0.09, "context_length": 100_000,
+                   "coding_score": None}]
+        candidates = [{"id": "candidate/has-score", "effective_rate_per_million": 0.02, "context_length": 200_000,
+                       "coding_score": 50.0},
+                      {"id": "candidate/no-score", "effective_rate_per_million": 0.03, "context_length": 300_000,
+                       "coding_score": None}]
+        svg = freshness.generate_svg(pinned, candidates, None)
+        self.assertEqual(svg.count('stroke="#666"'), 3)  # 2 rings + 1 legend swatch
+        self.assertNotIn('fill="white" stroke="#2ca02c"', svg)
 
     def test_no_score_points_still_get_marked_inadequate(self):
         pinned = [{"id": "no/score", "effective_rate_per_million": 0.02, "context_length": 50_000,
