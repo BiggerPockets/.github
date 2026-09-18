@@ -13,8 +13,9 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
 2. Review the diff in pr.diff. Do NOT rely on the hunks alone, but keep the exploration
    bounded: every tool call re-sends the whole transcript, so each one costs as much as
    the review so far. Read pr.diff once, note which questions the hunks leave open, and
-   answer only those. Grep for callers and related tests of the names the diff changes,
-   scoped to the directories it touches, rather than reading whole files. Use
+   answer only those. Grep the whole repository for callers and related tests of each
+   name the diff changes (one search per name finds consumers wherever they live), and
+   open only the matching lines with context, not whole files. Use
    `git log --oneline` on the branch, and `git show` only for a commit whose message bears
    on intent, not the full history. A small diff usually needs two or three tool calls; a
    large one should rarely need more than a dozen. Git history and the PR's context are
