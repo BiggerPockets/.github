@@ -132,6 +132,12 @@ class GenerateSvgTest(unittest.TestCase):
         self.assertTrue(svg.startswith("<svg"))
         self.assertTrue(svg.endswith("</svg>"))
 
+    def test_legend_sits_left_of_the_y_axis(self):
+        pinned = [{"id": "z-ai/glm-5.3-flash", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
+        svg = freshness.generate_svg(pinned, [], None)
+        self.assertIn(f'cx="14" cy="{freshness.CHART_MARGIN["top"]}"', svg)
+        self.assertLess(14, freshness.CHART_MARGIN["left"])
+
     def test_does_not_mention_uptime_at_all(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 1_000_000,
                    "uptime_pct": 99.9}]
