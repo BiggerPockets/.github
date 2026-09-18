@@ -61,9 +61,10 @@ CANDIDATE_LIMIT = 5
 CANDIDATE_POOL_SIZE = 15  # cheaper-than-pinned pool checked for uptime before limiting
 MIN_UPTIME_PCT = 95.0  # a model down more than 5% of the time isn't a real saving
 DEFAULT_CHART_PATH = "docs/model-freshness/frontier.svg"
-CHART_WIDTH = 640
+LEGEND_WIDTH = 140  # dedicated gutter left of the y-axis so the legend never sits over plotted points
+CHART_WIDTH = 640 + LEGEND_WIDTH
 CHART_HEIGHT = 420
-CHART_MARGIN = {"left": 60, "right": 20, "top": 30, "bottom": 50}
+CHART_MARGIN = {"left": 60 + LEGEND_WIDTH, "right": 20, "top": 30, "bottom": 50}
 
 # Real usage mix for the pi review pass, sampled from Datadog LLM Observability
 # spans. A longer window smooths out any single noisy week; refreshed on every
@@ -321,19 +322,22 @@ def generate_svg(pinned_points, candidate_points, token_mix):
         frac = (math.log10(rate) - y_log_min) / (y_log_max - y_log_min)
         return CHART_MARGIN["top"] + (1 - frac) * plot_h  # cheaper (lower rate) plots higher
 
+    plot_center_x = CHART_MARGIN["left"] + plot_w / 2
+    y_title_x = CHART_MARGIN["left"] - 44
+
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{CHART_WIDTH}" height="{CHART_HEIGHT}" '
         f'font-family="sans-serif" font-size="11">',
         f'<rect width="{CHART_WIDTH}" height="{CHART_HEIGHT}" fill="white"/>',
-        f'<text x="{CHART_WIDTH / 2}" y="18" text-anchor="middle" font-size="13" font-weight="bold">'
+        f'<text x="{plot_center_x}" y="18" text-anchor="middle" font-size="13" font-weight="bold">'
         f'Price vs. context</text>',
         f'<line x1="{CHART_MARGIN["left"]}" y1="{CHART_MARGIN["top"]}" '
         f'x2="{CHART_MARGIN["left"]}" y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="black"/>',
         f'<line x1="{CHART_MARGIN["left"]}" y1="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" '
         f'x2="{CHART_WIDTH - CHART_MARGIN["right"]}" y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="black"/>',
-        f'<text x="{CHART_WIDTH / 2}" y="{CHART_HEIGHT - 10}" text-anchor="middle">context length (log scale)</text>',
-        f'<text x="16" y="{CHART_HEIGHT / 2}" text-anchor="middle" '
-        f'transform="rotate(-90 16 {CHART_HEIGHT / 2})">effective $/1M (log scale)</text>',
+        f'<text x="{plot_center_x}" y="{CHART_HEIGHT - 10}" text-anchor="middle">context length (log scale)</text>',
+        f'<text x="{y_title_x}" y="{CHART_HEIGHT / 2}" text-anchor="middle" '
+        f'transform="rotate(-90 {y_title_x} {CHART_HEIGHT / 2})">effective $/1M (log scale)</text>',
     ]
 
     def format_context(n):
@@ -409,14 +413,14 @@ def generate_svg(pinned_points, candidate_points, token_mix):
     plot(pinned_points, "#1f77b4")
     plot(candidate_points, "#2ca02c")
 
-    legend_y = CHART_MARGIN["top"]
-    parts.append(f'<circle cx="{CHART_WIDTH - 110}" cy="{legend_y}" r="5" fill="#1f77b4"/>')
-    parts.append(f'<text x="{CHART_WIDTH - 100}" y="{legend_y + 4}">pinned</text>')
-    parts.append(f'<circle cx="{CHART_WIDTH - 110}" cy="{legend_y + 16}" r="5" fill="#2ca02c"/>')
-    parts.append(f'<text x="{CHART_WIDTH - 100}" y="{legend_y + 20}">candidate</text>')
+    legend_x, legend_y = 14, CHART_MARGIN["top"]
+    parts.append(f'<circle cx="{legend_x}" cy="{legend_y}" r="5" fill="#1f77b4"/>')
+    parts.append(f'<text x="{legend_x + 10}" y="{legend_y + 4}">pinned</text>')
+    parts.append(f'<circle cx="{legend_x}" cy="{legend_y + 16}" r="5" fill="#2ca02c"/>')
+    parts.append(f'<text x="{legend_x + 10}" y="{legend_y + 20}">candidate</text>')
     if avg_input_tokens:
-        parts.append(f'<circle cx="{CHART_WIDTH - 110}" cy="{legend_y + 32}" r="5" fill="{INADEQUATE_COLOR}"/>')
-        parts.append(f'<text x="{CHART_WIDTH - 100}" y="{legend_y + 36}">inadequate context</text>')
+        parts.append(f'<circle cx="{legend_x}" cy="{legend_y + 32}" r="5" fill="{INADEQUATE_COLOR}"/>')
+        parts.append(f'<text x="{legend_x + 10}" y="{legend_y + 36}">inadequate context</text>')
 
     parts.append('</svg>')
     return "\n".join(parts)
