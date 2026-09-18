@@ -170,12 +170,13 @@ def fetch_token_mix():
             break
 
     total = fresh_input + cache_read + output
-    if total <= 0:
+    if total <= 0 or sample_count <= 0:
         return None
     return {
         "fresh_input_share": fresh_input / total,
         "cache_read_share": cache_read / total,
         "output_share": output / total,
+        "avg_input_tokens": (fresh_input + cache_read) / sample_count,
         "sample_count": sample_count,
         "window": TOKEN_MIX_WINDOW,
     }
@@ -283,7 +284,7 @@ def find_candidates(catalog, pinned_ids, cheapest_pinned_effective_rate, token_m
     return candidates
 
 
-def generate_svg(pinned_points, candidate_points):
+def generate_svg(pinned_points, candidate_points, token_mix):
     """Plain-XML price-vs-context scatter, pinned models vs. candidates: the
     actual price/capability tradeoff CANDIDATE_MIN_CONTEXT and the price filter
     are built around. Both axes are log scale. Returns None when there's nothing
@@ -306,7 +307,7 @@ def generate_svg(pinned_points, candidate_points):
         y_log_min, y_log_max = y_log_min - 0.5, y_log_max + 0.5
 
     def x_pos(context_length):
-        context_length = max(context_length, min(contexts))
+        context_length = min(max(context_length, min(contexts)), max(contexts))
         frac = (math.log10(context_length) - x_log_min) / (x_log_max - x_log_min)
         return CHART_MARGIN["left"] + frac * plot_w
 
@@ -357,10 +358,9 @@ def generate_svg(pinned_points, candidate_points):
             f'y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="#eee"/>'
         )
 
-    pinned_contexts = [p["context_length"] for p in pinned_points if (p.get("context_length") or 0) > 0]
-    if pinned_contexts:
-        avg_context = sum(pinned_contexts) / len(pinned_contexts)
-        avg_x = x_pos(avg_context)
+    avg_input_tokens = (token_mix or {}).get("avg_input_tokens")
+    if avg_input_tokens and avg_input_tokens > 0:
+        avg_x = x_pos(avg_input_tokens)
         parts.append(
             f'<line x1="{avg_x:.1f}" y1="{CHART_MARGIN["top"]}" x2="{avg_x:.1f}" '
             f'y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="#999" stroke-width="1.5" '
@@ -368,8 +368,10 @@ def generate_svg(pinned_points, candidate_points):
         )
         parts.append(
             f'<text x="{avg_x:.1f}" y="{CHART_MARGIN["top"] + 12}" text-anchor="middle" fill="#999">'
-            f'avg pinned context ({format_context(avg_context)})</text>'
+            f'avg review input size ({format_context(avg_input_tokens)})</text>'
         )
+
+    INADEQUATE_COLOR = "#d62728"
 
     def plot(points, color):
         for point in points:
@@ -377,10 +379,14 @@ def generate_svg(pinned_points, candidate_points):
             context_length = point.get("context_length")
             if not rate or rate <= 0 or not context_length or context_length <= 0:
                 continue
+            inadequate = bool(avg_input_tokens) and context_length < avg_input_tokens
+            point_color = INADEQUATE_COLOR if inadequate else color
             x, y = x_pos(context_length), y_pos(rate)
             title = xml_escape(f'{point["id"]}: ${rate}/1M effective, {context_length:,} context')
+            if inadequate:
+                title += xml_escape(" (context too small for the average review)")
             parts.append(
-                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{color}" fill-opacity="0.85">'
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{point_color}" fill-opacity="0.85">'
                 f'<title>{title}</title></circle>'
             )
             near_right_edge = x > CHART_WIDTH - CHART_MARGIN["right"] - 100
@@ -388,7 +394,7 @@ def generate_svg(pinned_points, candidate_points):
             anchor = 'end' if near_right_edge else 'start'
             parts.append(
                 f'<text x="{label_x:.1f}" y="{y + 3:.1f}" text-anchor="{anchor}" '
-                f'fill="{color}">{xml_escape(point["id"])}</text>'
+                f'fill="{point_color}">{xml_escape(point["id"])}</text>'
             )
 
     plot(pinned_points, "#1f77b4")
@@ -399,6 +405,9 @@ def generate_svg(pinned_points, candidate_points):
     parts.append(f'<text x="{CHART_WIDTH - 100}" y="{legend_y + 4}">pinned</text>')
     parts.append(f'<circle cx="{CHART_WIDTH - 110}" cy="{legend_y + 16}" r="5" fill="#2ca02c"/>')
     parts.append(f'<text x="{CHART_WIDTH - 100}" y="{legend_y + 20}">candidate</text>')
+    if avg_input_tokens:
+        parts.append(f'<circle cx="{CHART_WIDTH - 110}" cy="{legend_y + 32}" r="5" fill="{INADEQUATE_COLOR}"/>')
+        parts.append(f'<text x="{CHART_WIDTH - 100}" y="{legend_y + 36}">inadequate context</text>')
 
     parts.append('</svg>')
     return "\n".join(parts)
@@ -469,7 +478,7 @@ def main(argv):
     )
 
     if result["notable"]:
-        svg = generate_svg(pinned_points, result["candidates"])
+        svg = generate_svg(pinned_points, result["candidates"], token_mix)
         if svg:
             write_svg(chart_path, svg)
             result["chart_path"] = chart_path
