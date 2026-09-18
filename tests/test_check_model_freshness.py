@@ -117,6 +117,98 @@ class FindCandidatesTest(unittest.TestCase):
         self.assertEqual([c["id"] for c in candidates], ["some/rich-cache", "some/cheap-input"])
 
 
+def fake_leaderboard_html(rows):
+    """Build a minimal HTML page mimicking llm-stats.com's leaderboard: the
+    data lives inside a self.__next_f.push([1, "...escaped JSON..."]) call,
+    not in a plain <script type="application/json"> tag. The chunk text is
+    JS-string-escaped (backslashes and quotes) before being embedded between
+    the literal quotes in push(...), matching how Next.js actually emits it."""
+    # Next.js emits this compact (no spaces), which is what fetch_coding_scores'
+    # marker search relies on.
+    chunk_text = '33:["$",null,' + json.dumps({"initialData": rows}, separators=(",", ":")) + ']'
+    escaped = chunk_text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'<html><script>self.__next_f.push([1,"{escaped}"])</script></html>'
+
+
+class FetchCodingScoresTest(unittest.TestCase):
+    def setUp(self):
+        self.original_urlopen = freshness.urllib.request.urlopen
+
+    def tearDown(self):
+        freshness.urllib.request.urlopen = self.original_urlopen
+
+    def _mock_html(self, html):
+        import io
+
+        class FakeResponse:
+            def __enter__(self):
+                return io.BytesIO(html.encode())
+
+            def __exit__(self, *args):
+                return False
+
+        freshness.urllib.request.urlopen = lambda request, timeout=30: FakeResponse()
+
+    def test_parses_the_embedded_next_js_payload(self):
+        rows = [{"model_id": "claude-haiku-4-5-20251001", "organization_id": "anthropic", "index_code": 19.65}]
+        self._mock_html(fake_leaderboard_html(rows))
+        self.assertEqual(freshness.fetch_coding_scores(), rows)
+
+    def test_empty_list_on_request_failure(self):
+        def raise_error(request, timeout=30):
+            raise OSError("boom")
+
+        freshness.urllib.request.urlopen = raise_error
+        self.assertEqual(freshness.fetch_coding_scores(), [])
+
+    def test_empty_list_when_page_has_no_matching_payload(self):
+        self._mock_html("<html><script>self.__next_f.push([1,\"no data here\"])</script></html>")
+        self.assertEqual(freshness.fetch_coding_scores(), [])
+
+
+class CodingScoreMatchingTest(unittest.TestCase):
+    def test_exact_match(self):
+        index = freshness.build_coding_score_index(
+            [{"model_id": "deepseek-v4.1-flash", "organization_id": "deepseek", "index_code": 44.22}]
+        )
+        entry = freshness.coding_score_for("deepseek/deepseek-v4.1-flash", index)
+        self.assertEqual(entry["index_code"], 44.22)
+
+    def test_strips_a_release_date_suffix(self):
+        index = freshness.build_coding_score_index(
+            [{"model_id": "claude-4-5-haiku-20251001", "organization_id": "anthropic", "index_code": 19.65}]
+        )
+        entry = freshness.coding_score_for("anthropic/claude-4-5-haiku", index)
+        self.assertEqual(entry["index_code"], 19.65)
+
+    def test_matches_across_dot_vs_dash_naming(self):
+        # OpenRouter's catalog uses "claude-haiku-4.5"; llm-stats.com's
+        # leaderboard uses "claude-haiku-4-5-20251001" for the same model.
+        index = freshness.build_coding_score_index(
+            [{"model_id": "claude-haiku-4-5-20251001", "organization_id": "anthropic", "index_code": 19.65}]
+        )
+        entry = freshness.coding_score_for("anthropic/claude-haiku-4.5", index)
+        self.assertEqual(entry["index_code"], 19.65)
+
+    def test_never_matches_across_org_prefixes(self):
+        index = freshness.build_coding_score_index(
+            [{"model_id": "some-model", "organization_id": "openai", "index_code": 50.0}]
+        )
+        self.assertIsNone(freshness.coding_score_for("anthropic/some-model", index))
+
+    def test_no_match_returns_none(self):
+        index = freshness.build_coding_score_index([])
+        self.assertIsNone(freshness.coding_score_for("anthropic/claude-haiku-4.5", index))
+
+    def test_picks_the_highest_scoring_row_when_normalization_collapses_variants(self):
+        index = freshness.build_coding_score_index([
+            {"model_id": "gpt-6-astra-20260903", "organization_id": "openai", "index_code": 40.0},
+            {"model_id": "gpt-6-astra-20260903", "organization_id": "openai", "index_code": 76.9},
+        ])
+        entry = freshness.coding_score_for("openai/gpt-6-astra", index)
+        self.assertEqual(entry["index_code"], 76.9)
+
+
 class GenerateSvgTest(unittest.TestCase):
     def test_none_when_no_plottable_points(self):
         self.assertIsNone(freshness.generate_svg([], [], None))
@@ -233,6 +325,61 @@ class GenerateSvgTest(unittest.TestCase):
         self.assertIn('fill="#d62728"', svg)
 
 
+class GenerateSvgCodingAxisTest(unittest.TestCase):
+    def test_uses_coding_score_as_the_x_axis_when_any_point_has_one(self):
+        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000,
+                   "coding_score": 19.65}]
+        svg = freshness.generate_svg(pinned, [], None)
+        self.assertIn("Price vs. coding score", svg)
+        self.assertIn("coding score (llm-stats.com index_code", svg)
+        self.assertNotIn("context length (log scale)", svg)
+
+    def test_falls_back_to_context_length_when_no_point_has_a_coding_score(self):
+        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000,
+                   "coding_score": None}]
+        svg = freshness.generate_svg(pinned, [], None)
+        self.assertIn("Price vs. context", svg)
+        self.assertIn("context length (log scale)", svg)
+
+    def test_falls_back_when_the_coding_score_key_is_entirely_absent(self):
+        # Points built before this feature existed (or a caller that never
+        # looked one up) don't carry a "coding_score" key at all.
+        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000}]
+        svg = freshness.generate_svg(pinned, [], None)
+        self.assertIn("Price vs. context", svg)
+
+    def test_drops_the_max_review_size_lines_on_the_coding_score_axis(self):
+        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000,
+                   "coding_score": 50.0}]
+        token_mix = {"max_input_tokens": 10_000, "max_output_tokens": 500}
+        svg = freshness.generate_svg(pinned, [], token_mix)
+        self.assertNotIn("max review input size", svg)
+        self.assertNotIn("max review output size", svg)
+
+    def test_still_marks_inadequate_context_on_the_coding_score_axis(self):
+        pinned = [{"id": "small/model", "effective_rate_per_million": 0.09, "context_length": 50_000,
+                   "coding_score": 20.0}]
+        token_mix = {"max_input_tokens": 150_000, "max_output_tokens": 50_000, "max_total_tokens": 200_000}
+        svg = freshness.generate_svg(pinned, [], token_mix)
+        self.assertIn('fill="#d62728"', svg)
+        self.assertIn("inadequate context", svg)
+
+    def test_excludes_points_missing_a_coding_score_when_others_have_one(self):
+        pinned = [
+            {"id": "has/score", "effective_rate_per_million": 0.09, "context_length": 100_000, "coding_score": 50.0},
+            {"id": "no/score", "effective_rate_per_million": 0.02, "context_length": 200_000, "coding_score": None},
+        ]
+        svg = freshness.generate_svg(pinned, [], None)
+        self.assertIn("has/score", svg)
+        self.assertNotIn("no/score", svg)
+
+    def test_tooltip_includes_the_coding_score(self):
+        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000,
+                   "coding_score": 19.65}]
+        svg = freshness.generate_svg(pinned, [], None)
+        self.assertIn("coding score 19.6", svg)
+
+
 class WriteSvgTest(unittest.TestCase):
     def test_creates_parent_directories(self):
         path = Path(tempfile.mkdtemp()) / 'nested' / 'dir' / 'frontier.svg'
@@ -329,13 +476,16 @@ class MainTest(unittest.TestCase):
         self.original_fetch_catalog = freshness.fetch_catalog
         self.original_fetch_uptime = freshness.fetch_uptime
         self.original_fetch_token_mix = freshness.fetch_token_mix
+        self.original_fetch_coding_scores = freshness.fetch_coding_scores
         freshness.fetch_uptime = lambda model_id: 99.9
         freshness.fetch_token_mix = lambda: None
+        freshness.fetch_coding_scores = lambda: []
 
     def tearDown(self):
         freshness.fetch_catalog = self.original_fetch_catalog
         freshness.fetch_uptime = self.original_fetch_uptime
         freshness.fetch_token_mix = self.original_fetch_token_mix
+        freshness.fetch_coding_scores = self.original_fetch_coding_scores
 
     def run_main(self, models_path, chart_path=None):
         import io
@@ -417,6 +567,22 @@ class MainTest(unittest.TestCase):
         self.assertEqual(result["chart_path"], chart_path)
         self.assertTrue(Path(chart_path).exists())
         self.assertIn("z-ai/glm-5.3-flash", Path(chart_path).read_text())
+
+    def test_charts_by_coding_score_when_the_pinned_model_has_one(self):
+        models_path = write_models([PINNED])
+        live_entry = {"pricing": {"prompt": "0.00000009", "completion": "0.0000003",
+                                   "input_cache_read": "0.000000018", "input_cache_write": "0"},
+                      "supported_parameters": ["reasoning"], "context_length": 1_000_000}
+        freshness.fetch_catalog = lambda: ({"z-ai/glm-5.3-flash": live_entry}, None)
+        freshness.fetch_uptime = lambda model_id: 90.0  # unreliable -> notable
+        freshness.fetch_coding_scores = lambda: [
+            {"model_id": "glm-5.3-flash", "organization_id": "z-ai", "index_code": 61.2}
+        ]
+        chart_path = str(Path(tempfile.mkdtemp()) / 'frontier.svg')
+
+        _, _ = self.run_main(models_path, chart_path)
+
+        self.assertIn("Price vs. coding score", Path(chart_path).read_text())
 
     def test_does_not_write_a_chart_when_not_notable(self):
         models_path = write_models([PINNED])
