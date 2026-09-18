@@ -219,24 +219,16 @@ class GenerateSvgTest(unittest.TestCase):
         svg = freshness.generate_svg(pinned, candidates, None)
         self.assertIn("z-ai/glm-5.3-flash", svg)
         self.assertIn("some/cheaper-model", svg)
-        self.assertIn('fill="#1f77b4"', svg)  # pinned color
-        self.assertIn('fill="#2ca02c"', svg)  # candidate color
-        self.assertTrue(svg.startswith("<svg"))
-        self.assertTrue(svg.endswith("</svg>"))
+        self.assertIn("#1f77b4", svg)  # pinned color
+        self.assertIn("#2ca02c", svg)  # candidate color
+        self.assertIn("<svg", svg)
+        self.assertTrue(svg.rstrip().endswith("</svg>"))
 
-    def test_pads_the_canvas_beyond_the_plot_dimensions(self):
-        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
-        svg = freshness.generate_svg(pinned, [], None)
-        padded_width = freshness.CHART_WIDTH + 2 * freshness.CHART_PADDING
-        padded_height = freshness.CHART_HEIGHT + 2 * freshness.CHART_PADDING
-        self.assertIn(f'width="{padded_width}" height="{padded_height}"', svg)
-        self.assertIn(f'<g transform="translate({freshness.CHART_PADDING} {freshness.CHART_PADDING})">', svg)
-
-    def test_legend_sits_left_of_the_y_axis(self):
+    def test_legend_lists_pinned_and_candidate(self):
         pinned = [{"id": "z-ai/glm-5.3-flash", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
         svg = freshness.generate_svg(pinned, [], None)
-        self.assertIn(f'cx="14" cy="{freshness.CHART_MARGIN["top"]}"', svg)
-        self.assertLess(14, freshness.CHART_MARGIN["left"])
+        self.assertIn(">pinned<", svg)
+        self.assertIn(">candidate<", svg)
 
     def test_does_not_mention_uptime_at_all(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 1_000_000,
@@ -250,25 +242,12 @@ class GenerateSvgTest(unittest.TestCase):
         self.assertIn("&lt;x&gt;&amp;y", svg)
         self.assertNotIn("<x>", svg)
 
-    def test_pads_the_plotted_domain_so_extreme_points_are_not_flush_against_the_axes(self):
-        pinned = [
-            {"id": "cheapest/model", "effective_rate_per_million": 0.01, "context_length": 100_000},
-            {"id": "priciest/model", "effective_rate_per_million": 1.0, "context_length": 2_000_000},
-        ]
-        svg = freshness.generate_svg(pinned, [], None)
-        left_axis_x = freshness.CHART_MARGIN["left"]
-        top_y = freshness.CHART_MARGIN["top"]
-        bottom_y = freshness.CHART_HEIGHT - freshness.CHART_MARGIN["bottom"]
-        for coord in (f'cx="{left_axis_x:.1f}"', f'cx="{freshness.CHART_WIDTH - freshness.CHART_MARGIN["right"]:.1f}"'):
-            self.assertNotIn(coord, svg)
-        for coord in (f'cy="{top_y:.1f}"', f'cy="{bottom_y:.1f}"'):
-            self.assertNotIn(coord, svg)
-
-    def test_labels_the_context_axis_ticks(self):
+    def test_labels_the_context_axis_ticks_in_k_or_m(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
         candidates = [{"id": "b/model", "effective_rate_per_million": 0.02, "context_length": 100_000}]
         svg = freshness.generate_svg(pinned, candidates, None)
-        self.assertRegex(svg, r'text-anchor="middle">\d+(\.\d+)?[kM]?</text>')
+        self.assertIn(">100k<", svg)
+        self.assertIn(">1M<", svg)
 
     def test_draws_a_line_at_the_max_review_input_size(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000}]
@@ -292,8 +271,7 @@ class GenerateSvgTest(unittest.TestCase):
         candidates = [{"id": "big/model", "effective_rate_per_million": 0.02, "context_length": 500_000}]
         token_mix = {"max_input_tokens": 150_000, "max_output_tokens": 50_000, "max_total_tokens": 200_000}
         svg = freshness.generate_svg(pinned, candidates, token_mix)
-        self.assertIn("too small for the worst-case review", svg)
-        self.assertIn('fill="#d62728"', svg)
+        self.assertIn("#d62728", svg)
         self.assertIn("inadequate context", svg)
 
     def test_does_not_mark_points_as_inadequate_without_a_token_mix(self):
@@ -322,7 +300,7 @@ class GenerateSvgTest(unittest.TestCase):
         pinned = [{"id": "borderline/model", "effective_rate_per_million": 0.09, "context_length": 120_000}]
         token_mix = {"max_input_tokens": 100_000, "max_output_tokens": 50_000, "max_total_tokens": 150_000}
         svg = freshness.generate_svg(pinned, [], token_mix)
-        self.assertIn('fill="#d62728"', svg)
+        self.assertIn("#d62728", svg)
 
 
 class GenerateSvgCodingAxisTest(unittest.TestCase):
@@ -361,7 +339,7 @@ class GenerateSvgCodingAxisTest(unittest.TestCase):
                    "coding_score": 20.0}]
         token_mix = {"max_input_tokens": 150_000, "max_output_tokens": 50_000, "max_total_tokens": 200_000}
         svg = freshness.generate_svg(pinned, [], token_mix)
-        self.assertIn('fill="#d62728"', svg)
+        self.assertIn("#d62728", svg)
         self.assertIn("inadequate context", svg)
 
     def test_plots_points_missing_a_coding_score_in_a_separate_no_score_column(self):
@@ -373,9 +351,9 @@ class GenerateSvgCodingAxisTest(unittest.TestCase):
         self.assertIn("has/score", svg)
         self.assertIn("no/score", svg)
         self.assertIn("no coding score available", svg)
-        # hollow marker (fill="white"), neutral stroke matching the legend
+        # hollow marker (white fill), neutral stroke matching the legend
         # swatch — pinned-vs-candidate still shows via the text label's color.
-        self.assertIn('fill="white" stroke="#666"', svg)
+        self.assertIn("fill: #ffffff; stroke: #666666", svg)
 
     def test_no_score_column_omitted_when_every_point_has_a_score(self):
         pinned = [{"id": "has/score", "effective_rate_per_million": 0.09, "context_length": 100_000,
@@ -394,8 +372,9 @@ class GenerateSvgCodingAxisTest(unittest.TestCase):
                       {"id": "candidate/no-score", "effective_rate_per_million": 0.03, "context_length": 300_000,
                        "coding_score": None}]
         svg = freshness.generate_svg(pinned, candidates, None)
-        self.assertEqual(svg.count('stroke="#666"'), 3)  # 2 rings + 1 legend swatch
-        self.assertNotIn('fill="white" stroke="#2ca02c"', svg)
+        self.assertIn("fill: #ffffff; stroke: #666666", svg)
+        self.assertNotIn("fill: #ffffff; stroke: #2ca02c", svg)
+        self.assertNotIn("fill: #ffffff; stroke: #1f77b4", svg)
 
     def test_no_score_points_still_get_marked_inadequate(self):
         pinned = [{"id": "no/score", "effective_rate_per_million": 0.02, "context_length": 50_000,
@@ -404,13 +383,7 @@ class GenerateSvgCodingAxisTest(unittest.TestCase):
                        "coding_score": 50.0}]
         token_mix = {"max_input_tokens": 150_000, "max_output_tokens": 50_000, "max_total_tokens": 200_000}
         svg = freshness.generate_svg(pinned, candidates, token_mix)
-        self.assertIn('fill="white" stroke="#d62728"', svg)
-
-    def test_tooltip_includes_the_coding_score(self):
-        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000,
-                   "coding_score": 19.65}]
-        svg = freshness.generate_svg(pinned, [], None)
-        self.assertIn("coding score 19.6", svg)
+        self.assertIn("fill: #ffffff; stroke: #d62728", svg)
 
 
 class WriteSvgTest(unittest.TestCase):

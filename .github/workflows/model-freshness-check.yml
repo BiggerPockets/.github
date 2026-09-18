@@ -34,6 +34,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install chart dependencies
+        run: pip install -r scripts/pi/requirements.txt
+
       - name: Check model freshness
         id: check
         env:

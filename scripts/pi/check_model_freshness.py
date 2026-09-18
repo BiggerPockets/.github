@@ -32,15 +32,15 @@ input rate when Datadog credentials (DD_API_KEY/DD_APP_KEY) aren't set or the
 lookup fails, so the check still degrades gracefully without them.
 
 When anything above is notable, also writes an SVG chart (pinned models vs.
-candidates, price using the effective rate) to the given chart path,
-dependency-free (plain XML, no matplotlib) so it needs nothing beyond the
-stdlib in CI. The x-axis is a coding-specific score scraped from
-llm-stats.com's public leaderboard (see fetch_coding_scores) when at least
-one plotted model has one, since that's more relevant to a code-review bot
-than raw context length; it falls back to context length otherwise. Uptime
-isn't charted: OpenRouter's public API doesn't expose throughput/latency
-(always null), and after the >=95% filter the remaining uptime spread is too
-small to be a useful axis, so it stays a table-only reliability gate instead.
+candidates, price using the effective rate) to the given chart path, via
+matplotlib (see requirements.txt in this directory). The x-axis is a
+coding-specific score scraped from llm-stats.com's public leaderboard (see
+fetch_coding_scores) when at least one plotted model has one, since that's
+more relevant to a code-review bot than raw context length; it falls back
+to context length otherwise. Uptime isn't charted: OpenRouter's public API
+doesn't expose throughput/latency (always null), and after the >=95% filter
+the remaining uptime spread is too small to be a useful axis, so it stays a
+table-only reliability gate instead.
 
 Prints one JSON object to stdout: {"drift": [...], "missing": [...],
 "candidates": [...], "unreliable_pinned": [...], "token_mix": {...} | null,
@@ -49,13 +49,20 @@ nudge-to-look, not a check that should ever fail CI.
 
 Usage: check_model_freshness.py <path-to-models.json> [chart-output-path]
 """
+import io
 import json
-import math
 import os
 import re
 import sys
 import urllib.request
-from xml.sax.saxutils import escape as xml_escape
+
+import matplotlib
+
+matplotlib.use("Agg")
+matplotlib.rcParams["svg.fonttype"] = "none"  # keep chart text as real <text>, not glyph paths
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.ticker import FuncFormatter
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 OPENROUTER_ENDPOINTS_URL = "https://openrouter.ai/api/v1/models/{model_id}/endpoints"
@@ -65,13 +72,12 @@ CANDIDATE_LIMIT = 5
 CANDIDATE_POOL_SIZE = 15  # cheaper-than-pinned pool checked for uptime before limiting
 MIN_UPTIME_PCT = 95.0  # a model down more than 5% of the time isn't a real saving
 DEFAULT_CHART_PATH = "docs/model-freshness/frontier.svg"
-LEGEND_WIDTH = 140  # dedicated gutter left of the y-axis so the legend never sits over plotted points
-CHART_WIDTH = 640 + LEGEND_WIDTH
-CHART_HEIGHT = 420
-CHART_MARGIN = {"left": 60 + LEGEND_WIDTH, "right": 20, "top": 30, "bottom": 50}
-CHART_PADDING = 16  # blank border around the whole chart, outside CHART_WIDTH/CHART_HEIGHT
 PLOT_PADDING_FRACTION = 0.08  # headroom inside the axes so extreme points aren't flush against them
 NO_SCORE_GAP_FRACTION = 0.22  # how far left of the real coding-score domain the "no score" column sits
+PINNED_COLOR = "#1f77b4"
+CANDIDATE_COLOR = "#2ca02c"
+INADEQUATE_COLOR = "#d62728"
+NO_SCORE_COLOR = "#666666"
 
 # Real usage mix for the pi review pass, sampled from Datadog LLM Observability
 # spans. A longer window smooths out any single noisy week; refreshed on every
@@ -401,17 +407,23 @@ def find_candidates(catalog, pinned_ids, cheapest_pinned_effective_rate, token_m
     return candidates
 
 
+def format_context(n):
+    n = round(n)
+    return f'{n / 1_000_000:.3g}M' if n >= 1_000_000 else f'{n / 1_000:.0f}k' if n >= 1_000 else str(n)
+
+
 def generate_svg(pinned_points, candidate_points, token_mix):
-    """Plain-XML price-vs-x scatter, pinned models vs. candidates.
+    """Price-vs-x scatter (pinned models vs. candidates), rendered with
+    matplotlib and returned as an SVG string.
 
     The x-axis is the model's coding score from llm-stats.com's leaderboard
     (see fetch_coding_scores) when at least one plottable point has one,
     since that's a more relevant axis for a code-review bot than raw context
-    length. It falls back to context length (log scale, with the max
-    review input/output size reference lines) when no point has a coding
-    score — a llm-stats.com fetch/parse failure, or no matches for any
-    plotted model, degrades to the old behavior rather than losing the
-    chart. The y-axis (effective $/1M) is always log scale.
+    length. It falls back to context length (log scale, with the max review
+    input/output size reference lines) when no point has a coding score — a
+    llm-stats.com fetch/parse failure, or no matches for any plotted model,
+    degrades to the old behavior rather than losing the chart. The y-axis
+    (effective $/1M) is always log scale.
 
     On the coding-score axis, a plottable point (positive rate and context)
     that just has no coding score match isn't dropped — llm-stats.com's
@@ -434,228 +446,112 @@ def generate_svg(pinned_points, candidate_points, token_mix):
 
     coding_scores = [p["coding_score"] for p in all_points if p.get("coding_score") is not None]
     use_coding_axis = bool(coding_scores)
-    no_score_x = None
+
+    plottable = [(p, PINNED_COLOR) for p in pinned_points] + [(p, CANDIDATE_COLOR) for p in candidate_points]
+    plottable = [
+        (point, color, point.get("coding_score") if use_coding_axis else point.get("context_length"))
+        for point, color in plottable
+        if (point.get("effective_rate_per_million") or 0) > 0 and (point.get("context_length") or 0) > 0
+    ]
+    if not use_coding_axis:
+        plottable = [(p, c, x) for p, c, x in plottable if x is not None and x > 0]
+    if not plottable:
+        return None
+
+    scored_x = [x for _, _, x in plottable if x is not None]
+    if not scored_x:
+        return None  # coding axis chosen, but every plottable point is missing a score
+
+    no_score_gutter = use_coding_axis and any(x is None for _, _, x in plottable)
+    score_min, score_max = min(scored_x), max(scored_x)
+    if no_score_gutter:
+        span = (score_max - score_min) or max(abs(score_min), 1)
+        no_score_x = score_min - span * NO_SCORE_GAP_FRACTION
+    else:
+        no_score_x = None
+
+    fig, ax = plt.subplots(figsize=(7.6, 4.8), dpi=100)
+    ax.set_yscale("log")
+
+    has_inadequate = False
+    for point, color, x_value in plottable:
+        rate = point["effective_rate_per_million"]
+        context_length = point["context_length"]
+        no_score = x_value is None
+        plotted_x = no_score_x if no_score else x_value
+        inadequate = bool(max_total_tokens) and context_length < max_total_tokens
+        has_inadequate = has_inadequate or inadequate
+        if no_score:
+            ring_color = INADEQUATE_COLOR if inadequate else NO_SCORE_COLOR
+            ax.scatter([plotted_x], [rate], s=64, facecolors="white", edgecolors=ring_color, linewidths=2, zorder=3)
+        else:
+            marker_color = INADEQUATE_COLOR if inadequate else color
+            ax.scatter([plotted_x], [rate], s=64, color=marker_color, alpha=0.85, zorder=3)
+        # The pinned-vs-candidate color still shows on the label even when the
+        # marker itself is neutral (a no-score ring), so no identity is lost.
+        label_color = INADEQUATE_COLOR if inadequate else color
+        ax.annotate(
+            point["id"], (plotted_x, rate), textcoords="offset points", xytext=(7, 0),
+            va="center", ha="left", fontsize=8, color=label_color, clip_on=False,
+        )
 
     if use_coding_axis:
-        x_field = "coding_score"
-        x_log_scale = False
-        x_values = coding_scores
-        x_title = "coding score (llm-stats.com index_code, higher is better)"
-        chart_title = "Price vs. coding score"
-        has_unscored_point = any(
-            (p.get("effective_rate_per_million") or 0) > 0
-            and (p.get("context_length") or 0) > 0
-            and p.get("coding_score") is None
-            for p in all_points
-        )
-        if has_unscored_point:
-            score_min, score_max = min(coding_scores), max(coding_scores)
-            span = (score_max - score_min) or max(abs(score_min), 1)
-            no_score_x = score_min - span * NO_SCORE_GAP_FRACTION
-            x_values = x_values + [no_score_x]
+        ax.set_xlabel("coding score (llm-stats.com index_code, higher is better)")
+        ax.set_title("Price vs. coding score")
+        if no_score_gutter:
+            ax.axvline(score_min, color="#999999", linestyle=(0, (2, 3)), linewidth=1)
+            ax.set_xlim(no_score_x - span * PLOT_PADDING_FRACTION, score_max + span * PLOT_PADDING_FRACTION)
+            y_min, _ = ax.get_ylim()
+            ax.text(no_score_x, y_min, "no score", ha="center", va="top", color="#999999", fontsize=8)
+        else:
+            pad = (score_max - score_min) * PLOT_PADDING_FRACTION or 1
+            ax.set_xlim(score_min - pad, score_max + pad)
     else:
-        contexts = [p["context_length"] for p in all_points if (p.get("context_length") or 0) > 0]
-        if not contexts:
-            return None
-        x_field = "context_length"
-        x_log_scale = True
-        x_values = contexts + [n for n in (max_input_tokens, max_output_tokens) if n > 0]
-        x_title = "context length (log scale)"
-        chart_title = "Price vs. context"
-
-    plot_w = CHART_WIDTH - CHART_MARGIN["left"] - CHART_MARGIN["right"]
-    plot_h = CHART_HEIGHT - CHART_MARGIN["top"] - CHART_MARGIN["bottom"]
-
-    def to_scale(value):
-        return math.log10(value) if x_log_scale else value
-
-    def from_scale(value):
-        return 10 ** value if x_log_scale else value
-
-    x_min, x_max = min(x_values), max(x_values)
-    x_scale_min, x_scale_max = to_scale(x_min), to_scale(x_max)
-    if x_scale_min == x_scale_max:
-        x_scale_min, x_scale_max = x_scale_min - 0.5, x_scale_max + 0.5
-
-    y_log_min, y_log_max = math.log10(min(rates)), math.log10(max(rates))
-    if y_log_min == y_log_max:
-        y_log_min, y_log_max = y_log_min - 0.5, y_log_max + 0.5
-
-    # Pad the plotted domain beyond the actual data range so points and lines
-    # near an extreme don't render flush against the axis.
-    x_pad = (x_scale_max - x_scale_min) * PLOT_PADDING_FRACTION
-    x_scale_min, x_scale_max = x_scale_min - x_pad, x_scale_max + x_pad
-    y_pad = (y_log_max - y_log_min) * PLOT_PADDING_FRACTION
-    y_log_min, y_log_max = y_log_min - y_pad, y_log_max + y_pad
-
-    def x_pos(value):
-        value = min(max(value, x_min), x_max)
-        frac = (to_scale(value) - x_scale_min) / (x_scale_max - x_scale_min)
-        return CHART_MARGIN["left"] + frac * plot_w
-
-    def y_pos(rate):
-        rate = max(rate, min(rates))
-        frac = (math.log10(rate) - y_log_min) / (y_log_max - y_log_min)
-        return CHART_MARGIN["top"] + (1 - frac) * plot_h  # cheaper (lower rate) plots higher
-
-    plot_center_x = CHART_MARGIN["left"] + plot_w / 2
-    y_title_x = CHART_MARGIN["left"] - 44
-
-    padded_width = CHART_WIDTH + 2 * CHART_PADDING
-    padded_height = CHART_HEIGHT + 2 * CHART_PADDING
-
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{padded_width}" height="{padded_height}" '
-        f'font-family="sans-serif" font-size="11">',
-        f'<rect width="{padded_width}" height="{padded_height}" fill="white"/>',
-        f'<g transform="translate({CHART_PADDING} {CHART_PADDING})">',
-        f'<text x="{plot_center_x}" y="18" text-anchor="middle" font-size="13" font-weight="bold">'
-        f'{chart_title}</text>',
-        f'<line x1="{CHART_MARGIN["left"]}" y1="{CHART_MARGIN["top"]}" '
-        f'x2="{CHART_MARGIN["left"]}" y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="black"/>',
-        f'<line x1="{CHART_MARGIN["left"]}" y1="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" '
-        f'x2="{CHART_WIDTH - CHART_MARGIN["right"]}" y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="black"/>',
-        f'<text x="{plot_center_x}" y="{CHART_HEIGHT - 10}" text-anchor="middle">{x_title}</text>',
-        f'<text x="{y_title_x}" y="{CHART_HEIGHT / 2}" text-anchor="middle" '
-        f'transform="rotate(-90 {y_title_x} {CHART_HEIGHT / 2})">effective $/1M (log scale)</text>',
-    ]
-
-    def format_context(n):
-        n = round(n)
-        return f'{n / 1_000_000:.3g}M' if n >= 1_000_000 else f'{n / 1_000:.0f}k' if n >= 1_000 else str(n)
-
-    def format_x_tick(value):
-        return f'{value:.3g}' if use_coding_axis else format_context(value)
-
-    tick_count = 5
-    for i in range(tick_count):
-        rate = 10 ** (y_log_min + (y_log_max - y_log_min) * i / (tick_count - 1))
-        y = y_pos(rate)
-        label = f'{rate:.3g}'
-        parts.append(f'<text x="{CHART_MARGIN["left"] - 6}" y="{y + 3}" text-anchor="end">{label}</text>')
-        parts.append(
-            f'<line x1="{CHART_MARGIN["left"]}" y1="{y}" x2="{CHART_WIDTH - CHART_MARGIN["right"]}" '
-            f'y2="{y}" stroke="#eee"/>'
-        )
-
-    # score_min is only defined when there's a "no score" gutter (use_coding_axis
-    # and no_score_x is not None); ticks that fall inside that gutter would show
-    # a meaningless number on the real coding-score scale, so skip them.
-    for i in range(tick_count):
-        value = from_scale(x_scale_min + (x_scale_max - x_scale_min) * i / (tick_count - 1))
-        if no_score_x is not None and value < score_min:
-            continue
-        x = x_pos(value)
-        parts.append(
-            f'<text x="{x:.1f}" y="{CHART_HEIGHT - CHART_MARGIN["bottom"] + 16}" text-anchor="middle">'
-            f'{format_x_tick(value)}</text>'
-        )
-        parts.append(
-            f'<line x1="{x:.1f}" y1="{CHART_MARGIN["top"]}" x2="{x:.1f}" '
-            f'y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="#eee"/>'
-        )
-
-    if no_score_x is not None:
-        separator_x = x_pos(score_min)
-        parts.append(
-            f'<line x1="{separator_x:.1f}" y1="{CHART_MARGIN["top"]}" x2="{separator_x:.1f}" '
-            f'y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="#999" stroke-dasharray="2,3"/>'
-        )
-        parts.append(
-            f'<text x="{x_pos(no_score_x):.1f}" y="{CHART_HEIGHT - CHART_MARGIN["bottom"] + 16}" '
-            f'text-anchor="middle" fill="#999">no score</text>'
-        )
-
-    def draw_max_line(value, label, label_y, dash_color):
-        x = x_pos(value)
-        parts.append(
-            f'<line x1="{x:.1f}" y1="{CHART_MARGIN["top"]}" x2="{x:.1f}" '
-            f'y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="{dash_color}" stroke-width="1.5" '
-            f'stroke-dasharray="4,3"/>'
-        )
-        parts.append(
-            f'<text x="{x:.1f}" y="{label_y}" text-anchor="middle" fill="{dash_color}">'
-            f'{label} ({format_context(value)})</text>'
-        )
-
-    # The max review input/output size lines are context-length values, so
-    # they only make sense positioned on a context-length x-axis.
-    if not use_coding_axis:
+        ax.set_xscale("log")
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _pos: format_context(value)))
+        ax.set_xlabel("context length (log scale)")
+        ax.set_title("Price vs. context")
+        # The max review input/output size lines are context-length values,
+        # so they only make sense positioned on a context-length x-axis.
         if max_input_tokens > 0:
-            draw_max_line(max_input_tokens, "max review input size", CHART_MARGIN["top"] + 12, "#999")
+            ax.axvline(max_input_tokens, color="#999999", linestyle=(0, (4, 3)), linewidth=1.5)
+            ax.text(
+                max_input_tokens, 1, f"max review input size ({format_context(max_input_tokens)})",
+                transform=ax.get_xaxis_transform(), ha="center", va="bottom", color="#999999", fontsize=8,
+            )
         if max_output_tokens > 0:
-            draw_max_line(max_output_tokens, "max review output size", CHART_MARGIN["top"] + 24, "#c49a00")
-
-    INADEQUATE_COLOR = "#d62728"
-    NO_SCORE_COLOR = "#666"
-
-    def plot(points, color):
-        for point in points:
-            rate = point.get("effective_rate_per_million")
-            context_length = point.get("context_length")
-            x_value = point.get(x_field)
-            if not rate or rate <= 0 or not context_length or context_length <= 0:
-                continue
-            no_score = x_value is None and no_score_x is not None
-            if x_value is None and not no_score:
-                continue
-            if x_value is not None and x_log_scale and x_value <= 0:
-                continue
-            x_value = no_score_x if no_score else x_value
-            inadequate = bool(max_total_tokens) and context_length < max_total_tokens
-            point_color = INADEQUATE_COLOR if inadequate else color
-            x, y = x_pos(x_value), y_pos(rate)
-            title = xml_escape(f'{point["id"]}: ${rate}/1M effective, {context_length:,} context')
-            if point.get("coding_score") is not None:
-                title += xml_escape(f', coding score {point["coding_score"]:.1f}')
-            elif no_score:
-                title += xml_escape(", no coding score available")
-            if inadequate:
-                title += xml_escape(" (context too small for the worst-case review)")
-            if no_score:
-                # The pinned-vs-candidate color still shows on the adjacent text
-                # label, so the ring itself can stay neutral (matching the
-                # legend swatch) unless it's also flagged inadequate.
-                ring_color = INADEQUATE_COLOR if inadequate else NO_SCORE_COLOR
-                parts.append(
-                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="white" stroke="{ring_color}" '
-                    f'stroke-width="2"><title>{title}</title></circle>'
-                )
-            else:
-                parts.append(
-                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{point_color}" fill-opacity="0.85">'
-                    f'<title>{title}</title></circle>'
-                )
-            near_right_edge = x > CHART_WIDTH - CHART_MARGIN["right"] - 100
-            label_x = x - 7 if near_right_edge else x + 7
-            anchor = 'end' if near_right_edge else 'start'
-            parts.append(
-                f'<text x="{label_x:.1f}" y="{y + 3:.1f}" text-anchor="{anchor}" '
-                f'fill="{point_color}">{xml_escape(point["id"])}</text>'
+            ax.axvline(max_output_tokens, color="#c49a00", linestyle=(0, (4, 3)), linewidth=1.5)
+            ax.text(
+                max_output_tokens, 0.92, f"max review output size ({format_context(max_output_tokens)})",
+                transform=ax.get_xaxis_transform(), ha="center", va="bottom", color="#c49a00", fontsize=8,
             )
 
-    plot(pinned_points, "#1f77b4")
-    plot(candidate_points, "#2ca02c")
+    ax.set_ylabel("effective $/1M (log scale)")
+    ax.margins(y=PLOT_PADDING_FRACTION)
+    ax.grid(True, which="both", color="#eeeeee", linewidth=0.8, zorder=0)
 
-    legend_x, legend_y = 14, CHART_MARGIN["top"]
-    parts.append(f'<circle cx="{legend_x}" cy="{legend_y}" r="5" fill="#1f77b4"/>')
-    parts.append(f'<text x="{legend_x + 10}" y="{legend_y + 4}">pinned</text>')
-    parts.append(f'<circle cx="{legend_x}" cy="{legend_y + 16}" r="5" fill="#2ca02c"/>')
-    parts.append(f'<text x="{legend_x + 10}" y="{legend_y + 20}">candidate</text>')
-    legend_row = 2
-    if max_total_tokens:
-        y = legend_y + 16 * legend_row
-        parts.append(f'<circle cx="{legend_x}" cy="{y}" r="5" fill="{INADEQUATE_COLOR}"/>')
-        parts.append(f'<text x="{legend_x + 10}" y="{y + 4}">inadequate context</text>')
-        legend_row += 1
-    if no_score_x is not None:
-        y = legend_y + 16 * legend_row
-        parts.append(f'<circle cx="{legend_x}" cy="{y}" r="5" fill="white" stroke="{NO_SCORE_COLOR}" stroke-width="2"/>')
-        parts.append(f'<text x="{legend_x + 10}" y="{y + 4}">no coding score available</text>')
+    legend_handles = [
+        Line2D([0], [0], marker="o", linestyle="none", color=PINNED_COLOR, label="pinned"),
+        Line2D([0], [0], marker="o", linestyle="none", color=CANDIDATE_COLOR, label="candidate"),
+    ]
+    if has_inadequate:
+        legend_handles.append(
+            Line2D([0], [0], marker="o", linestyle="none", color=INADEQUATE_COLOR, label="inadequate context")
+        )
+    if no_score_gutter:
+        legend_handles.append(
+            Line2D(
+                [0], [0], marker="o", linestyle="none", markerfacecolor="white",
+                markeredgecolor=NO_SCORE_COLOR, markeredgewidth=2, label="no coding score available",
+            )
+        )
+    ax.legend(handles=legend_handles, loc="upper left", fontsize=8, frameon=False)
 
-    parts.append('</g>')
-    parts.append('</svg>')
-    return "\n".join(parts)
+    fig.tight_layout()
+    buffer = io.StringIO()
+    fig.savefig(buffer, format="svg")
+    plt.close(fig)
+    return buffer.getvalue()
 
 
 def write_svg(path, svg):
