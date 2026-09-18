@@ -71,6 +71,7 @@ CHART_HEIGHT = 420
 CHART_MARGIN = {"left": 60 + LEGEND_WIDTH, "right": 20, "top": 30, "bottom": 50}
 CHART_PADDING = 16  # blank border around the whole chart, outside CHART_WIDTH/CHART_HEIGHT
 PLOT_PADDING_FRACTION = 0.08  # headroom inside the axes so extreme points aren't flush against them
+NO_SCORE_GAP_FRACTION = 0.22  # how far left of the real coding-score domain the "no score" column sits
 
 # Real usage mix for the pi review pass, sampled from Datadog LLM Observability
 # spans. A longer window smooths out any single noisy week; refreshed on every
@@ -412,6 +413,14 @@ def generate_svg(pinned_points, candidate_points, token_mix):
     plotted model, degrades to the old behavior rather than losing the
     chart. The y-axis (effective $/1M) is always log scale.
 
+    On the coding-score axis, a plottable point (positive rate and context)
+    that just has no coding score match isn't dropped — llm-stats.com's
+    leaderboard doesn't cover every model, and a model missing from the
+    chart looks like it was never considered, not like data was
+    unavailable. It's plotted in a separate "no score" column to the left
+    of the real axis, visually separated by a dashed line, same as how a
+    too-small context gets a color instead of being hidden.
+
     Returns None when there's nothing plottable (no positive rate, or no
     positive value at all for whichever x-axis gets picked)."""
     all_points = pinned_points + candidate_points
@@ -425,6 +434,7 @@ def generate_svg(pinned_points, candidate_points, token_mix):
 
     coding_scores = [p["coding_score"] for p in all_points if p.get("coding_score") is not None]
     use_coding_axis = bool(coding_scores)
+    no_score_x = None
 
     if use_coding_axis:
         x_field = "coding_score"
@@ -432,6 +442,17 @@ def generate_svg(pinned_points, candidate_points, token_mix):
         x_values = coding_scores
         x_title = "coding score (llm-stats.com index_code, higher is better)"
         chart_title = "Price vs. coding score"
+        has_unscored_point = any(
+            (p.get("effective_rate_per_million") or 0) > 0
+            and (p.get("context_length") or 0) > 0
+            and p.get("coding_score") is None
+            for p in all_points
+        )
+        if has_unscored_point:
+            score_min, score_max = min(coding_scores), max(coding_scores)
+            span = (score_max - score_min) or max(abs(score_min), 1)
+            no_score_x = score_min - span * NO_SCORE_GAP_FRACTION
+            x_values = x_values + [no_score_x]
     else:
         contexts = [p["context_length"] for p in all_points if (p.get("context_length") or 0) > 0]
         if not contexts:
@@ -517,8 +538,13 @@ def generate_svg(pinned_points, candidate_points, token_mix):
             f'y2="{y}" stroke="#eee"/>'
         )
 
+    # score_min is only defined when there's a "no score" gutter (use_coding_axis
+    # and no_score_x is not None); ticks that fall inside that gutter would show
+    # a meaningless number on the real coding-score scale, so skip them.
     for i in range(tick_count):
         value = from_scale(x_scale_min + (x_scale_max - x_scale_min) * i / (tick_count - 1))
+        if no_score_x is not None and value < score_min:
+            continue
         x = x_pos(value)
         parts.append(
             f'<text x="{x:.1f}" y="{CHART_HEIGHT - CHART_MARGIN["bottom"] + 16}" text-anchor="middle">'
@@ -527,6 +553,17 @@ def generate_svg(pinned_points, candidate_points, token_mix):
         parts.append(
             f'<line x1="{x:.1f}" y1="{CHART_MARGIN["top"]}" x2="{x:.1f}" '
             f'y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="#eee"/>'
+        )
+
+    if no_score_x is not None:
+        separator_x = x_pos(score_min)
+        parts.append(
+            f'<line x1="{separator_x:.1f}" y1="{CHART_MARGIN["top"]}" x2="{separator_x:.1f}" '
+            f'y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="#999" stroke-dasharray="2,3"/>'
+        )
+        parts.append(
+            f'<text x="{x_pos(no_score_x):.1f}" y="{CHART_HEIGHT - CHART_MARGIN["bottom"] + 16}" '
+            f'text-anchor="middle" fill="#999">no score</text>'
         )
 
     def draw_max_line(value, label, label_y, dash_color):
@@ -558,20 +595,32 @@ def generate_svg(pinned_points, candidate_points, token_mix):
             x_value = point.get(x_field)
             if not rate or rate <= 0 or not context_length or context_length <= 0:
                 continue
-            if x_value is None or (x_log_scale and x_value <= 0):
+            no_score = x_value is None and no_score_x is not None
+            if x_value is None and not no_score:
                 continue
+            if x_value is not None and x_log_scale and x_value <= 0:
+                continue
+            x_value = no_score_x if no_score else x_value
             inadequate = bool(max_total_tokens) and context_length < max_total_tokens
             point_color = INADEQUATE_COLOR if inadequate else color
             x, y = x_pos(x_value), y_pos(rate)
             title = xml_escape(f'{point["id"]}: ${rate}/1M effective, {context_length:,} context')
             if point.get("coding_score") is not None:
                 title += xml_escape(f', coding score {point["coding_score"]:.1f}')
+            elif no_score:
+                title += xml_escape(", no coding score available")
             if inadequate:
                 title += xml_escape(" (context too small for the worst-case review)")
-            parts.append(
-                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{point_color}" fill-opacity="0.85">'
-                f'<title>{title}</title></circle>'
-            )
+            if no_score:
+                parts.append(
+                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="white" stroke="{point_color}" '
+                    f'stroke-width="2"><title>{title}</title></circle>'
+                )
+            else:
+                parts.append(
+                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{point_color}" fill-opacity="0.85">'
+                    f'<title>{title}</title></circle>'
+                )
             near_right_edge = x > CHART_WIDTH - CHART_MARGIN["right"] - 100
             label_x = x - 7 if near_right_edge else x + 7
             anchor = 'end' if near_right_edge else 'start'
@@ -588,9 +637,16 @@ def generate_svg(pinned_points, candidate_points, token_mix):
     parts.append(f'<text x="{legend_x + 10}" y="{legend_y + 4}">pinned</text>')
     parts.append(f'<circle cx="{legend_x}" cy="{legend_y + 16}" r="5" fill="#2ca02c"/>')
     parts.append(f'<text x="{legend_x + 10}" y="{legend_y + 20}">candidate</text>')
+    legend_row = 2
     if max_total_tokens:
-        parts.append(f'<circle cx="{legend_x}" cy="{legend_y + 32}" r="5" fill="{INADEQUATE_COLOR}"/>')
-        parts.append(f'<text x="{legend_x + 10}" y="{legend_y + 36}">inadequate context</text>')
+        y = legend_y + 16 * legend_row
+        parts.append(f'<circle cx="{legend_x}" cy="{y}" r="5" fill="{INADEQUATE_COLOR}"/>')
+        parts.append(f'<text x="{legend_x + 10}" y="{y + 4}">inadequate context</text>')
+        legend_row += 1
+    if no_score_x is not None:
+        y = legend_y + 16 * legend_row
+        parts.append(f'<circle cx="{legend_x}" cy="{y}" r="5" fill="white" stroke="#666" stroke-width="2"/>')
+        parts.append(f'<text x="{legend_x + 10}" y="{y + 4}">no coding score available</text>')
 
     parts.append('</g>')
     parts.append('</svg>')

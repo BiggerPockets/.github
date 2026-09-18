@@ -364,14 +364,33 @@ class GenerateSvgCodingAxisTest(unittest.TestCase):
         self.assertIn('fill="#d62728"', svg)
         self.assertIn("inadequate context", svg)
 
-    def test_excludes_points_missing_a_coding_score_when_others_have_one(self):
+    def test_plots_points_missing_a_coding_score_in_a_separate_no_score_column(self):
         pinned = [
             {"id": "has/score", "effective_rate_per_million": 0.09, "context_length": 100_000, "coding_score": 50.0},
             {"id": "no/score", "effective_rate_per_million": 0.02, "context_length": 200_000, "coding_score": None},
         ]
         svg = freshness.generate_svg(pinned, [], None)
         self.assertIn("has/score", svg)
-        self.assertNotIn("no/score", svg)
+        self.assertIn("no/score", svg)
+        self.assertIn("no coding score available", svg)
+        # hollow marker (fill="white", stroke=color), not the usual filled dot
+        self.assertIn('fill="white" stroke="#1f77b4"', svg)
+
+    def test_no_score_column_omitted_when_every_point_has_a_score(self):
+        pinned = [{"id": "has/score", "effective_rate_per_million": 0.09, "context_length": 100_000,
+                   "coding_score": 50.0}]
+        svg = freshness.generate_svg(pinned, [], None)
+        self.assertNotIn("no coding score available", svg)
+        self.assertNotIn("no score", svg)
+
+    def test_no_score_points_still_get_marked_inadequate(self):
+        pinned = [{"id": "no/score", "effective_rate_per_million": 0.02, "context_length": 50_000,
+                   "coding_score": None}]
+        candidates = [{"id": "has/score", "effective_rate_per_million": 0.09, "context_length": 500_000,
+                       "coding_score": 50.0}]
+        token_mix = {"max_input_tokens": 150_000, "max_output_tokens": 50_000, "max_total_tokens": 200_000}
+        svg = freshness.generate_svg(pinned, candidates, token_mix)
+        self.assertIn('fill="white" stroke="#d62728"', svg)
 
     def test_tooltip_includes_the_coding_score(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000,
