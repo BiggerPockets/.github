@@ -1,49 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="812" height="452" font-family="sans-serif" font-size="11">
 <rect width="812" height="452" fill="white"/>
 <g transform="translate(16 16)">
-<text x="480.0" y="18" text-anchor="middle" font-size="13" font-weight="bold">Price vs. context</text>
+<text x="480.0" y="18" text-anchor="middle" font-size="13" font-weight="bold">Price vs. coding score</text>
 <line x1="200" y1="30" x2="200" y2="370" stroke="black"/>
 <line x1="200" y1="370" x2="760" y2="370" stroke="black"/>
-<text x="480.0" y="410" text-anchor="middle">context length (log scale)</text>
+<text x="480.0" y="410" text-anchor="middle">coding score (llm-stats.com index_code, higher is better)</text>
 <text x="156" y="210.0" text-anchor="middle" transform="rotate(-90 156 210.0)">effective $/1M (log scale)</text>
-<text x="194" y="349.55172413793105" text-anchor="end">0.00466</text>
-<line x1="200" y1="346.55172413793105" x2="760" y2="346.55172413793105" stroke="#eee"/>
+<text x="194" y="349.551724137931" text-anchor="end">0.00466</text>
+<line x1="200" y1="346.551724137931" x2="760" y2="346.551724137931" stroke="#eee"/>
 <text x="194" y="288.0" text-anchor="end">0.0131</text>
 <line x1="200" y1="285.0" x2="760" y2="285.0" stroke="#eee"/>
 <text x="194" y="203.0" text-anchor="end">0.0371</text>
 <line x1="200" y1="200.0" x2="760" y2="200.0" stroke="#eee"/>
-<text x="194" y="118.00000000000004" text-anchor="end">0.105</text>
-<line x1="200" y1="115.00000000000004" x2="760" y2="115.00000000000004" stroke="#eee"/>
-<text x="194" y="33.0" text-anchor="end">0.296</text>
+<text x="194" y="118.0" text-anchor="end">0.105</text>
+<line x1="200" y1="115.0" x2="760" y2="115.0" stroke="#eee"/>
+<text x="194" y="33.0" text-anchor="end">0.295</text>
 <line x1="200" y1="30.0" x2="760" y2="30.0" stroke="#eee"/>
-<text x="238.6" y="386" text-anchor="middle">6k</text>
+<text x="238.6" y="386" text-anchor="middle">17.7</text>
 <line x1="238.6" y1="30" x2="238.6" y2="370" stroke="#eee"/>
-<text x="340.0" y="386" text-anchor="middle">25k</text>
+<text x="340.0" y="386" text-anchor="middle">24.8</text>
 <line x1="340.0" y1="30" x2="340.0" y2="370" stroke="#eee"/>
-<text x="480.0" y="386" text-anchor="middle">99k</text>
+<text x="480.0" y="386" text-anchor="middle">31.9</text>
 <line x1="480.0" y1="30" x2="480.0" y2="370" stroke="#eee"/>
-<text x="620.0" y="386" text-anchor="middle">389k</text>
+<text x="620.0" y="386" text-anchor="middle">39.1</text>
 <line x1="620.0" y1="30" x2="620.0" y2="370" stroke="#eee"/>
-<text x="721.4" y="386" text-anchor="middle">1.53M</text>
+<text x="721.4" y="386" text-anchor="middle">46.2</text>
 <line x1="721.4" y1="30" x2="721.4" y2="370" stroke="#eee"/>
-<line x1="500.9" y1="30" x2="500.9" y2="370" stroke="#999" stroke-width="1.5" stroke-dasharray="4,3"/>
-<text x="500.9" y="42" text-anchor="middle" fill="#999">max review input size (122k)</text>
-<line x1="238.6" y1="30" x2="238.6" y2="370" stroke="#c49a00" stroke-width="1.5" stroke-dasharray="4,3"/>
-<text x="238.6" y="54" text-anchor="middle" fill="#c49a00">max review output size (9k)</text>
-<circle cx="721.4" cy="245.1" r="5" fill="#1f77b4" fill-opacity="0.85"><title>deepseek/deepseek-v4.1-flash: $0.0214/1M effective, 1,048,576 context</title></circle>
-<text x="714.4" y="248.1" text-anchor="end" fill="#1f77b4">deepseek/deepseek-v4.1-flash</text>
-<circle cx="551.8" cy="53.4" r="5" fill="#1f77b4" fill-opacity="0.85"><title>anthropic/claude-haiku-4.5: $0.222/1M effective, 200,000 context</title></circle>
-<text x="558.8" y="56.4" text-anchor="start" fill="#1f77b4">anthropic/claude-haiku-4.5</text>
-<circle cx="579.5" cy="346.6" r="5" fill="#2ca02c" fill-opacity="0.85"><title>inclusionai/ling-3.0-flash: $0.0062/1M effective, 262,144 context</title></circle>
-<text x="586.5" y="349.6" text-anchor="start" fill="#2ca02c">inclusionai/ling-3.0-flash</text>
-<circle cx="578.6" cy="320.7" r="5" fill="#2ca02c" fill-opacity="0.85"><title>inception/mercury-2.5: $0.0085/1M effective, 260,000 context</title></circle>
-<text x="585.6" y="323.7" text-anchor="start" fill="#2ca02c">inception/mercury-2.5</text>
-<circle cx="716.5" cy="314.2" r="5" fill="#2ca02c" fill-opacity="0.85"><title>qwen/qwen3.7-flash: $0.0092/1M effective, 1,000,000 context</title></circle>
-<text x="709.5" y="317.2" text-anchor="end" fill="#2ca02c">qwen/qwen3.7-flash</text>
-<circle cx="622.7" cy="290.4" r="5" fill="#2ca02c" fill-opacity="0.85"><title>openai/gpt-5-nano: $0.0123/1M effective, 400,000 context</title></circle>
-<text x="629.7" y="293.4" text-anchor="start" fill="#2ca02c">openai/gpt-5-nano</text>
-<circle cx="721.4" cy="287.8" r="5" fill="#2ca02c" fill-opacity="0.85"><title>meta/muse-spark-1.3-contributor: $0.0127/1M effective, 1,048,576 context</title></circle>
-<text x="714.4" y="290.8" text-anchor="end" fill="#2ca02c">meta/muse-spark-1.3-contributor</text>
+<circle cx="721.4" cy="245.4" r="5" fill="#1f77b4" fill-opacity="0.85"><title>deepseek/deepseek-v4.1-flash: $0.0213/1M effective, 1,048,576 context, coding score 44.2</title></circle>
+<text x="714.4" y="248.4" text-anchor="end" fill="#1f77b4">deepseek/deepseek-v4.1-flash</text>
+<circle cx="238.6" cy="53.4" r="5" fill="#1f77b4" fill-opacity="0.85"><title>anthropic/claude-haiku-4.5: $0.2217/1M effective, 200,000 context, coding score 19.6</title></circle>
+<text x="245.6" y="56.4" text-anchor="start" fill="#1f77b4">anthropic/claude-haiku-4.5</text>
+<circle cx="350.2" cy="346.6" r="5" fill="#2ca02c" fill-opacity="0.85"><title>inclusionai/ling-3.0-flash: $0.0062/1M effective, 262,144 context, coding score 25.3</title></circle>
+<text x="357.2" y="349.6" text-anchor="start" fill="#2ca02c">inclusionai/ling-3.0-flash</text>
 <circle cx="14" cy="30" r="5" fill="#1f77b4"/>
 <text x="24" y="34">pinned</text>
 <circle cx="14" cy="46" r="5" fill="#2ca02c"/>
