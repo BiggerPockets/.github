@@ -1,13 +1,14 @@
 name: Weekly pi model freshness check
 
 # scripts/pi/models.json pins the OpenRouter list rates Stage 2 (pi) bills against
-# and reviews on. Prices move and better/cheaper models ship on their own schedule,
-# so this runs weekly and opens an issue when either has drifted: a pinned rate no
-# longer matches OpenRouter's live price, a pinned model has dropped out of the
-# catalog, or a cheaper reasoning-capable model with comparable context has shown
-# up. It never edits models.json itself — swapping a review model is a judgment
-# call on review quality that no API can make, so this only surfaces what changed
-# for a human to act on.
+# and reviews on. Prices move, uptime degrades, and better/cheaper models ship on
+# their own schedule, so this runs weekly and opens an issue when any of that has
+# drifted: a pinned rate no longer matches OpenRouter's live price, a pinned model
+# has dropped out of the catalog or its uptime has slipped below 95%, or a cheaper
+# reasoning-capable model with comparable context and healthy uptime has shown up.
+# It never edits models.json itself — swapping a review model is a judgment call
+# on review quality that no API can make, so this only surfaces what changed for a
+# human to act on.
 
 on:
   schedule:
@@ -46,21 +47,40 @@ jobs:
             missing=$(jq -r '.missing[]?' freshness.json)
             if [ -n "$missing" ]; then
               echo "### Pinned models no longer in OpenRouter's catalog"
-              echo "$missing" | sed 's/^/- /'
+              echo
+              echo "| Model |"
+              echo "| --- |"
+              echo "$missing" | sed 's/^/| /; s/$/ |/'
               echo
             fi
 
             drift_count=$(jq '.drift | length' freshness.json)
             if [ "$drift_count" -gt 0 ]; then
               echo "### Pinned rates that no longer match OpenRouter's list price"
-              jq -r '.drift[] | "- **\(.id)**: " + (.fields | map("\(.field) pinned $\(.pinned)/1M, live $\(.live)/1M") | join(", "))' freshness.json
+              echo
+              echo "| Model | Field | Pinned \$/1M | Live \$/1M |"
+              echo "| --- | --- | --- | --- |"
+              jq -r '.drift[] | .id as $id | .fields[] | "| \($id) | \(.field) | \(.pinned) | \(.live) |"' freshness.json
+              echo
+            fi
+
+            unreliable_count=$(jq '.unreliable_pinned | length' freshness.json)
+            if [ "$unreliable_count" -gt 0 ]; then
+              echo "### Pinned models with degraded uptime (below 95%)"
+              echo
+              echo "| Model | Uptime (24h) |"
+              echo "| --- | --- |"
+              jq -r '.unreliable_pinned[] | "| \(.id) | \(.uptime_pct)% |"' freshness.json
               echo
             fi
 
             candidate_count=$(jq '.candidates | length' freshness.json)
             if [ "$candidate_count" -gt 0 ]; then
-              echo "### Cheaper reasoning-capable models (>=100k context) than the cheapest pinned model"
-              jq -r '.candidates[] | "- **\(.id)** (\(.name)): $\(.input_rate_per_million)/1M input, \(.context_length) context"' freshness.json
+              echo "### Cheaper reasoning-capable models (>=100k context, >=95% uptime) than the cheapest pinned model"
+              echo
+              echo "| Model | Name | \$/1M input | Context | Uptime (24h) |"
+              echo "| --- | --- | --- | --- | --- |"
+              jq -r '.candidates[] | "| \(.id) | \(.name) | \(.input_rate_per_million) | \(.context_length) | \(.uptime_pct)% |"' freshness.json
               echo
             fi
 
