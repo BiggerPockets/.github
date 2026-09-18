@@ -11,12 +11,18 @@ the two things that ARE checkable automatically:
      price for a pinned model has moved, the billing we report is wrong until
      someone updates the pin.
   2. Cheaper same-tier candidates: reasoning-capable models with >=100k context
-     that currently cost less than the cheapest pinned model, so there's something
-     concrete to look at when deciding whether to roll the default forward.
+     and at least MIN_UPTIME_PCT uptime that currently cost less than the
+     cheapest pinned model, so there's something concrete to look at when
+     deciding whether to roll the default forward. A cheaper model that's down
+     5%+ of the time isn't actually a saving.
+  3. Unreliable pinned models: any currently-pinned model whose uptime has
+     dropped below MIN_UPTIME_PCT, since that's worth knowing even with no
+     cheaper alternative in sight.
 
 Prints one JSON object to stdout: {"drift": [...], "missing": [...],
-"candidates": [...], "notable": bool}. Never raises and always exits 0 — this is a
-weekly nudge-to-look, not a check that should ever fail CI.
+"candidates": [...], "unreliable_pinned": [...], "notable": bool}. Never raises
+and always exits 0 — this is a weekly nudge-to-look, not a check that should ever
+fail CI.
 
 Usage: check_model_freshness.py <path-to-models.json>
 """
@@ -25,9 +31,12 @@ import sys
 import urllib.request
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+OPENROUTER_ENDPOINTS_URL = "https://openrouter.ai/api/v1/models/{model_id}/endpoints"
 DRIFT_THRESHOLD = 0.05  # flag a pinned rate more than 5% off the live list price
 CANDIDATE_MIN_CONTEXT = 100_000
 CANDIDATE_LIMIT = 5
+CANDIDATE_POOL_SIZE = 15  # cheaper-than-pinned pool checked for uptime before limiting
+MIN_UPTIME_PCT = 95.0  # a model down more than 5% of the time isn't a real saving
 
 
 def per_token_to_per_million(value):
@@ -49,6 +58,24 @@ def fetch_catalog():
         if model_id:
             catalog[model_id] = entry
     return catalog, None
+
+
+def fetch_uptime(model_id):
+    """Best uptime_last_1d across a model's provider endpoints, or None if the
+    lookup fails. A model routed across providers is as reliable as its best
+    currently-healthy provider, not its worst."""
+    url = OPENROUTER_ENDPOINTS_URL.format(model_id=model_id)
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            payload = json.load(response)
+    except Exception:
+        return None
+    uptimes = [
+        endpoint.get("uptime_last_1d")
+        for endpoint in payload.get("data", {}).get("endpoints", [])
+        if endpoint.get("uptime_last_1d") is not None
+    ]
+    return round(max(uptimes), 2) if uptimes else None
 
 
 def load_pinned(path):
@@ -91,7 +118,7 @@ def is_reasoning_capable(entry):
 
 
 def find_candidates(catalog, pinned_ids, cheapest_pinned_input_rate):
-    candidates = []
+    pool = []
     for model_id, entry in catalog.items():
         if model_id in pinned_ids:
             continue
@@ -104,19 +131,28 @@ def find_candidates(catalog, pinned_ids, cheapest_pinned_input_rate):
             continue
         if cheapest_pinned_input_rate is not None and input_rate >= cheapest_pinned_input_rate:
             continue
-        candidates.append({
+        pool.append({
             "id": model_id,
             "name": entry.get("name"),
             "context_length": entry.get("context_length"),
             "input_rate_per_million": round(input_rate, 4),
         })
-    candidates.sort(key=lambda c: c["input_rate_per_million"])
-    return candidates[:CANDIDATE_LIMIT]
+    pool.sort(key=lambda c: c["input_rate_per_million"])
+
+    candidates = []
+    for candidate in pool[:CANDIDATE_POOL_SIZE]:
+        uptime = fetch_uptime(candidate["id"])
+        if uptime is None or uptime < MIN_UPTIME_PCT:
+            continue
+        candidates.append({**candidate, "uptime_pct": uptime})
+        if len(candidates) == CANDIDATE_LIMIT:
+            break
+    return candidates
 
 
 def main(argv):
     models_path = argv[1] if len(argv) > 1 else "scripts/pi/models.json"
-    result = {"drift": [], "missing": [], "candidates": [], "notable": False}
+    result = {"drift": [], "missing": [], "candidates": [], "unreliable_pinned": [], "notable": False}
     try:
         pinned = load_pinned(models_path)
     except Exception as error:
@@ -140,12 +176,17 @@ def main(argv):
         drifts = rate_drift(model, live_entry)
         if drifts:
             result["drift"].append({"id": model["id"], "fields": drifts})
+        uptime = fetch_uptime(model["id"])
+        if uptime is not None and uptime < MIN_UPTIME_PCT:
+            result["unreliable_pinned"].append({"id": model["id"], "uptime_pct": uptime})
         rate = model.get("cost", {}).get("input")
         if rate is not None and (cheapest_pinned_rate is None or rate < cheapest_pinned_rate):
             cheapest_pinned_rate = rate
 
     result["candidates"] = find_candidates(catalog, pinned_ids, cheapest_pinned_rate)
-    result["notable"] = bool(result["drift"] or result["missing"] or result["candidates"])
+    result["notable"] = bool(
+        result["drift"] or result["missing"] or result["candidates"] or result["unreliable_pinned"]
+    )
     print(json.dumps(result))
     return 0
 

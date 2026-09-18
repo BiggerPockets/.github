@@ -39,6 +39,13 @@ class RateDriftTest(unittest.TestCase):
 
 
 class FindCandidatesTest(unittest.TestCase):
+    def setUp(self):
+        self.original_fetch_uptime = freshness.fetch_uptime
+        freshness.fetch_uptime = lambda model_id: 99.9
+
+    def tearDown(self):
+        freshness.fetch_uptime = self.original_fetch_uptime
+
     def test_excludes_pinned_models_and_short_context(self):
         catalog = {
             "z-ai/glm-5.3-flash": {"supported_parameters": ["reasoning"],
@@ -61,21 +68,39 @@ class FindCandidatesTest(unittest.TestCase):
         }
         self.assertEqual(freshness.find_candidates(catalog, set(), 0.09), [])
 
+    def test_excludes_models_below_uptime_threshold(self):
+        freshness.fetch_uptime = lambda model_id: 90.0
+        catalog = {
+            "some/flaky-model": {"supported_parameters": ["reasoning"], "context_length": 200_000,
+                                  "pricing": {"prompt": "0.00000001"}},
+        }
+        self.assertEqual(freshness.find_candidates(catalog, set(), 0.09), [])
+
 
 class MainTest(unittest.TestCase):
+    def setUp(self):
+        self.original_fetch_catalog = freshness.fetch_catalog
+        self.original_fetch_uptime = freshness.fetch_uptime
+        freshness.fetch_uptime = lambda model_id: 99.9
+
+    def tearDown(self):
+        freshness.fetch_catalog = self.original_fetch_catalog
+        freshness.fetch_uptime = self.original_fetch_uptime
+
+    def run_main(self, models_path):
+        import io
+        import contextlib
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            exit_code = freshness.main(['check_model_freshness.py', models_path])
+        return json.loads(buffer.getvalue()), exit_code
+
     def test_flags_a_pinned_model_dropped_from_the_catalog(self):
         models_path = write_models([PINNED])
-        original_fetch = freshness.fetch_catalog
         freshness.fetch_catalog = lambda: ({}, None)
-        try:
-            import io
-            import contextlib
-            buffer = io.StringIO()
-            with contextlib.redirect_stdout(buffer):
-                exit_code = freshness.main(['check_model_freshness.py', models_path])
-            result = json.loads(buffer.getvalue())
-        finally:
-            freshness.fetch_catalog = original_fetch
+
+        result, exit_code = self.run_main(models_path)
+
         self.assertEqual(exit_code, 0)
         self.assertEqual(result["missing"], ["z-ai/glm-5.3-flash"])
         self.assertTrue(result["notable"])
@@ -85,18 +110,24 @@ class MainTest(unittest.TestCase):
         live_entry = {"pricing": {"prompt": "0.00000009", "completion": "0.0000003",
                                    "input_cache_read": "0.000000018", "input_cache_write": "0"},
                       "supported_parameters": ["reasoning"], "context_length": 1_000_000}
-        original_fetch = freshness.fetch_catalog
         freshness.fetch_catalog = lambda: ({"z-ai/glm-5.3-flash": live_entry}, None)
-        try:
-            import io
-            import contextlib
-            buffer = io.StringIO()
-            with contextlib.redirect_stdout(buffer):
-                freshness.main(['check_model_freshness.py', models_path])
-            result = json.loads(buffer.getvalue())
-        finally:
-            freshness.fetch_catalog = original_fetch
+
+        result, _ = self.run_main(models_path)
+
         self.assertFalse(result["notable"])
+
+    def test_flags_a_pinned_model_whose_uptime_has_dropped(self):
+        models_path = write_models([PINNED])
+        live_entry = {"pricing": {"prompt": "0.00000009", "completion": "0.0000003",
+                                   "input_cache_read": "0.000000018", "input_cache_write": "0"},
+                      "supported_parameters": ["reasoning"], "context_length": 1_000_000}
+        freshness.fetch_catalog = lambda: ({"z-ai/glm-5.3-flash": live_entry}, None)
+        freshness.fetch_uptime = lambda model_id: 90.0
+
+        result, _ = self.run_main(models_path)
+
+        self.assertEqual(result["unreliable_pinned"], [{"id": "z-ai/glm-5.3-flash", "uptime_pct": 90.0}])
+        self.assertTrue(result["notable"])
 
 
 if __name__ == '__main__':
