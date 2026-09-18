@@ -587,6 +587,7 @@ def generate_svg(pinned_points, candidate_points, token_mix):
             draw_max_line(max_output_tokens, "max review output size", CHART_MARGIN["top"] + 24, "#c49a00")
 
     INADEQUATE_COLOR = "#d62728"
+    NO_SCORE_COLOR = "#666"
 
     def plot(points, color):
         for point in points:
@@ -612,8 +613,12 @@ def generate_svg(pinned_points, candidate_points, token_mix):
             if inadequate:
                 title += xml_escape(" (context too small for the worst-case review)")
             if no_score:
+                # The pinned-vs-candidate color still shows on the adjacent text
+                # label, so the ring itself can stay neutral (matching the
+                # legend swatch) unless it's also flagged inadequate.
+                ring_color = INADEQUATE_COLOR if inadequate else NO_SCORE_COLOR
                 parts.append(
-                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="white" stroke="{point_color}" '
+                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="white" stroke="{ring_color}" '
                     f'stroke-width="2"><title>{title}</title></circle>'
                 )
             else:
@@ -645,7 +650,7 @@ def generate_svg(pinned_points, candidate_points, token_mix):
         legend_row += 1
     if no_score_x is not None:
         y = legend_y + 16 * legend_row
-        parts.append(f'<circle cx="{legend_x}" cy="{y}" r="5" fill="white" stroke="#666" stroke-width="2"/>')
+        parts.append(f'<circle cx="{legend_x}" cy="{y}" r="5" fill="white" stroke="{NO_SCORE_COLOR}" stroke-width="2"/>')
         parts.append(f'<text x="{legend_x + 10}" y="{y + 4}">no coding score available</text>')
 
     parts.append('</g>')
