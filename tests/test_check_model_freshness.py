@@ -119,12 +119,12 @@ class FindCandidatesTest(unittest.TestCase):
 
 class GenerateSvgTest(unittest.TestCase):
     def test_none_when_no_plottable_points(self):
-        self.assertIsNone(freshness.generate_svg([], []))
+        self.assertIsNone(freshness.generate_svg([], [], None))
 
     def test_plots_pinned_and_candidate_ids_with_distinct_colors(self):
         pinned = [{"id": "z-ai/glm-5.3-flash", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
         candidates = [{"id": "some/cheaper-model", "effective_rate_per_million": 0.02, "context_length": 200_000}]
-        svg = freshness.generate_svg(pinned, candidates)
+        svg = freshness.generate_svg(pinned, candidates, None)
         self.assertIn("z-ai/glm-5.3-flash", svg)
         self.assertIn("some/cheaper-model", svg)
         self.assertIn('fill="#1f77b4"', svg)  # pinned color
@@ -135,41 +135,52 @@ class GenerateSvgTest(unittest.TestCase):
     def test_does_not_mention_uptime_at_all(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 1_000_000,
                    "uptime_pct": 99.9}]
-        svg = freshness.generate_svg(pinned, [])
+        svg = freshness.generate_svg(pinned, [], None)
         self.assertNotIn("uptime", svg.lower())
 
     def test_escapes_ids_to_stay_valid_xml(self):
         pinned = [{"id": "vendor/model<x>&y", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
-        svg = freshness.generate_svg(pinned, [])
+        svg = freshness.generate_svg(pinned, [], None)
         self.assertIn("&lt;x&gt;&amp;y", svg)
         self.assertNotIn("<x>", svg)
 
     def test_labels_the_context_axis_ticks(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
         candidates = [{"id": "b/model", "effective_rate_per_million": 0.02, "context_length": 100_000}]
-        svg = freshness.generate_svg(pinned, candidates)
+        svg = freshness.generate_svg(pinned, candidates, None)
         self.assertIn("100k", svg)
         self.assertIn("1M", svg)
 
-    def test_draws_a_line_at_the_average_pinned_context_length(self):
-        pinned = [
-            {"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000},
-            {"id": "b/model", "effective_rate_per_million": 0.05, "context_length": 300_000},
-        ]
-        svg = freshness.generate_svg(pinned, [])
-        self.assertIn("avg pinned context", svg)
-        self.assertIn("200k", svg)  # mean of 100k and 300k
-
-    def test_average_context_line_ignores_candidates(self):
+    def test_draws_a_line_at_the_average_review_input_size(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000}]
-        candidates = [{"id": "b/model", "effective_rate_per_million": 0.02, "context_length": 900_000}]
-        svg = freshness.generate_svg(pinned, candidates)
-        self.assertIn("avg pinned context (100k)", svg)
+        token_mix = {"avg_input_tokens": 200_000}
+        svg = freshness.generate_svg(pinned, [], token_mix)
+        self.assertIn("avg review input size", svg)
+        self.assertIn("200k", svg)
 
-    def test_no_average_line_when_no_pinned_points(self):
-        svg = freshness.generate_svg([], [{"id": "b/model", "effective_rate_per_million": 0.02,
-                                            "context_length": 900_000}])
-        self.assertNotIn("avg pinned context", svg)
+    def test_no_average_line_without_token_mix(self):
+        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000}]
+        svg = freshness.generate_svg(pinned, [], None)
+        self.assertNotIn("avg review input size", svg)
+
+    def test_no_average_line_when_token_mix_has_no_sampled_spans(self):
+        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000}]
+        svg = freshness.generate_svg(pinned, [], {"avg_input_tokens": 0})
+        self.assertNotIn("avg review input size", svg)
+
+    def test_marks_points_smaller_than_average_review_input_size_as_inadequate(self):
+        pinned = [{"id": "small/model", "effective_rate_per_million": 0.09, "context_length": 50_000}]
+        candidates = [{"id": "big/model", "effective_rate_per_million": 0.02, "context_length": 500_000}]
+        token_mix = {"avg_input_tokens": 200_000}
+        svg = freshness.generate_svg(pinned, candidates, token_mix)
+        self.assertIn("too small for the average review", svg)
+        self.assertIn('fill="#d62728"', svg)
+        self.assertIn("inadequate context", svg)
+
+    def test_does_not_mark_points_as_inadequate_without_a_token_mix(self):
+        pinned = [{"id": "small/model", "effective_rate_per_million": 0.09, "context_length": 50_000}]
+        svg = freshness.generate_svg(pinned, [], None)
+        self.assertNotIn("#d62728", svg)
 
 
 class WriteSvgTest(unittest.TestCase):
