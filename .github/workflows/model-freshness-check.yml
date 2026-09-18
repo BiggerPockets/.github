@@ -1,0 +1,75 @@
+name: Weekly pi model freshness check
+
+# scripts/pi/models.json pins the OpenRouter list rates Stage 2 (pi) bills against
+# and reviews on. Prices move and better/cheaper models ship on their own schedule,
+# so this runs weekly and opens an issue when either has drifted: a pinned rate no
+# longer matches OpenRouter's live price, a pinned model has dropped out of the
+# catalog, or a cheaper reasoning-capable model with comparable context has shown
+# up. It never edits models.json itself — swapping a review model is a judgment
+# call on review quality that no API can make, so this only surfaces what changed
+# for a human to act on.
+
+on:
+  schedule:
+    - cron: '0 14 * * 1' # every Monday, 14:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check model freshness
+        id: check
+        run: python3 scripts/pi/check_model_freshness.py scripts/pi/models.json > freshness.json
+
+      - name: Open an issue when something is notable
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          notable=$(jq -r '.notable' freshness.json)
+          if [ "$notable" != "true" ]; then
+            echo "Nothing notable this week."
+            exit 0
+          fi
+
+          body=$(mktemp)
+          {
+            echo "Weekly check of \`scripts/pi/models.json\` against OpenRouter's live catalog."
+            echo
+
+            missing=$(jq -r '.missing[]?' freshness.json)
+            if [ -n "$missing" ]; then
+              echo "### Pinned models no longer in OpenRouter's catalog"
+              echo "$missing" | sed 's/^/- /'
+              echo
+            fi
+
+            drift_count=$(jq '.drift | length' freshness.json)
+            if [ "$drift_count" -gt 0 ]; then
+              echo "### Pinned rates that no longer match OpenRouter's list price"
+              jq -r '.drift[] | "- **\(.id)**: " + (.fields | map("\(.field) pinned $\(.pinned)/1M, live $\(.live)/1M") | join(", "))' freshness.json
+              echo
+            fi
+
+            candidate_count=$(jq '.candidates | length' freshness.json)
+            if [ "$candidate_count" -gt 0 ]; then
+              echo "### Cheaper reasoning-capable models (>=100k context) than the cheapest pinned model"
+              jq -r '.candidates[] | "- **\(.id)** (\(.name)): $\(.input_rate_per_million)/1M input, \(.context_length) context"' freshness.json
+              echo
+            fi
+
+            echo "This is an automated nudge to look, not a recommendation — review quality still needs a human call before rolling any model in \`scripts/pi/models.json\`."
+          } > "$body"
+
+          existing=$(gh issue list --search 'in:title "pi model freshness check" is:open' --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$body"
+          else
+            gh issue create --title "Weekly pi model freshness check found something" --body-file "$body"
+          fi
