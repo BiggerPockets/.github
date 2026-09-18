@@ -10,8 +10,8 @@
 <line x1="200" y1="346.55172413793105" x2="760" y2="346.55172413793105" stroke="#eee"/>
 <text x="194" y="288.0" text-anchor="end">0.0131</text>
 <line x1="200" y1="285.0" x2="760" y2="285.0" stroke="#eee"/>
-<text x="194" y="202.99999999999997" text-anchor="end">0.0371</text>
-<line x1="200" y1="199.99999999999997" x2="760" y2="199.99999999999997" stroke="#eee"/>
+<text x="194" y="203.0" text-anchor="end">0.0371</text>
+<line x1="200" y1="200.0" x2="760" y2="200.0" stroke="#eee"/>
 <text x="194" y="118.0" text-anchor="end">0.105</text>
 <line x1="200" y1="115.0" x2="760" y2="115.0" stroke="#eee"/>
 <text x="194" y="33.0" text-anchor="end">0.296</text>
@@ -26,19 +26,19 @@
 <line x1="721.4" y1="30" x2="721.4" y2="370" stroke="#eee"/>
 <line x1="325.7" y1="30" x2="325.7" y2="370" stroke="#999" stroke-dasharray="2,3"/>
 <text x="238.6" y="386" text-anchor="middle" fill="#999">no score</text>
-<circle cx="721.4" cy="245.1" r="5" fill="#1f77b4" fill-opacity="0.85"><title>deepseek/deepseek-v4.1-flash: $0.0214/1M effective, 1,048,576 context, coding score 44.2</title></circle>
-<text x="714.4" y="248.1" text-anchor="end" fill="#1f77b4">deepseek/deepseek-v4.1-flash</text>
-<circle cx="325.7" cy="53.4" r="5" fill="#1f77b4" fill-opacity="0.85"><title>anthropic/claude-haiku-4.5: $0.2222/1M effective, 200,000 context, coding score 19.6</title></circle>
+<circle cx="721.4" cy="245.5" r="5" fill="#1f77b4" fill-opacity="0.85"><title>deepseek/deepseek-v4.1-flash: $0.0213/1M effective, 1,048,576 context, coding score 44.2</title></circle>
+<text x="714.4" y="248.5" text-anchor="end" fill="#1f77b4">deepseek/deepseek-v4.1-flash</text>
+<circle cx="325.7" cy="53.4" r="5" fill="#1f77b4" fill-opacity="0.85"><title>anthropic/claude-haiku-4.5: $0.2221/1M effective, 200,000 context, coding score 19.6</title></circle>
 <text x="332.7" y="56.4" text-anchor="start" fill="#1f77b4">anthropic/claude-haiku-4.5</text>
 <circle cx="417.2" cy="346.6" r="5" fill="#2ca02c" fill-opacity="0.85"><title>inclusionai/ling-3.0-flash: $0.0062/1M effective, 262,144 context, coding score 25.3</title></circle>
 <text x="424.2" y="349.6" text-anchor="start" fill="#2ca02c">inclusionai/ling-3.0-flash</text>
-<circle cx="238.6" cy="320.7" r="5" fill="white" stroke="#2ca02c" stroke-width="2"><title>inception/mercury-2.5: $0.0085/1M effective, 260,000 context, no coding score available</title></circle>
+<circle cx="238.6" cy="320.7" r="5" fill="white" stroke="#666" stroke-width="2"><title>inception/mercury-2.5: $0.0085/1M effective, 260,000 context, no coding score available</title></circle>
 <text x="245.6" y="323.7" text-anchor="start" fill="#2ca02c">inception/mercury-2.5</text>
-<circle cx="238.6" cy="314.2" r="5" fill="white" stroke="#2ca02c" stroke-width="2"><title>qwen/qwen3.7-flash: $0.0092/1M effective, 1,000,000 context, no coding score available</title></circle>
+<circle cx="238.6" cy="314.2" r="5" fill="white" stroke="#666" stroke-width="2"><title>qwen/qwen3.7-flash: $0.0092/1M effective, 1,000,000 context, no coding score available</title></circle>
 <text x="245.6" y="317.2" text-anchor="start" fill="#2ca02c">qwen/qwen3.7-flash</text>
-<circle cx="238.6" cy="290.4" r="5" fill="white" stroke="#2ca02c" stroke-width="2"><title>openai/gpt-5-nano: $0.0123/1M effective, 400,000 context, no coding score available</title></circle>
+<circle cx="238.6" cy="290.4" r="5" fill="white" stroke="#666" stroke-width="2"><title>openai/gpt-5-nano: $0.0123/1M effective, 400,000 context, no coding score available</title></circle>
 <text x="245.6" y="293.4" text-anchor="start" fill="#2ca02c">openai/gpt-5-nano</text>
-<circle cx="238.6" cy="287.8" r="5" fill="white" stroke="#2ca02c" stroke-width="2"><title>meta/muse-spark-1.3-contributor: $0.0127/1M effective, 1,048,576 context, no coding score available</title></circle>
+<circle cx="238.6" cy="287.8" r="5" fill="white" stroke="#666" stroke-width="2"><title>meta/muse-spark-1.3-contributor: $0.0127/1M effective, 1,048,576 context, no coding score available</title></circle>
 <text x="245.6" y="290.8" text-anchor="start" fill="#2ca02c">meta/muse-spark-1.3-contributor</text>
 <circle cx="14" cy="30" r="5" fill="#1f77b4"/>
 <text x="24" y="34">pinned</text>
