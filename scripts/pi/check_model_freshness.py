@@ -65,6 +65,7 @@ LEGEND_WIDTH = 140  # dedicated gutter left of the y-axis so the legend never si
 CHART_WIDTH = 640 + LEGEND_WIDTH
 CHART_HEIGHT = 420
 CHART_MARGIN = {"left": 60 + LEGEND_WIDTH, "right": 20, "top": 30, "bottom": 50}
+CHART_PADDING = 16  # blank border around the whole chart, outside CHART_WIDTH/CHART_HEIGHT
 
 # Real usage mix for the pi review pass, sampled from Datadog LLM Observability
 # spans. A longer window smooths out any single noisy week; refreshed on every
@@ -325,10 +326,14 @@ def generate_svg(pinned_points, candidate_points, token_mix):
     plot_center_x = CHART_MARGIN["left"] + plot_w / 2
     y_title_x = CHART_MARGIN["left"] - 44
 
+    padded_width = CHART_WIDTH + 2 * CHART_PADDING
+    padded_height = CHART_HEIGHT + 2 * CHART_PADDING
+
     parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{CHART_WIDTH}" height="{CHART_HEIGHT}" '
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{padded_width}" height="{padded_height}" '
         f'font-family="sans-serif" font-size="11">',
-        f'<rect width="{CHART_WIDTH}" height="{CHART_HEIGHT}" fill="white"/>',
+        f'<rect width="{padded_width}" height="{padded_height}" fill="white"/>',
+        f'<g transform="translate({CHART_PADDING} {CHART_PADDING})">',
         f'<text x="{plot_center_x}" y="18" text-anchor="middle" font-size="13" font-weight="bold">'
         f'Price vs. context</text>',
         f'<line x1="{CHART_MARGIN["left"]}" y1="{CHART_MARGIN["top"]}" '
@@ -422,6 +427,7 @@ def generate_svg(pinned_points, candidate_points, token_mix):
         parts.append(f'<circle cx="{legend_x}" cy="{legend_y + 32}" r="5" fill="{INADEQUATE_COLOR}"/>')
         parts.append(f'<text x="{legend_x + 10}" y="{legend_y + 36}">inadequate context</text>')
 
+    parts.append('</g>')
     parts.append('</svg>')
     return "\n".join(parts)
 

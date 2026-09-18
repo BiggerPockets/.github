@@ -132,6 +132,14 @@ class GenerateSvgTest(unittest.TestCase):
         self.assertTrue(svg.startswith("<svg"))
         self.assertTrue(svg.endswith("</svg>"))
 
+    def test_pads_the_canvas_beyond_the_plot_dimensions(self):
+        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
+        svg = freshness.generate_svg(pinned, [], None)
+        padded_width = freshness.CHART_WIDTH + 2 * freshness.CHART_PADDING
+        padded_height = freshness.CHART_HEIGHT + 2 * freshness.CHART_PADDING
+        self.assertIn(f'width="{padded_width}" height="{padded_height}"', svg)
+        self.assertIn(f'<g transform="translate({freshness.CHART_PADDING} {freshness.CHART_PADDING})">', svg)
+
     def test_legend_sits_left_of_the_y_axis(self):
         pinned = [{"id": "z-ai/glm-5.3-flash", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
         svg = freshness.generate_svg(pinned, [], None)
