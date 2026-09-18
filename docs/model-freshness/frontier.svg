@@ -15,9 +15,21 @@
 <line x1="60" y1="115.0" x2="620" y2="115.0" stroke="#eee"/>
 <text x="54" y="33.0" text-anchor="end">0.222</text>
 <line x1="60" y1="30.0" x2="620" y2="30.0" stroke="#eee"/>
+<text x="60.0" y="386" text-anchor="middle">200k</text>
+<line x1="60.0" y1="30" x2="60.0" y2="370" stroke="#eee"/>
+<text x="200.0" y="386" text-anchor="middle">303k</text>
+<line x1="200.0" y1="30" x2="200.0" y2="370" stroke="#eee"/>
+<text x="340.0" y="386" text-anchor="middle">458k</text>
+<line x1="340.0" y1="30" x2="340.0" y2="370" stroke="#eee"/>
+<text x="480.0" y="386" text-anchor="middle">693k</text>
+<line x1="480.0" y1="30" x2="480.0" y2="370" stroke="#eee"/>
+<text x="620.0" y="386" text-anchor="middle">1.05M</text>
+<line x1="620.0" y1="30" x2="620.0" y2="370" stroke="#eee"/>
+<line x1="444.7" y1="30" x2="444.7" y2="370" stroke="#999" stroke-width="1.5" stroke-dasharray="4,3"/>
+<text x="444.7" y="42" text-anchor="middle" fill="#999">avg pinned context (624k)</text>
 <circle cx="620.0" cy="252.3" r="5" fill="#1f77b4" fill-opacity="0.85"><title>deepseek/deepseek-v4.1-flash: $0.0214/1M effective, 1,048,576 context</title></circle>
 <text x="613.0" y="255.3" text-anchor="end" fill="#1f77b4">deepseek/deepseek-v4.1-flash</text>
-<circle cx="60.0" cy="30.0" r="5" fill="#1f77b4" fill-opacity="0.85"><title>anthropic/claude-haiku-4.5: $0.2223/1M effective, 200,000 context</title></circle>
+<circle cx="60.0" cy="30.0" r="5" fill="#1f77b4" fill-opacity="0.85"><title>anthropic/claude-haiku-4.5: $0.222/1M effective, 200,000 context</title></circle>
 <text x="67.0" y="33.0" text-anchor="start" fill="#1f77b4">anthropic/claude-haiku-4.5</text>
 <circle cx="151.5" cy="370.0" r="5" fill="#2ca02c" fill-opacity="0.85"><title>inclusionai/ling-3.0-flash: $0.0062/1M effective, 262,144 context</title></circle>
 <text x="158.5" y="373.0" text-anchor="start" fill="#2ca02c">inclusionai/ling-3.0-flash</text>
