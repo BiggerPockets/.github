@@ -158,12 +158,25 @@ class GenerateSvgTest(unittest.TestCase):
         self.assertIn("&lt;x&gt;&amp;y", svg)
         self.assertNotIn("<x>", svg)
 
+    def test_pads_the_plotted_domain_so_extreme_points_are_not_flush_against_the_axes(self):
+        pinned = [
+            {"id": "cheapest/model", "effective_rate_per_million": 0.01, "context_length": 100_000},
+            {"id": "priciest/model", "effective_rate_per_million": 1.0, "context_length": 2_000_000},
+        ]
+        svg = freshness.generate_svg(pinned, [], None)
+        left_axis_x = freshness.CHART_MARGIN["left"]
+        top_y = freshness.CHART_MARGIN["top"]
+        bottom_y = freshness.CHART_HEIGHT - freshness.CHART_MARGIN["bottom"]
+        for coord in (f'cx="{left_axis_x:.1f}"', f'cx="{freshness.CHART_WIDTH - freshness.CHART_MARGIN["right"]:.1f}"'):
+            self.assertNotIn(coord, svg)
+        for coord in (f'cy="{top_y:.1f}"', f'cy="{bottom_y:.1f}"'):
+            self.assertNotIn(coord, svg)
+
     def test_labels_the_context_axis_ticks(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
         candidates = [{"id": "b/model", "effective_rate_per_million": 0.02, "context_length": 100_000}]
         svg = freshness.generate_svg(pinned, candidates, None)
-        self.assertIn("100k", svg)
-        self.assertIn("1M", svg)
+        self.assertRegex(svg, r'text-anchor="middle">\d+(\.\d+)?[kM]?</text>')
 
     def test_draws_a_line_at_the_max_review_input_size(self):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000}]
@@ -207,8 +220,8 @@ class GenerateSvgTest(unittest.TestCase):
         pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
         token_mix = {"max_input_tokens": 10_000, "max_output_tokens": 500}
         svg = freshness.generate_svg(pinned, [], token_mix)
-        self.assertIn("10k", svg)
-        self.assertIn("500</text>", svg)
+        self.assertIn("max review input size (10k)", svg)
+        self.assertIn("max review output size (500)", svg)
 
     def test_uses_max_total_not_max_input_alone_for_the_inadequate_cutoff(self):
         # A model's context only needs to beat max_input_tokens on its own, but the

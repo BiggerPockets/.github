@@ -66,6 +66,7 @@ CHART_WIDTH = 640 + LEGEND_WIDTH
 CHART_HEIGHT = 420
 CHART_MARGIN = {"left": 60 + LEGEND_WIDTH, "right": 20, "top": 30, "bottom": 50}
 CHART_PADDING = 16  # blank border around the whole chart, outside CHART_WIDTH/CHART_HEIGHT
+PLOT_PADDING_FRACTION = 0.08  # headroom inside the axes so extreme points aren't flush against them
 
 # Real usage mix for the pi review pass, sampled from Datadog LLM Observability
 # spans. A longer window smooths out any single noisy week; refreshed on every
@@ -326,6 +327,13 @@ def generate_svg(pinned_points, candidate_points, token_mix):
     y_log_min, y_log_max = math.log10(min(rates)), math.log10(max(rates))
     if y_log_min == y_log_max:
         y_log_min, y_log_max = y_log_min - 0.5, y_log_max + 0.5
+
+    # Pad the plotted domain beyond the actual data range so points and lines
+    # near an extreme don't render flush against the axis.
+    x_pad = (x_log_max - x_log_min) * PLOT_PADDING_FRACTION
+    x_log_min, x_log_max = x_log_min - x_pad, x_log_max + x_pad
+    y_pad = (y_log_max - y_log_min) * PLOT_PADDING_FRACTION
+    y_log_min, y_log_max = y_log_min - y_pad, y_log_max + y_pad
 
     def x_pos(context_length):
         context_length = min(max(context_length, min(x_values)), max(x_values))
