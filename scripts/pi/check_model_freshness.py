@@ -175,13 +175,25 @@ def generate_svg(pinned_points, candidate_points):
     if log_min == log_max:
         log_min, log_max = log_min - 0.5, log_max + 0.5
 
+    # Zoom the uptime axis to where the data actually is — real-world uptimes
+    # cluster in the high 90s, and a fixed 0-100 axis flattens them all onto one
+    # line at the top of the chart.
+    uptimes = [p["uptime_pct"] for p in all_points if p.get("uptime_pct") is not None]
+    y_max = 100.0
+    min_span = 2.0  # a floor so a single near-identical uptime doesn't collapse the axis
+    y_min = min(uptimes) if uptimes else y_max - min_span
+    if y_max - y_min < min_span:
+        y_min = y_max - min_span
+    y_min = max(0.0, y_min - (y_max - y_min) * 0.15)
+    y_span = y_max - y_min
+
     def x_pos(rate):
         rate = max(rate, min(rates))
         frac = (math.log10(rate) - log_min) / (log_max - log_min)
         return CHART_MARGIN["left"] + frac * plot_w
 
     def y_pos(uptime_pct):
-        frac = max(0.0, min(100.0, uptime_pct)) / 100
+        frac = (max(y_min, min(y_max, uptime_pct)) - y_min) / y_span
         return CHART_MARGIN["top"] + (1 - frac) * plot_h
 
     parts = [
@@ -199,9 +211,13 @@ def generate_svg(pinned_points, candidate_points):
         f'transform="rotate(-90 16 {CHART_HEIGHT / 2})">uptime %</text>',
     ]
 
-    for pct in (100, 95, 90, 75, 50, 0):
+    decimals = 2 if y_span < 2 else 1 if y_span < 10 else 0
+    tick_count = 5
+    for i in range(tick_count):
+        pct = round(y_min + y_span * i / (tick_count - 1), decimals)
         y = y_pos(pct)
-        parts.append(f'<text x="{CHART_MARGIN["left"] - 6}" y="{y + 3}" text-anchor="end">{pct}</text>')
+        label = f'{pct:.{decimals}f}' if decimals else f'{pct:.0f}'
+        parts.append(f'<text x="{CHART_MARGIN["left"] - 6}" y="{y + 3}" text-anchor="end">{label}</text>')
         parts.append(
             f'<line x1="{CHART_MARGIN["left"]}" y1="{y}" x2="{CHART_WIDTH - CHART_MARGIN["right"]}" '
             f'y2="{y}" stroke="#eee"/>'
