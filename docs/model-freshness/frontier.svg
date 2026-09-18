@@ -1,5 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="780" height="420" font-family="sans-serif" font-size="11">
-<rect width="780" height="420" fill="white"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="812" height="452" font-family="sans-serif" font-size="11">
+<rect width="812" height="452" fill="white"/>
+<g transform="translate(16 16)">
 <text x="480.0" y="18" text-anchor="middle" font-size="13" font-weight="bold">Price vs. context</text>
 <line x1="200" y1="30" x2="200" y2="370" stroke="black"/>
 <line x1="200" y1="370" x2="760" y2="370" stroke="black"/>
@@ -11,42 +12,43 @@
 <line x1="200" y1="285.0" x2="760" y2="285.0" stroke="#eee"/>
 <text x="194" y="203.0" text-anchor="end">0.0371</text>
 <line x1="200" y1="200.0" x2="760" y2="200.0" stroke="#eee"/>
-<text x="194" y="118.00000000000004" text-anchor="end">0.0906</text>
+<text x="194" y="118.00000000000004" text-anchor="end">0.0908</text>
 <line x1="200" y1="115.00000000000004" x2="760" y2="115.00000000000004" stroke="#eee"/>
-<text x="194" y="33.0" text-anchor="end">0.221</text>
+<text x="194" y="33.0" text-anchor="end">0.222</text>
 <line x1="200" y1="30.0" x2="760" y2="30.0" stroke="#eee"/>
-<text x="200.0" y="386" text-anchor="middle">430</text>
+<text x="200.0" y="386" text-anchor="middle">9k</text>
 <line x1="200.0" y1="30" x2="200.0" y2="370" stroke="#eee"/>
-<text x="340.0" y="386" text-anchor="middle">3k</text>
+<text x="340.0" y="386" text-anchor="middle">31k</text>
 <line x1="340.0" y1="30" x2="340.0" y2="370" stroke="#eee"/>
-<text x="480.0" y="386" text-anchor="middle">21k</text>
+<text x="480.0" y="386" text-anchor="middle">99k</text>
 <line x1="480.0" y1="30" x2="480.0" y2="370" stroke="#eee"/>
-<text x="620.0" y="386" text-anchor="middle">149k</text>
+<text x="620.0" y="386" text-anchor="middle">322k</text>
 <line x1="620.0" y1="30" x2="620.0" y2="370" stroke="#eee"/>
 <text x="760.0" y="386" text-anchor="middle">1.05M</text>
 <line x1="760.0" y1="30" x2="760.0" y2="370" stroke="#eee"/>
-<line x1="548.8" y1="30" x2="548.8" y2="370" stroke="#999" stroke-width="1.5" stroke-dasharray="4,3"/>
-<text x="548.8" y="42" text-anchor="middle" fill="#999">avg review input size (55k)</text>
+<line x1="504.3" y1="30" x2="504.3" y2="370" stroke="#999" stroke-width="1.5" stroke-dasharray="4,3"/>
+<text x="504.3" y="42" text-anchor="middle" fill="#999">max review input size (122k)</text>
 <line x1="200.0" y1="30" x2="200.0" y2="370" stroke="#c49a00" stroke-width="1.5" stroke-dasharray="4,3"/>
-<text x="200.0" y="54" text-anchor="middle" fill="#c49a00">avg review output size (430)</text>
-<circle cx="760.0" cy="252.7" r="5" fill="#1f77b4" fill-opacity="0.85"><title>deepseek/deepseek-v4.1-flash: $0.0213/1M effective, 1,048,576 context</title></circle>
-<text x="753.0" y="255.7" text-anchor="end" fill="#1f77b4">deepseek/deepseek-v4.1-flash</text>
-<circle cx="641.0" cy="30.0" r="5" fill="#1f77b4" fill-opacity="0.85"><title>anthropic/claude-haiku-4.5: $0.2215/1M effective, 200,000 context</title></circle>
-<text x="648.0" y="33.0" text-anchor="start" fill="#1f77b4">anthropic/claude-haiku-4.5</text>
-<circle cx="660.5" cy="370.0" r="5" fill="#2ca02c" fill-opacity="0.85"><title>inclusionai/ling-3.0-flash: $0.0062/1M effective, 262,144 context</title></circle>
-<text x="653.5" y="373.0" text-anchor="end" fill="#2ca02c">inclusionai/ling-3.0-flash</text>
-<circle cx="659.9" cy="340.0" r="5" fill="#2ca02c" fill-opacity="0.85"><title>inception/mercury-2.5: $0.0085/1M effective, 260,000 context</title></circle>
-<text x="666.9" y="343.0" text-anchor="start" fill="#2ca02c">inception/mercury-2.5</text>
-<circle cx="756.6" cy="332.5" r="5" fill="#2ca02c" fill-opacity="0.85"><title>qwen/qwen3.7-flash: $0.0092/1M effective, 1,000,000 context</title></circle>
-<text x="749.6" y="335.5" text-anchor="end" fill="#2ca02c">qwen/qwen3.7-flash</text>
-<circle cx="690.8" cy="305.6" r="5" fill="#2ca02c" fill-opacity="0.85"><title>openai/gpt-5-nano: $0.0122/1M effective, 400,000 context</title></circle>
-<text x="683.8" y="308.6" text-anchor="end" fill="#2ca02c">openai/gpt-5-nano</text>
-<circle cx="760.0" cy="302.6" r="5" fill="#2ca02c" fill-opacity="0.85"><title>meta/muse-spark-1.3-contributor: $0.0126/1M effective, 1,048,576 context</title></circle>
-<text x="753.0" y="305.6" text-anchor="end" fill="#2ca02c">meta/muse-spark-1.3-contributor</text>
+<text x="200.0" y="54" text-anchor="middle" fill="#c49a00">max review output size (9k)</text>
+<circle cx="760.0" cy="252.3" r="5" fill="#1f77b4" fill-opacity="0.85"><title>deepseek/deepseek-v4.1-flash: $0.0214/1M effective, 1,048,576 context</title></circle>
+<text x="753.0" y="255.3" text-anchor="end" fill="#1f77b4">deepseek/deepseek-v4.1-flash</text>
+<circle cx="563.3" cy="30.0" r="5" fill="#1f77b4" fill-opacity="0.85"><title>anthropic/claude-haiku-4.5: $0.2222/1M effective, 200,000 context</title></circle>
+<text x="570.3" y="33.0" text-anchor="start" fill="#1f77b4">anthropic/claude-haiku-4.5</text>
+<circle cx="595.4" cy="370.0" r="5" fill="#2ca02c" fill-opacity="0.85"><title>inclusionai/ling-3.0-flash: $0.0062/1M effective, 262,144 context</title></circle>
+<text x="602.4" y="373.0" text-anchor="start" fill="#2ca02c">inclusionai/ling-3.0-flash</text>
+<circle cx="594.4" cy="340.0" r="5" fill="#2ca02c" fill-opacity="0.85"><title>inception/mercury-2.5: $0.0085/1M effective, 260,000 context</title></circle>
+<text x="601.4" y="343.0" text-anchor="start" fill="#2ca02c">inception/mercury-2.5</text>
+<circle cx="754.4" cy="332.5" r="5" fill="#2ca02c" fill-opacity="0.85"><title>qwen/qwen3.7-flash: $0.0092/1M effective, 1,000,000 context</title></circle>
+<text x="747.4" y="335.5" text-anchor="end" fill="#2ca02c">qwen/qwen3.7-flash</text>
+<circle cx="645.6" cy="304.9" r="5" fill="#2ca02c" fill-opacity="0.85"><title>openai/gpt-5-nano: $0.0123/1M effective, 400,000 context</title></circle>
+<text x="652.6" y="307.9" text-anchor="start" fill="#2ca02c">openai/gpt-5-nano</text>
+<circle cx="760.0" cy="301.9" r="5" fill="#2ca02c" fill-opacity="0.85"><title>meta/muse-spark-1.3-contributor: $0.0127/1M effective, 1,048,576 context</title></circle>
+<text x="753.0" y="304.9" text-anchor="end" fill="#2ca02c">meta/muse-spark-1.3-contributor</text>
 <circle cx="14" cy="30" r="5" fill="#1f77b4"/>
 <text x="24" y="34">pinned</text>
 <circle cx="14" cy="46" r="5" fill="#2ca02c"/>
 <text x="24" y="50">candidate</text>
 <circle cx="14" cy="62" r="5" fill="#d62728"/>
 <text x="24" y="66">inadequate context</text>
+</g>
 </svg>
