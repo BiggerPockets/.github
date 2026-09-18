@@ -68,7 +68,7 @@ jobs:
             echo
 
             if [ -n "$CHART_SHA" ]; then
-              echo "![Price vs. uptime](https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${CHART_SHA}/${CHART_PATH})"
+              echo "![Price vs. context](https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${CHART_SHA}/${CHART_PATH})"
               echo
             fi
 

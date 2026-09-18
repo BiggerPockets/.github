@@ -19,9 +19,12 @@ the two things that ARE checkable automatically:
      dropped below MIN_UPTIME_PCT, since that's worth knowing even with no
      cheaper alternative in sight.
 
-When anything above is notable, also writes a price-vs-uptime SVG chart (pinned
+When anything above is notable, also writes a price-vs-context SVG chart (pinned
 models vs. candidates) to the given chart path, dependency-free (plain XML, no
-matplotlib) so it needs nothing beyond the stdlib in CI.
+matplotlib) so it needs nothing beyond the stdlib in CI. Uptime isn't charted:
+OpenRouter's public API doesn't expose throughput/latency (always null), and
+after the >=95% filter the remaining uptime spread is too small to be a useful
+axis, so it stays a table-only reliability gate instead.
 
 Prints one JSON object to stdout: {"drift": [...], "missing": [...],
 "candidates": [...], "unreliable_pinned": [...], "notable": bool}. Never raises
@@ -161,62 +164,57 @@ def find_candidates(catalog, pinned_ids, cheapest_pinned_input_rate):
 
 
 def generate_svg(pinned_points, candidate_points):
-    """Plain-XML price-vs-uptime scatter, pinned models vs. candidates. Returns
-    None when there's nothing plottable (no positive rate to build a log-scale
-    axis from)."""
+    """Plain-XML price-vs-context scatter, pinned models vs. candidates: the
+    actual price/capability tradeoff CANDIDATE_MIN_CONTEXT and the price filter
+    are built around. Both axes are log scale. Returns None when there's nothing
+    plottable (no positive rate/context to build an axis from)."""
     all_points = pinned_points + candidate_points
     rates = [p["input_rate_per_million"] for p in all_points if (p.get("input_rate_per_million") or 0) > 0]
-    if not rates:
+    contexts = [p["context_length"] for p in all_points if (p.get("context_length") or 0) > 0]
+    if not rates or not contexts:
         return None
 
     plot_w = CHART_WIDTH - CHART_MARGIN["left"] - CHART_MARGIN["right"]
     plot_h = CHART_HEIGHT - CHART_MARGIN["top"] - CHART_MARGIN["bottom"]
-    log_min, log_max = math.log10(min(rates)), math.log10(max(rates))
-    if log_min == log_max:
-        log_min, log_max = log_min - 0.5, log_max + 0.5
 
-    # Zoom the uptime axis to where the data actually is — real-world uptimes
-    # cluster in the high 90s, and a fixed 0-100 axis flattens them all onto one
-    # line at the top of the chart.
-    uptimes = [p["uptime_pct"] for p in all_points if p.get("uptime_pct") is not None]
-    y_max = 100.0
-    min_span = 2.0  # a floor so a single near-identical uptime doesn't collapse the axis
-    y_min = min(uptimes) if uptimes else y_max - min_span
-    if y_max - y_min < min_span:
-        y_min = y_max - min_span
-    y_min = max(0.0, y_min - (y_max - y_min) * 0.15)
-    y_span = y_max - y_min
+    x_log_min, x_log_max = math.log10(min(contexts)), math.log10(max(contexts))
+    if x_log_min == x_log_max:
+        x_log_min, x_log_max = x_log_min - 0.5, x_log_max + 0.5
 
-    def x_pos(rate):
-        rate = max(rate, min(rates))
-        frac = (math.log10(rate) - log_min) / (log_max - log_min)
+    y_log_min, y_log_max = math.log10(min(rates)), math.log10(max(rates))
+    if y_log_min == y_log_max:
+        y_log_min, y_log_max = y_log_min - 0.5, y_log_max + 0.5
+
+    def x_pos(context_length):
+        context_length = max(context_length, min(contexts))
+        frac = (math.log10(context_length) - x_log_min) / (x_log_max - x_log_min)
         return CHART_MARGIN["left"] + frac * plot_w
 
-    def y_pos(uptime_pct):
-        frac = (max(y_min, min(y_max, uptime_pct)) - y_min) / y_span
-        return CHART_MARGIN["top"] + (1 - frac) * plot_h
+    def y_pos(rate):
+        rate = max(rate, min(rates))
+        frac = (math.log10(rate) - y_log_min) / (y_log_max - y_log_min)
+        return CHART_MARGIN["top"] + (1 - frac) * plot_h  # cheaper (lower rate) plots higher
 
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{CHART_WIDTH}" height="{CHART_HEIGHT}" '
         f'font-family="sans-serif" font-size="11">',
         f'<rect width="{CHART_WIDTH}" height="{CHART_HEIGHT}" fill="white"/>',
         f'<text x="{CHART_WIDTH / 2}" y="18" text-anchor="middle" font-size="13" font-weight="bold">'
-        f'Price vs. uptime</text>',
+        f'Price vs. context</text>',
         f'<line x1="{CHART_MARGIN["left"]}" y1="{CHART_MARGIN["top"]}" '
         f'x2="{CHART_MARGIN["left"]}" y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="black"/>',
         f'<line x1="{CHART_MARGIN["left"]}" y1="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" '
         f'x2="{CHART_WIDTH - CHART_MARGIN["right"]}" y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="black"/>',
-        f'<text x="{CHART_WIDTH / 2}" y="{CHART_HEIGHT - 10}" text-anchor="middle">$/1M input (log scale)</text>',
+        f'<text x="{CHART_WIDTH / 2}" y="{CHART_HEIGHT - 10}" text-anchor="middle">context length (log scale)</text>',
         f'<text x="16" y="{CHART_HEIGHT / 2}" text-anchor="middle" '
-        f'transform="rotate(-90 16 {CHART_HEIGHT / 2})">uptime %</text>',
+        f'transform="rotate(-90 16 {CHART_HEIGHT / 2})">$/1M input (log scale)</text>',
     ]
 
-    decimals = 2 if y_span < 2 else 1 if y_span < 10 else 0
     tick_count = 5
     for i in range(tick_count):
-        pct = round(y_min + y_span * i / (tick_count - 1), decimals)
-        y = y_pos(pct)
-        label = f'{pct:.{decimals}f}' if decimals else f'{pct:.0f}'
+        rate = 10 ** (y_log_min + (y_log_max - y_log_min) * i / (tick_count - 1))
+        y = y_pos(rate)
+        label = f'{rate:.3g}'
         parts.append(f'<text x="{CHART_MARGIN["left"] - 6}" y="{y + 3}" text-anchor="end">{label}</text>')
         parts.append(
             f'<line x1="{CHART_MARGIN["left"]}" y1="{y}" x2="{CHART_WIDTH - CHART_MARGIN["right"]}" '
@@ -226,11 +224,11 @@ def generate_svg(pinned_points, candidate_points):
     def plot(points, color):
         for point in points:
             rate = point.get("input_rate_per_million")
-            uptime = point.get("uptime_pct")
-            if not rate or rate <= 0 or uptime is None:
+            context_length = point.get("context_length")
+            if not rate or rate <= 0 or not context_length or context_length <= 0:
                 continue
-            x, y = x_pos(rate), y_pos(uptime)
-            title = xml_escape(f'{point["id"]}: ${rate}/1M, {uptime}% uptime')
+            x, y = x_pos(context_length), y_pos(rate)
+            title = xml_escape(f'{point["id"]}: ${rate}/1M, {context_length:,} context')
             parts.append(
                 f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{color}" fill-opacity="0.85">'
                 f'<title>{title}</title></circle>'
@@ -298,7 +296,12 @@ def main(argv):
         if rate is not None and (cheapest_pinned_rate is None or rate < cheapest_pinned_rate):
             cheapest_pinned_rate = rate
         if rate is not None and uptime is not None:
-            pinned_points.append({"id": model["id"], "input_rate_per_million": rate, "uptime_pct": uptime})
+            pinned_points.append({
+                "id": model["id"],
+                "input_rate_per_million": rate,
+                "uptime_pct": uptime,
+                "context_length": live_entry.get("context_length"),
+            })
 
     result["candidates"] = find_candidates(catalog, pinned_ids, cheapest_pinned_rate)
     result["notable"] = bool(
