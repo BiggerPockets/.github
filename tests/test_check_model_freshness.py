@@ -182,6 +182,20 @@ class GenerateSvgTest(unittest.TestCase):
         svg = freshness.generate_svg(pinned, [], None)
         self.assertNotIn("#d62728", svg)
 
+    def test_draws_a_line_at_the_average_review_output_size(self):
+        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000}]
+        token_mix = {"avg_output_tokens": 5_000}
+        svg = freshness.generate_svg(pinned, [], token_mix)
+        self.assertIn("avg review output size", svg)
+        self.assertIn("5k", svg)
+
+    def test_widens_the_x_axis_to_include_averages_smaller_than_any_plotted_point(self):
+        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
+        token_mix = {"avg_input_tokens": 10_000, "avg_output_tokens": 500}
+        svg = freshness.generate_svg(pinned, [], token_mix)
+        self.assertIn("10k", svg)
+        self.assertIn("500</text>", svg)
+
 
 class WriteSvgTest(unittest.TestCase):
     def test_creates_parent_directories(self):
@@ -255,6 +269,8 @@ class FetchTokenMixTest(unittest.TestCase):
         self.assertAlmostEqual(mix["fresh_input_share"], 15 / total)
         self.assertAlmostEqual(mix["cache_read_share"], 120 / total)
         self.assertAlmostEqual(mix["output_share"], 8 / total)
+        self.assertAlmostEqual(mix["avg_input_tokens"], (15 + 120) / 2)
+        self.assertAlmostEqual(mix["avg_output_tokens"], 8 / 2)
 
     def test_none_on_request_failure(self):
         freshness.os.environ["DD_API_KEY"] = "key"

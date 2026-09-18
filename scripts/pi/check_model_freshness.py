@@ -177,6 +177,7 @@ def fetch_token_mix():
         "cache_read_share": cache_read / total,
         "output_share": output / total,
         "avg_input_tokens": (fresh_input + cache_read) / sample_count,
+        "avg_output_tokens": output / sample_count,
         "sample_count": sample_count,
         "window": TOKEN_MIX_WINDOW,
     }
@@ -295,10 +296,14 @@ def generate_svg(pinned_points, candidate_points, token_mix):
     if not rates or not contexts:
         return None
 
+    avg_input_tokens = (token_mix or {}).get("avg_input_tokens") or 0
+    avg_output_tokens = (token_mix or {}).get("avg_output_tokens") or 0
+    x_values = contexts + [n for n in (avg_input_tokens, avg_output_tokens) if n > 0]
+
     plot_w = CHART_WIDTH - CHART_MARGIN["left"] - CHART_MARGIN["right"]
     plot_h = CHART_HEIGHT - CHART_MARGIN["top"] - CHART_MARGIN["bottom"]
 
-    x_log_min, x_log_max = math.log10(min(contexts)), math.log10(max(contexts))
+    x_log_min, x_log_max = math.log10(min(x_values)), math.log10(max(x_values))
     if x_log_min == x_log_max:
         x_log_min, x_log_max = x_log_min - 0.5, x_log_max + 0.5
 
@@ -307,7 +312,7 @@ def generate_svg(pinned_points, candidate_points, token_mix):
         y_log_min, y_log_max = y_log_min - 0.5, y_log_max + 0.5
 
     def x_pos(context_length):
-        context_length = min(max(context_length, min(contexts)), max(contexts))
+        context_length = min(max(context_length, min(x_values)), max(x_values))
         frac = (math.log10(context_length) - x_log_min) / (x_log_max - x_log_min)
         return CHART_MARGIN["left"] + frac * plot_w
 
@@ -358,18 +363,22 @@ def generate_svg(pinned_points, candidate_points, token_mix):
             f'y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="#eee"/>'
         )
 
-    avg_input_tokens = (token_mix or {}).get("avg_input_tokens")
-    if avg_input_tokens and avg_input_tokens > 0:
-        avg_x = x_pos(avg_input_tokens)
+    def draw_avg_line(value, label, label_y, dash_color):
+        x = x_pos(value)
         parts.append(
-            f'<line x1="{avg_x:.1f}" y1="{CHART_MARGIN["top"]}" x2="{avg_x:.1f}" '
-            f'y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="#999" stroke-width="1.5" '
+            f'<line x1="{x:.1f}" y1="{CHART_MARGIN["top"]}" x2="{x:.1f}" '
+            f'y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="{dash_color}" stroke-width="1.5" '
             f'stroke-dasharray="4,3"/>'
         )
         parts.append(
-            f'<text x="{avg_x:.1f}" y="{CHART_MARGIN["top"] + 12}" text-anchor="middle" fill="#999">'
-            f'avg review input size ({format_context(avg_input_tokens)})</text>'
+            f'<text x="{x:.1f}" y="{label_y}" text-anchor="middle" fill="{dash_color}">'
+            f'{label} ({format_context(value)})</text>'
         )
+
+    if avg_input_tokens > 0:
+        draw_avg_line(avg_input_tokens, "avg review input size", CHART_MARGIN["top"] + 12, "#999")
+    if avg_output_tokens > 0:
+        draw_avg_line(avg_output_tokens, "avg review output size", CHART_MARGIN["top"] + 24, "#c49a00")
 
     INADEQUATE_COLOR = "#d62728"
 
