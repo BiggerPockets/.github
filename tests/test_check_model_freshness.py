@@ -82,8 +82,8 @@ class GenerateSvgTest(unittest.TestCase):
         self.assertIsNone(freshness.generate_svg([], []))
 
     def test_plots_pinned_and_candidate_ids_with_distinct_colors(self):
-        pinned = [{"id": "z-ai/glm-5.3-flash", "input_rate_per_million": 0.09, "uptime_pct": 99.9}]
-        candidates = [{"id": "some/cheaper-model", "input_rate_per_million": 0.02, "uptime_pct": 99.5}]
+        pinned = [{"id": "z-ai/glm-5.3-flash", "input_rate_per_million": 0.09, "context_length": 1_000_000}]
+        candidates = [{"id": "some/cheaper-model", "input_rate_per_million": 0.02, "context_length": 200_000}]
         svg = freshness.generate_svg(pinned, candidates)
         self.assertIn("z-ai/glm-5.3-flash", svg)
         self.assertIn("some/cheaper-model", svg)
@@ -92,17 +92,14 @@ class GenerateSvgTest(unittest.TestCase):
         self.assertTrue(svg.startswith("<svg"))
         self.assertTrue(svg.endswith("</svg>"))
 
-    def test_uptime_axis_zooms_to_the_data_instead_of_starting_at_zero(self):
-        import re
-        pinned = [{"id": "a/model", "input_rate_per_million": 0.09, "uptime_pct": 99.9}]
-        candidates = [{"id": "b/model", "input_rate_per_million": 0.02, "uptime_pct": 99.97}]
-        svg = freshness.generate_svg(pinned, candidates)
-        tick_labels = re.findall(r'text-anchor="end">([\d.]+)</text>', svg)
-        self.assertTrue(tick_labels, "expected axis tick labels in the SVG")
-        self.assertGreater(min(float(v) for v in tick_labels), 50)
+    def test_does_not_mention_uptime_at_all(self):
+        pinned = [{"id": "a/model", "input_rate_per_million": 0.09, "context_length": 1_000_000,
+                   "uptime_pct": 99.9}]
+        svg = freshness.generate_svg(pinned, [])
+        self.assertNotIn("uptime", svg.lower())
 
     def test_escapes_ids_to_stay_valid_xml(self):
-        pinned = [{"id": "vendor/model<x>&y", "input_rate_per_million": 0.09, "uptime_pct": 99.9}]
+        pinned = [{"id": "vendor/model<x>&y", "input_rate_per_million": 0.09, "context_length": 1_000_000}]
         svg = freshness.generate_svg(pinned, [])
         self.assertIn("&lt;x&gt;&amp;y", svg)
         self.assertNotIn("<x>", svg)
