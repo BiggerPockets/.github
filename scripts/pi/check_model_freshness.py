@@ -31,13 +31,16 @@ input/cacheRead/output rates by that observed share, falling back to the raw
 input rate when Datadog credentials (DD_API_KEY/DD_APP_KEY) aren't set or the
 lookup fails, so the check still degrades gracefully without them.
 
-When anything above is notable, also writes a price-vs-context SVG chart (pinned
-models vs. candidates, using the effective rate) to the given chart path,
+When anything above is notable, also writes an SVG chart (pinned models vs.
+candidates, price using the effective rate) to the given chart path,
 dependency-free (plain XML, no matplotlib) so it needs nothing beyond the
-stdlib in CI. Uptime isn't charted: OpenRouter's public API doesn't expose
-throughput/latency (always null), and after the >=95% filter the remaining
-uptime spread is too small to be a useful axis, so it stays a table-only
-reliability gate instead.
+stdlib in CI. The x-axis is a coding-specific score scraped from
+llm-stats.com's public leaderboard (see fetch_coding_scores) when at least
+one plotted model has one, since that's more relevant to a code-review bot
+than raw context length; it falls back to context length otherwise. Uptime
+isn't charted: OpenRouter's public API doesn't expose throughput/latency
+(always null), and after the >=95% filter the remaining uptime spread is too
+small to be a useful axis, so it stays a table-only reliability gate instead.
 
 Prints one JSON object to stdout: {"drift": [...], "missing": [...],
 "candidates": [...], "unreliable_pinned": [...], "token_mix": {...} | null,
@@ -49,6 +52,7 @@ Usage: check_model_freshness.py <path-to-models.json> [chart-output-path]
 import json
 import math
 import os
+import re
 import sys
 import urllib.request
 from xml.sax.saxutils import escape as xml_escape
@@ -76,6 +80,15 @@ TOKEN_MIX_QUERY = "@name:pi.synthesize"
 TOKEN_MIX_WINDOW = "now-90d"
 TOKEN_MIX_PAGE_LIMIT = 100
 TOKEN_MIX_MAX_SPANS = 1000  # hard cap so a slow query can't hang the workflow
+
+# llm-stats.com has no public API for this (its documented one doesn't expose
+# benchmark scores at all), but its leaderboard page server-renders a coding
+# score (index_code, a composite of SWE-bench/HumanEval/LiveCodeBench/etc.)
+# straight into a Next.js RSC payload embedded in the HTML. No auth needed,
+# but also no stability contract, so fetch_coding_scores() degrades to an
+# empty list on any parsing failure rather than ever raising.
+LLM_STATS_LEADERBOARD_URL = "https://llm-stats.com/leaderboards/llm-leaderboard"
+DATE_SUFFIX_RE = re.compile(r"-\d{8}$")
 
 
 def per_token_to_per_million(value):
@@ -199,6 +212,92 @@ def fetch_token_mix():
     }
 
 
+def fetch_coding_scores():
+    """Scrape llm-stats.com's public leaderboard page for its per-model coding
+    score. The page is a Next.js app; the data isn't in the initial HTML tags,
+    it's inside a `self.__next_f.push([1, "..."])` call whose argument is a
+    JS-string-escaped JSON blob containing an `"initialData": [...]` array.
+    Returns that array (a list of dicts with at least `model_id`,
+    `organization_id`, and `index_code`), or [] on any fetch/parse failure."""
+    try:
+        request = urllib.request.Request(
+            LLM_STATS_LEADERBOARD_URL, headers={"User-Agent": "Mozilla/5.0"}
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            html = response.read().decode("utf-8", errors="replace")
+    except Exception:
+        return []
+
+    for match in re.finditer(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html, re.S):
+        chunk = match.group(1)
+        if "initialData" not in chunk:
+            continue
+        try:
+            unescaped = chunk.encode().decode("unicode_escape")
+        except Exception:
+            continue
+        marker = 'initialData":['
+        start = unescaped.find(marker)
+        if start == -1:
+            continue
+        start += len(marker) - 1  # keep the leading '['
+        depth = 0
+        end = None
+        for i in range(start, len(unescaped)):
+            char = unescaped[i]
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end is None:
+            continue
+        try:
+            return json.loads(unescaped[start:end])
+        except Exception:
+            continue
+    return []
+
+
+def _normalize_model_slug(slug):
+    return DATE_SUFFIX_RE.sub("", slug.lower().replace(".", "-"))
+
+
+def build_coding_score_index(scores):
+    """Key llm-stats.com's leaderboard rows by (org, normalized model slug) so
+    they can be looked up by OpenRouter catalog id. Normalizing strips a
+    trailing release-date suffix llm-stats adds that OpenRouter's ids never
+    have, and swaps dots for dashes since the two sites disagree on that too
+    (`claude-haiku-4.5` vs `claude-haiku-4-5-20251001`). When normalization
+    collapses more than one leaderboard row onto the same key (different
+    dated snapshots of the same model), keeps the one with the highest
+    index_code rather than an arbitrary one."""
+    index = {}
+    for entry in scores:
+        org = entry.get("organization_id")
+        model_id = entry.get("model_id")
+        if not org or not model_id:
+            continue
+        key = (org, _normalize_model_slug(model_id))
+        existing = index.get(key)
+        if existing is None or (entry.get("index_code") or -1) > (existing.get("index_code") or -1):
+            index[key] = entry
+    return index
+
+
+def coding_score_for(catalog_id, index):
+    """Look up a catalog id's llm-stats.com entry, or None when there's no
+    confident match. Never matches across org prefixes (an `anthropic/`
+    catalog id can only match an `anthropic` llm-stats row) even if the
+    model-name tokens happen to look alike."""
+    if "/" not in catalog_id:
+        return None
+    org, slug = catalog_id.split("/", 1)
+    return index.get((org, _normalize_model_slug(slug)))
+
+
 def effective_rate_per_million(rates, token_mix):
     """Blend a model's input/cacheRead/output $/1M rates by token_mix's observed
     shares. Falls back to the raw input rate when there's no mix to blend with,
@@ -302,27 +401,60 @@ def find_candidates(catalog, pinned_ids, cheapest_pinned_effective_rate, token_m
 
 
 def generate_svg(pinned_points, candidate_points, token_mix):
-    """Plain-XML price-vs-context scatter, pinned models vs. candidates: the
-    actual price/capability tradeoff CANDIDATE_MIN_CONTEXT and the price filter
-    are built around. Both axes are log scale. Returns None when there's nothing
-    plottable (no positive rate/context to build an axis from)."""
+    """Plain-XML price-vs-x scatter, pinned models vs. candidates.
+
+    The x-axis is the model's coding score from llm-stats.com's leaderboard
+    (see fetch_coding_scores) when at least one plottable point has one,
+    since that's a more relevant axis for a code-review bot than raw context
+    length. It falls back to context length (log scale, with the max
+    review input/output size reference lines) when no point has a coding
+    score — a llm-stats.com fetch/parse failure, or no matches for any
+    plotted model, degrades to the old behavior rather than losing the
+    chart. The y-axis (effective $/1M) is always log scale.
+
+    Returns None when there's nothing plottable (no positive rate, or no
+    positive value at all for whichever x-axis gets picked)."""
     all_points = pinned_points + candidate_points
     rates = [p["effective_rate_per_million"] for p in all_points if (p.get("effective_rate_per_million") or 0) > 0]
-    contexts = [p["context_length"] for p in all_points if (p.get("context_length") or 0) > 0]
-    if not rates or not contexts:
+    if not rates:
         return None
 
     max_input_tokens = (token_mix or {}).get("max_input_tokens") or 0
     max_output_tokens = (token_mix or {}).get("max_output_tokens") or 0
     max_total_tokens = (token_mix or {}).get("max_total_tokens") or 0
-    x_values = contexts + [n for n in (max_input_tokens, max_output_tokens) if n > 0]
+
+    coding_scores = [p["coding_score"] for p in all_points if p.get("coding_score") is not None]
+    use_coding_axis = bool(coding_scores)
+
+    if use_coding_axis:
+        x_field = "coding_score"
+        x_log_scale = False
+        x_values = coding_scores
+        x_title = "coding score (llm-stats.com index_code, higher is better)"
+        chart_title = "Price vs. coding score"
+    else:
+        contexts = [p["context_length"] for p in all_points if (p.get("context_length") or 0) > 0]
+        if not contexts:
+            return None
+        x_field = "context_length"
+        x_log_scale = True
+        x_values = contexts + [n for n in (max_input_tokens, max_output_tokens) if n > 0]
+        x_title = "context length (log scale)"
+        chart_title = "Price vs. context"
 
     plot_w = CHART_WIDTH - CHART_MARGIN["left"] - CHART_MARGIN["right"]
     plot_h = CHART_HEIGHT - CHART_MARGIN["top"] - CHART_MARGIN["bottom"]
 
-    x_log_min, x_log_max = math.log10(min(x_values)), math.log10(max(x_values))
-    if x_log_min == x_log_max:
-        x_log_min, x_log_max = x_log_min - 0.5, x_log_max + 0.5
+    def to_scale(value):
+        return math.log10(value) if x_log_scale else value
+
+    def from_scale(value):
+        return 10 ** value if x_log_scale else value
+
+    x_min, x_max = min(x_values), max(x_values)
+    x_scale_min, x_scale_max = to_scale(x_min), to_scale(x_max)
+    if x_scale_min == x_scale_max:
+        x_scale_min, x_scale_max = x_scale_min - 0.5, x_scale_max + 0.5
 
     y_log_min, y_log_max = math.log10(min(rates)), math.log10(max(rates))
     if y_log_min == y_log_max:
@@ -330,14 +462,14 @@ def generate_svg(pinned_points, candidate_points, token_mix):
 
     # Pad the plotted domain beyond the actual data range so points and lines
     # near an extreme don't render flush against the axis.
-    x_pad = (x_log_max - x_log_min) * PLOT_PADDING_FRACTION
-    x_log_min, x_log_max = x_log_min - x_pad, x_log_max + x_pad
+    x_pad = (x_scale_max - x_scale_min) * PLOT_PADDING_FRACTION
+    x_scale_min, x_scale_max = x_scale_min - x_pad, x_scale_max + x_pad
     y_pad = (y_log_max - y_log_min) * PLOT_PADDING_FRACTION
     y_log_min, y_log_max = y_log_min - y_pad, y_log_max + y_pad
 
-    def x_pos(context_length):
-        context_length = min(max(context_length, min(x_values)), max(x_values))
-        frac = (math.log10(context_length) - x_log_min) / (x_log_max - x_log_min)
+    def x_pos(value):
+        value = min(max(value, x_min), x_max)
+        frac = (to_scale(value) - x_scale_min) / (x_scale_max - x_scale_min)
         return CHART_MARGIN["left"] + frac * plot_w
 
     def y_pos(rate):
@@ -357,12 +489,12 @@ def generate_svg(pinned_points, candidate_points, token_mix):
         f'<rect width="{padded_width}" height="{padded_height}" fill="white"/>',
         f'<g transform="translate({CHART_PADDING} {CHART_PADDING})">',
         f'<text x="{plot_center_x}" y="18" text-anchor="middle" font-size="13" font-weight="bold">'
-        f'Price vs. context</text>',
+        f'{chart_title}</text>',
         f'<line x1="{CHART_MARGIN["left"]}" y1="{CHART_MARGIN["top"]}" '
         f'x2="{CHART_MARGIN["left"]}" y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="black"/>',
         f'<line x1="{CHART_MARGIN["left"]}" y1="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" '
         f'x2="{CHART_WIDTH - CHART_MARGIN["right"]}" y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="black"/>',
-        f'<text x="{plot_center_x}" y="{CHART_HEIGHT - 10}" text-anchor="middle">context length (log scale)</text>',
+        f'<text x="{plot_center_x}" y="{CHART_HEIGHT - 10}" text-anchor="middle">{x_title}</text>',
         f'<text x="{y_title_x}" y="{CHART_HEIGHT / 2}" text-anchor="middle" '
         f'transform="rotate(-90 {y_title_x} {CHART_HEIGHT / 2})">effective $/1M (log scale)</text>',
     ]
@@ -370,6 +502,9 @@ def generate_svg(pinned_points, candidate_points, token_mix):
     def format_context(n):
         n = round(n)
         return f'{n / 1_000_000:.3g}M' if n >= 1_000_000 else f'{n / 1_000:.0f}k' if n >= 1_000 else str(n)
+
+    def format_x_tick(value):
+        return f'{value:.3g}' if use_coding_axis else format_context(value)
 
     tick_count = 5
     for i in range(tick_count):
@@ -383,11 +518,11 @@ def generate_svg(pinned_points, candidate_points, token_mix):
         )
 
     for i in range(tick_count):
-        context_length = 10 ** (x_log_min + (x_log_max - x_log_min) * i / (tick_count - 1))
-        x = x_pos(context_length)
+        value = from_scale(x_scale_min + (x_scale_max - x_scale_min) * i / (tick_count - 1))
+        x = x_pos(value)
         parts.append(
             f'<text x="{x:.1f}" y="{CHART_HEIGHT - CHART_MARGIN["bottom"] + 16}" text-anchor="middle">'
-            f'{format_context(context_length)}</text>'
+            f'{format_x_tick(value)}</text>'
         )
         parts.append(
             f'<line x1="{x:.1f}" y1="{CHART_MARGIN["top"]}" x2="{x:.1f}" '
@@ -406,10 +541,13 @@ def generate_svg(pinned_points, candidate_points, token_mix):
             f'{label} ({format_context(value)})</text>'
         )
 
-    if max_input_tokens > 0:
-        draw_max_line(max_input_tokens, "max review input size", CHART_MARGIN["top"] + 12, "#999")
-    if max_output_tokens > 0:
-        draw_max_line(max_output_tokens, "max review output size", CHART_MARGIN["top"] + 24, "#c49a00")
+    # The max review input/output size lines are context-length values, so
+    # they only make sense positioned on a context-length x-axis.
+    if not use_coding_axis:
+        if max_input_tokens > 0:
+            draw_max_line(max_input_tokens, "max review input size", CHART_MARGIN["top"] + 12, "#999")
+        if max_output_tokens > 0:
+            draw_max_line(max_output_tokens, "max review output size", CHART_MARGIN["top"] + 24, "#c49a00")
 
     INADEQUATE_COLOR = "#d62728"
 
@@ -417,12 +555,17 @@ def generate_svg(pinned_points, candidate_points, token_mix):
         for point in points:
             rate = point.get("effective_rate_per_million")
             context_length = point.get("context_length")
+            x_value = point.get(x_field)
             if not rate or rate <= 0 or not context_length or context_length <= 0:
+                continue
+            if x_value is None or (x_log_scale and x_value <= 0):
                 continue
             inadequate = bool(max_total_tokens) and context_length < max_total_tokens
             point_color = INADEQUATE_COLOR if inadequate else color
-            x, y = x_pos(context_length), y_pos(rate)
+            x, y = x_pos(x_value), y_pos(rate)
             title = xml_escape(f'{point["id"]}: ${rate}/1M effective, {context_length:,} context')
+            if point.get("coding_score") is not None:
+                title += xml_escape(f', coding score {point["coding_score"]:.1f}')
             if inadequate:
                 title += xml_escape(" (context too small for the worst-case review)")
             parts.append(
@@ -519,6 +662,17 @@ def main(argv):
     )
 
     if result["notable"]:
+        # Only fetched when there's actually a chart to draw: an extra network
+        # call to a page with no stability contract isn't worth paying most
+        # weeks, when nothing's notable and no chart gets generated anyway.
+        coding_score_index = build_coding_score_index(fetch_coding_scores())
+        for point in pinned_points:
+            entry = coding_score_for(point["id"], coding_score_index)
+            point["coding_score"] = entry.get("index_code") if entry else None
+        for candidate in result["candidates"]:
+            entry = coding_score_for(candidate["id"], coding_score_index)
+            candidate["coding_score"] = entry.get("index_code") if entry else None
+
         svg = generate_svg(pinned_points, result["candidates"], token_mix)
         if svg:
             write_svg(chart_path, svg)
