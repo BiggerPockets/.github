@@ -144,6 +144,33 @@ class GenerateSvgTest(unittest.TestCase):
         self.assertIn("&lt;x&gt;&amp;y", svg)
         self.assertNotIn("<x>", svg)
 
+    def test_labels_the_context_axis_ticks(self):
+        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 1_000_000}]
+        candidates = [{"id": "b/model", "effective_rate_per_million": 0.02, "context_length": 100_000}]
+        svg = freshness.generate_svg(pinned, candidates)
+        self.assertIn("100k", svg)
+        self.assertIn("1M", svg)
+
+    def test_draws_a_line_at_the_average_pinned_context_length(self):
+        pinned = [
+            {"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000},
+            {"id": "b/model", "effective_rate_per_million": 0.05, "context_length": 300_000},
+        ]
+        svg = freshness.generate_svg(pinned, [])
+        self.assertIn("avg pinned context", svg)
+        self.assertIn("200k", svg)  # mean of 100k and 300k
+
+    def test_average_context_line_ignores_candidates(self):
+        pinned = [{"id": "a/model", "effective_rate_per_million": 0.09, "context_length": 100_000}]
+        candidates = [{"id": "b/model", "effective_rate_per_million": 0.02, "context_length": 900_000}]
+        svg = freshness.generate_svg(pinned, candidates)
+        self.assertIn("avg pinned context (100k)", svg)
+
+    def test_no_average_line_when_no_pinned_points(self):
+        svg = freshness.generate_svg([], [{"id": "b/model", "effective_rate_per_million": 0.02,
+                                            "context_length": 900_000}])
+        self.assertNotIn("avg pinned context", svg)
+
 
 class WriteSvgTest(unittest.TestCase):
     def test_creates_parent_directories(self):
