@@ -10,12 +10,18 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
    went beyond the literal criteria (see step 2 for how to weigh that against history and
    context). Only treat a deviation as a blocker if it genuinely fails the ticket's purpose.
    If the ticket is not available, do a diff-based review.
-2. Review the diff in pr.diff. Do NOT rely on the hunks alone: use `git log` / `git show` on
-   the branch and grep the repository for callers and related tests to judge impact and
-   intent. Git history and the PR's context are usually more reliable evidence of what was
-   meant than the ticket's literal acceptance criteria: when a commit, the diff, or the
-   conversation shows the work was refined or extended beyond the AC in a sound way, treat
-   that as an improvement rather than scope creep.
+2. Review the diff in pr.diff. Do NOT rely on the hunks alone, but keep the exploration
+   bounded: every tool call re-sends the whole transcript, so each one costs as much as
+   the review so far. Read pr.diff once, note which questions the hunks leave open, and
+   answer only those. Grep for callers and related tests of the names the diff changes,
+   scoped to the directories it touches, rather than reading whole files. Use
+   `git log --oneline` on the branch, and `git show` only for a commit whose message bears
+   on intent, not the full history. A small diff usually needs two or three tool calls; a
+   large one should rarely need more than a dozen. Git history and the PR's context are
+   usually more reliable evidence of what was meant than the ticket's literal acceptance
+   criteria: when a commit, the diff, or the conversation shows the work was refined or
+   extended beyond the AC in a sound way, treat that as an improvement rather than scope
+   creep.
 3. Enforce task completeness and reject incomplete tasks, half-measures, placeholders, or
    deferred work per these rules as blocking issues:
    {{@prompts/_shared/completeness-rules.md}}
