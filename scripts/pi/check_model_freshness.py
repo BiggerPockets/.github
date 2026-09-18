@@ -12,29 +12,43 @@ the two things that ARE checkable automatically:
      someone updates the pin.
   2. Cheaper same-tier candidates: reasoning-capable models with >=100k context
      and at least MIN_UPTIME_PCT uptime that currently cost less than the
-     cheapest pinned model, so there's something concrete to look at when
-     deciding whether to roll the default forward. A cheaper model that's down
-     5%+ of the time isn't actually a saving.
+     cheapest pinned model on an *effective* $/1M basis (see below), so there's
+     something concrete to look at when deciding whether to roll the default
+     forward. A cheaper model that's down 5%+ of the time isn't actually a
+     saving.
   3. Unreliable pinned models: any currently-pinned model whose uptime has
      dropped below MIN_UPTIME_PCT, since that's worth knowing even with no
      cheaper alternative in sight.
 
+Why "effective" $/1M instead of the raw input rate: pi's review prompts are
+almost entirely re-sent context, so OpenRouter's prompt-cache discount — not the
+list input rate — dominates real cost. Sampling pi's own `pi.synthesize` spans
+from Datadog LLM Observability (see fetch_token_mix) over a trailing window
+consistently shows something like 90% cache-read tokens, ~9% fresh input, ~1%
+output — ranking or charting models by raw input price alone would be comparing
+list prices nobody actually pays. effective_rate_per_million blends a model's
+input/cacheRead/output rates by that observed share, falling back to the raw
+input rate when Datadog credentials (DD_API_KEY/DD_APP_KEY) aren't set or the
+lookup fails, so the check still degrades gracefully without them.
+
 When anything above is notable, also writes a price-vs-context SVG chart (pinned
-models vs. candidates) to the given chart path, dependency-free (plain XML, no
-matplotlib) so it needs nothing beyond the stdlib in CI. Uptime isn't charted:
-OpenRouter's public API doesn't expose throughput/latency (always null), and
-after the >=95% filter the remaining uptime spread is too small to be a useful
-axis, so it stays a table-only reliability gate instead.
+models vs. candidates, using the effective rate) to the given chart path,
+dependency-free (plain XML, no matplotlib) so it needs nothing beyond the
+stdlib in CI. Uptime isn't charted: OpenRouter's public API doesn't expose
+throughput/latency (always null), and after the >=95% filter the remaining
+uptime spread is too small to be a useful axis, so it stays a table-only
+reliability gate instead.
 
 Prints one JSON object to stdout: {"drift": [...], "missing": [...],
-"candidates": [...], "unreliable_pinned": [...], "notable": bool}. Never raises
-and always exits 0 — this is a weekly nudge-to-look, not a check that should ever
-fail CI.
+"candidates": [...], "unreliable_pinned": [...], "token_mix": {...} | null,
+"notable": bool}. Never raises and always exits 0 — this is a weekly
+nudge-to-look, not a check that should ever fail CI.
 
 Usage: check_model_freshness.py <path-to-models.json> [chart-output-path]
 """
 import json
 import math
+import os
 import sys
 import urllib.request
 from xml.sax.saxutils import escape as xml_escape
@@ -50,6 +64,15 @@ DEFAULT_CHART_PATH = "docs/model-freshness/frontier.svg"
 CHART_WIDTH = 640
 CHART_HEIGHT = 420
 CHART_MARGIN = {"left": 60, "right": 20, "top": 30, "bottom": 50}
+
+# Real usage mix for the pi review pass, sampled from Datadog LLM Observability
+# spans. A longer window smooths out any single noisy week; refreshed on every
+# run rather than hardcoded so the blend tracks actual usage as it drifts.
+DATADOG_SPANS_SEARCH_URL = "https://api.datadoghq.com/api/v2/llm-obs/v1/spans/events/search"
+TOKEN_MIX_QUERY = "@name:pi.synthesize"
+TOKEN_MIX_WINDOW = "now-90d"
+TOKEN_MIX_PAGE_LIMIT = 100
+TOKEN_MIX_MAX_SPANS = 1000  # hard cap so a slow query can't hang the workflow
 
 
 def per_token_to_per_million(value):
@@ -91,6 +114,95 @@ def fetch_uptime(model_id):
     return round(max(uptimes), 2) if uptimes else None
 
 
+def fetch_token_mix():
+    """Sum input/cache-read/output tokens across the pi review pass's own
+    `pi.synthesize` spans over TOKEN_MIX_WINDOW, via Datadog's LLM Observability
+    spans search API. Returns {"fresh_input_share", "cache_read_share",
+    "output_share", "sample_count", "window"} or None when DD_API_KEY/DD_APP_KEY
+    aren't set, the request fails, or no spans have usable metrics — callers
+    fall back to the raw input rate in that case.
+
+    pi's own instrumentation reports `input_tokens` as fresh (non-cached) tokens
+    only, disjoint from `cache_read_input_tokens` — unlike some other passes'
+    spans, where input_tokens includes the cached portion. Summing the three
+    fields directly (no subtraction) is what's correct for this pass."""
+    api_key = os.environ.get("DD_API_KEY")
+    app_key = os.environ.get("DD_APP_KEY")
+    if not api_key or not app_key:
+        return None
+
+    fresh_input = cache_read = output = sample_count = 0
+    cursor = None
+    while sample_count < TOKEN_MIX_MAX_SPANS:
+        filter_ = {"from": TOKEN_MIX_WINDOW, "to": "now", "query": TOKEN_MIX_QUERY}
+        page = {"limit": TOKEN_MIX_PAGE_LIMIT}
+        if cursor:
+            page["cursor"] = cursor
+        body = json.dumps({"data": {"type": "spans", "attributes": {"filter": filter_, "page": page}}}).encode()
+        request = urllib.request.Request(
+            DATADOG_SPANS_SEARCH_URL,
+            data=body,
+            method="POST",
+            headers={
+                "DD-API-KEY": api_key,
+                "DD-APPLICATION-KEY": app_key,
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.load(response)
+        except Exception:
+            break
+
+        spans = payload.get("data") or []
+        for span in spans:
+            metrics = (span.get("attributes") or {}).get("metrics")
+            if not metrics or "input_tokens" not in metrics:
+                continue
+            fresh_input += metrics.get("input_tokens", 0)
+            cache_read += metrics.get("cache_read_input_tokens", 0)
+            output += metrics.get("output_tokens", 0)
+            sample_count += 1
+
+        cursor = ((payload.get("meta") or {}).get("page") or {}).get("after")
+        if not cursor or not spans:
+            break
+
+    total = fresh_input + cache_read + output
+    if total <= 0:
+        return None
+    return {
+        "fresh_input_share": fresh_input / total,
+        "cache_read_share": cache_read / total,
+        "output_share": output / total,
+        "sample_count": sample_count,
+        "window": TOKEN_MIX_WINDOW,
+    }
+
+
+def effective_rate_per_million(rates, token_mix):
+    """Blend a model's input/cacheRead/output $/1M rates by token_mix's observed
+    shares. Falls back to the raw input rate when there's no mix to blend with,
+    or the model has no input rate at all. A rate missing cacheRead/output
+    pricing (data gaps happen) falls back to the input rate for that share
+    rather than dropping the model or crashing."""
+    input_rate = rates.get("input")
+    if input_rate is None:
+        return None
+    if not token_mix:
+        return input_rate
+    cache_rate = rates.get("cacheRead")
+    cache_rate = cache_rate if cache_rate is not None else input_rate
+    output_rate = rates.get("output")
+    output_rate = output_rate if output_rate is not None else input_rate
+    return (
+        token_mix["fresh_input_share"] * input_rate
+        + token_mix["cache_read_share"] * cache_rate
+        + token_mix["output_share"] * output_rate
+    )
+
+
 def load_pinned(path):
     with open(path) as handle:
         config = json.load(handle)
@@ -130,7 +242,7 @@ def is_reasoning_capable(entry):
     return "reasoning" in params or "include_reasoning" in params
 
 
-def find_candidates(catalog, pinned_ids, cheapest_pinned_input_rate):
+def find_candidates(catalog, pinned_ids, cheapest_pinned_effective_rate, token_mix):
     pool = []
     for model_id, entry in catalog.items():
         if model_id in pinned_ids:
@@ -139,18 +251,26 @@ def find_candidates(catalog, pinned_ids, cheapest_pinned_input_rate):
             continue
         if (entry.get("context_length") or 0) < CANDIDATE_MIN_CONTEXT:
             continue
-        input_rate = per_token_to_per_million(entry.get("pricing", {}).get("prompt"))
+        pricing = entry.get("pricing", {})
+        input_rate = per_token_to_per_million(pricing.get("prompt"))
         if input_rate is None or input_rate <= 0:
             continue
-        if cheapest_pinned_input_rate is not None and input_rate >= cheapest_pinned_input_rate:
+        rates = {
+            "input": input_rate,
+            "cacheRead": per_token_to_per_million(pricing.get("input_cache_read")),
+            "output": per_token_to_per_million(pricing.get("completion")),
+        }
+        effective_rate = effective_rate_per_million(rates, token_mix)
+        if cheapest_pinned_effective_rate is not None and effective_rate >= cheapest_pinned_effective_rate:
             continue
         pool.append({
             "id": model_id,
             "name": entry.get("name"),
             "context_length": entry.get("context_length"),
             "input_rate_per_million": round(input_rate, 4),
+            "effective_rate_per_million": round(effective_rate, 4),
         })
-    pool.sort(key=lambda c: c["input_rate_per_million"])
+    pool.sort(key=lambda c: c["effective_rate_per_million"])
 
     candidates = []
     for candidate in pool[:CANDIDATE_POOL_SIZE]:
@@ -169,7 +289,7 @@ def generate_svg(pinned_points, candidate_points):
     are built around. Both axes are log scale. Returns None when there's nothing
     plottable (no positive rate/context to build an axis from)."""
     all_points = pinned_points + candidate_points
-    rates = [p["input_rate_per_million"] for p in all_points if (p.get("input_rate_per_million") or 0) > 0]
+    rates = [p["effective_rate_per_million"] for p in all_points if (p.get("effective_rate_per_million") or 0) > 0]
     contexts = [p["context_length"] for p in all_points if (p.get("context_length") or 0) > 0]
     if not rates or not contexts:
         return None
@@ -207,7 +327,7 @@ def generate_svg(pinned_points, candidate_points):
         f'x2="{CHART_WIDTH - CHART_MARGIN["right"]}" y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="black"/>',
         f'<text x="{CHART_WIDTH / 2}" y="{CHART_HEIGHT - 10}" text-anchor="middle">context length (log scale)</text>',
         f'<text x="16" y="{CHART_HEIGHT / 2}" text-anchor="middle" '
-        f'transform="rotate(-90 16 {CHART_HEIGHT / 2})">$/1M input (log scale)</text>',
+        f'transform="rotate(-90 16 {CHART_HEIGHT / 2})">effective $/1M (log scale)</text>',
     ]
 
     tick_count = 5
@@ -223,12 +343,12 @@ def generate_svg(pinned_points, candidate_points):
 
     def plot(points, color):
         for point in points:
-            rate = point.get("input_rate_per_million")
+            rate = point.get("effective_rate_per_million")
             context_length = point.get("context_length")
             if not rate or rate <= 0 or not context_length or context_length <= 0:
                 continue
             x, y = x_pos(context_length), y_pos(rate)
-            title = xml_escape(f'{point["id"]}: ${rate}/1M, {context_length:,} context')
+            title = xml_escape(f'{point["id"]}: ${rate}/1M effective, {context_length:,} context')
             parts.append(
                 f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{color}" fill-opacity="0.85">'
                 f'<title>{title}</title></circle>'
@@ -278,8 +398,11 @@ def main(argv):
         print(json.dumps(result))
         return 0
 
+    token_mix = fetch_token_mix()
+    result["token_mix"] = token_mix
+
     pinned_ids = {model["id"] for model in pinned}
-    cheapest_pinned_rate = None
+    cheapest_pinned_effective_rate = None
     pinned_points = []
     for model in pinned:
         live_entry = catalog.get(model["id"])
@@ -292,18 +415,25 @@ def main(argv):
         uptime = fetch_uptime(model["id"])
         if uptime is not None and uptime < MIN_UPTIME_PCT:
             result["unreliable_pinned"].append({"id": model["id"], "uptime_pct": uptime})
-        rate = model.get("cost", {}).get("input")
-        if rate is not None and (cheapest_pinned_rate is None or rate < cheapest_pinned_rate):
-            cheapest_pinned_rate = rate
-        if rate is not None and uptime is not None:
+        cost = model.get("cost", {})
+        rate = cost.get("input")
+        effective_rate = effective_rate_per_million(
+            {"input": rate, "cacheRead": cost.get("cacheRead"), "output": cost.get("output")}, token_mix
+        )
+        if effective_rate is not None and (
+            cheapest_pinned_effective_rate is None or effective_rate < cheapest_pinned_effective_rate
+        ):
+            cheapest_pinned_effective_rate = effective_rate
+        if rate is not None and effective_rate is not None and uptime is not None:
             pinned_points.append({
                 "id": model["id"],
                 "input_rate_per_million": rate,
+                "effective_rate_per_million": round(effective_rate, 4),
                 "uptime_pct": uptime,
                 "context_length": live_entry.get("context_length"),
             })
 
-    result["candidates"] = find_candidates(catalog, pinned_ids, cheapest_pinned_rate)
+    result["candidates"] = find_candidates(catalog, pinned_ids, cheapest_pinned_effective_rate, token_mix)
     result["notable"] = bool(
         result["drift"] or result["missing"] or result["candidates"] or result["unreliable_pinned"]
     )
