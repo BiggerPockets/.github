@@ -330,6 +330,10 @@ def generate_svg(pinned_points, candidate_points):
         f'transform="rotate(-90 16 {CHART_HEIGHT / 2})">effective $/1M (log scale)</text>',
     ]
 
+    def format_context(n):
+        n = round(n)
+        return f'{n / 1_000_000:.3g}M' if n >= 1_000_000 else f'{n / 1_000:.0f}k' if n >= 1_000 else str(n)
+
     tick_count = 5
     for i in range(tick_count):
         rate = 10 ** (y_log_min + (y_log_max - y_log_min) * i / (tick_count - 1))
@@ -339,6 +343,32 @@ def generate_svg(pinned_points, candidate_points):
         parts.append(
             f'<line x1="{CHART_MARGIN["left"]}" y1="{y}" x2="{CHART_WIDTH - CHART_MARGIN["right"]}" '
             f'y2="{y}" stroke="#eee"/>'
+        )
+
+    for i in range(tick_count):
+        context_length = 10 ** (x_log_min + (x_log_max - x_log_min) * i / (tick_count - 1))
+        x = x_pos(context_length)
+        parts.append(
+            f'<text x="{x:.1f}" y="{CHART_HEIGHT - CHART_MARGIN["bottom"] + 16}" text-anchor="middle">'
+            f'{format_context(context_length)}</text>'
+        )
+        parts.append(
+            f'<line x1="{x:.1f}" y1="{CHART_MARGIN["top"]}" x2="{x:.1f}" '
+            f'y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="#eee"/>'
+        )
+
+    pinned_contexts = [p["context_length"] for p in pinned_points if (p.get("context_length") or 0) > 0]
+    if pinned_contexts:
+        avg_context = sum(pinned_contexts) / len(pinned_contexts)
+        avg_x = x_pos(avg_context)
+        parts.append(
+            f'<line x1="{avg_x:.1f}" y1="{CHART_MARGIN["top"]}" x2="{avg_x:.1f}" '
+            f'y2="{CHART_HEIGHT - CHART_MARGIN["bottom"]}" stroke="#999" stroke-width="1.5" '
+            f'stroke-dasharray="4,3"/>'
+        )
+        parts.append(
+            f'<text x="{avg_x:.1f}" y="{CHART_MARGIN["top"] + 12}" text-anchor="middle" fill="#999">'
+            f'avg pinned context ({format_context(avg_context)})</text>'
         )
 
     def plot(points, color):
