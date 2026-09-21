@@ -74,6 +74,44 @@ jobs:
           python-version: '3.12'
       - run: pip install -r scripts/gym/requirements.txt
 
+      # This repo holds the review workflow but does not run reviews: biggiepockets-review.yml
+      # is `workflow_call`, so the credentials it names resolve from the CALLING repo via
+      # `secrets: inherit` and are not secrets of this repo. Organization secrets do not reach
+      # here either — this repo is public and those are scoped to private repositories, which
+      # is also why model-freshness-check.yml carries its own DD_API_KEY/DD_APP_KEY.
+      #
+      # The gym therefore needs its own copies, and because they live in a PUBLIC repository
+      # the GitHub token is deliberately NOT the review service account's BIGGIEPOCKETS_PAT.
+      # GYM_REPO_TOKEN only ever reads: a fine-grained PAT with read-only Contents and Pull
+      # requests on the repositories in the dataset is enough, and a leak of it cannot write.
+      #
+      # Checked up front because the alternative is every replay job failing minutes later on
+      # an opaque git credential error, which is how the first run was spent.
+      - name: Check required secrets
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GYM_REPO_TOKEN: ${{ secrets.GYM_REPO_TOKEN }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          missing=()
+          for name in OPENROUTER_API_KEY GYM_REPO_TOKEN JIRA_EMAIL JIRA_API_TOKEN; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing secrets on BiggerPockets/.github: ${missing[*]}"
+            echo "The gym runs in this repo, so it needs its own copies of the review"
+            echo "credentials — they are not inherited here. Add them with:"
+            for name in "${missing[@]}"; do
+              echo "  gh secret set $name --repo BiggerPockets/.github"
+            done
+            echo "JIRA_EMAIL/JIRA_API_TOKEN are only needed to send ticket context; without"
+            echo "them every replay degrades to a diff-only review, which is NOT comparable"
+            echo "to the recorded findings and will understate recall."
+            exit 1
+          fi
+          echo "All required secrets are present."
+
       # The findings in a record were produced by a specific first-pass prompt. Replaying a
       # record whose prompt has since changed measures the prompt edit and the model swap
       # at once and reports the sum as a model difference, so by default the run is scoped
@@ -125,7 +163,7 @@ jobs:
       - name: Resolve ticket key
         id: ticket
         env:
-          GH_TOKEN: ${{ secrets.BIGGIEPOCKETS_PAT }}
+          GH_TOKEN: ${{ secrets.GYM_REPO_TOKEN }}
         run: |
           title=$(gh api "/repos/${{ matrix.repo }}/pulls/${{ matrix.pr }}" --jq .title || echo '')
           key=$(printf '%s' "$title" | grep -oiE 'BIG-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
@@ -136,7 +174,7 @@ jobs:
       # the merge-base diff, the ticket, and the conversation as of that moment.
       - name: Rebuild replay context
         env:
-          GH_TOKEN: ${{ secrets.BIGGIEPOCKETS_PAT }}
+          GH_TOKEN: ${{ secrets.GYM_REPO_TOKEN }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |

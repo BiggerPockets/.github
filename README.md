@@ -383,6 +383,35 @@ wrong. Keep new records structurally identical to their neighbours.
 the recorded reviews against candidate models and reports how much of what the recorded model
 found each candidate still finds.
 
+**It needs its own secrets.** `biggiepockets-review.yml` is a `workflow_call` workflow, so the
+credentials it names resolve from the *calling* repo through `secrets: inherit` — they are not
+secrets of this repo, and a review has never actually run here. Organization secrets do not
+reach here either: this repository is public so that other apps can call the review workflow,
+and the organization's secrets are scoped to private repositories. That is the same reason
+`model-freshness-check.yml` carries its own `DD_API_KEY`/`DD_APP_KEY` rather than inheriting
+them. The gym needs its own copies:
+
+```sh
+gh secret set OPENROUTER_API_KEY --repo BiggerPockets/.github   # runs the replays
+gh secret set GYM_REPO_TOKEN     --repo BiggerPockets/.github   # reads the target repos
+gh secret set JIRA_EMAIL         --repo BiggerPockets/.github   # ticket context
+gh secret set JIRA_API_TOKEN     --repo BiggerPockets/.github
+```
+
+`GYM_REPO_TOKEN` is deliberately not the review service account's `BIGGIEPOCKETS_PAT`. These
+secrets live in a **public** repository, and that PAT can write — it exists to submit reviews.
+The gym only ever reads, so a fine-grained PAT with read-only **Contents** and **Pull requests**
+on the repositories in the dataset is sufficient, and a leak of it cannot change anything. The
+JIRA token cannot be narrowed the same way; if that matters, run the gym from a private caller
+instead (this workflow can be converted to `workflow_call` without making this repo private —
+only a thin caller file moves).
+
+The JIRA pair is not optional in practice. Without it every replay degrades to a diff-only
+review, while the recorded findings were written with the ticket in hand — many of them turn on
+ticket intent, so the candidate would be marked down for missing findings it was never given
+the information to make. The workflow checks all four up front and stops rather than producing
+a number that looks like a regression.
+
 **Run two arms.** The default `arms` input is the candidate *and* the model the dataset was
 recorded from, and that is not padding. A review is not deterministic: the baseline model does
 not reproduce its own recorded findings at 100%, and how far short it falls is the noise floor
