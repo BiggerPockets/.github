@@ -31,6 +31,13 @@ Datadog's catalog keys on the bare model and its originating provider, so
 `split_model` splits that into ("gpt-5.6-sol", "openai"); the fact that the call was
 routed through OpenRouter is preserved separately as a `gateway` tag.
 
+Every pass also reports a `turn_count`: how many model turns it took. Both
+harnesses report tokens as a running session total, so the token counts alone
+cannot distinguish a long cheap agentic session from one enormous prompt, and a
+cumulative input figure is not a context-window requirement. The turn count is
+what separates the two, and it is the reason the freshness check sizes context
+off fresh (non-cached) input rather than the cumulative total.
+
 Only counts, costs, and model identifiers pass through here. Message content,
 transcripts, prompts, diffs, and responses are never read or emitted.
 
@@ -189,21 +196,34 @@ def find_rollout(directory):
 def codex_usage(directory):
     """Codex's session rollout -> (token counts, reported cost or None). Codex logs a
     running total after every turn under a `token_count` event; the last one is the
-    total for the session."""
+    total for the session, and the number of them is the number of turns.
+
+    The turn count is what makes the token counts interpretable. Codex's
+    `input_tokens` is a running total across the whole session, so on a cached
+    agentic pass it far exceeds any single request's context — 1.15M cumulative
+    against an ~80k working context is normal. Without the turn count there is no
+    way to tell a long cheap session from one enormous prompt, and sizing a model's
+    context window off the cumulative figure would demand roughly an order of
+    magnitude more than the pass actually needs."""
     path = find_rollout(directory)
     if not path:
         return ({}, None)
     totals = None
+    turns = 0
     for event in read_messages(path):
         payload = event.get("payload")
         if not isinstance(payload, dict) or payload.get("type") != "token_count":
             continue
+        turns += 1
         info = payload.get("info")
         if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
             totals = info["total_token_usage"]
     if totals is None:
         return ({}, None)
-    return (collect(totals, CODEX_USAGE_FIELDS), openrouter_cost(totals))
+    counts = collect(totals, CODEX_USAGE_FIELDS)
+    if turns:
+        counts["turn_count"] = turns
+    return (counts, openrouter_cost(totals))
 
 
 def pi_cost(usage):
@@ -222,23 +242,46 @@ def pi_cost(usage):
     return total
 
 
+def pi_assistant_messages(events):
+    """The pass's assistant messages that carry usage, in order.
+
+    pi reports the same message in two places: a per-message `message_end` event
+    and, at the end, an `agent_end` event carrying the whole transcript. Counting
+    both would double-count every turn, so when `agent_end` carries a transcript
+    that is taken as authoritative and the per-message events are ignored. A
+    stream that ends without one (a killed or timed-out run) falls back to the
+    `message_end`/`turn_end` events, which is all such a run has."""
+    from_agent_end = []
+    from_events = []
+
+    def usable(message):
+        return (
+            isinstance(message, dict)
+            and message.get("role") == "assistant"
+            and isinstance(message.get("usage"), dict)
+        )
+
+    for event in events:
+        if event.get("type") == "agent_end":
+            messages = event.get("messages")
+            if isinstance(messages, list):
+                from_agent_end = [m for m in messages if usable(m)]
+            continue
+        message = event.get("message")
+        if usable(message):
+            from_events.append(message)
+    return from_agent_end or from_events
+
+
 def pi_usage(path):
     """pi's JSON event stream (--mode json) -> (token counts, reported cost or None).
     Every assistant message carries the cumulative usage of the turn so far; the last
     one that finished cleanly is the whole pass. Events of interest are
-    message_end/turn_end (message under `message`) and agent_end (messages array)."""
-    candidates = []
-    for event in read_messages(path):
-        message = event.get("message")
-        if event.get("type") == "agent_end":
-            messages = event.get("messages")
-            if isinstance(messages, list) and messages:
-                message = messages[-1]
-        if not isinstance(message, dict) or message.get("role") != "assistant":
-            continue
-        if not isinstance(message.get("usage"), dict):
-            continue
-        candidates.append(message)
+    message_end/turn_end (message under `message`) and agent_end (messages array).
+
+    The number of those messages is the pass's turn count, reported alongside the
+    tokens so a long cheap session is distinguishable from one enormous prompt."""
+    candidates = pi_assistant_messages(read_messages(path))
     if not candidates:
         return ({}, None)
     # Prefer the last message that finished cleanly; fall back to the last one with
@@ -250,7 +293,9 @@ def pi_usage(path):
                 read_number(m["usage"].get(k)) or 0 for k in ("input", "output")) > 0),
             candidates[-1]))
     usage = chosen.get("usage") or {}
-    return (collect(usage, PI_USAGE_FIELDS), pi_cost(usage))
+    counts = collect(usage, PI_USAGE_FIELDS)
+    counts["turn_count"] = len(candidates)
+    return (counts, pi_cost(usage))
 
 
 def build_span_fields(slug, counts, cost):
