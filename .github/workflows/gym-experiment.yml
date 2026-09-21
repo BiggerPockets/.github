@@ -134,7 +134,7 @@ jobs:
             --arms '${{ inputs.arms }}' \
             ${{ inputs.limit && format('--limit {0}', inputs.limit) || '' }} \
             ${{ inputs.severity && format('--severity {0}', inputs.severity) || '' }} \
-            ${{ inputs.match_prompt_version != 'false' && format('--prompt-version {0}', steps.prompt.outputs.codex_prompt_version) || '' }} \
+            ${{ inputs.match_prompt_version != 'false' && format('--prompt-version {0}', steps.prompt.outputs.first_pass_prompt_version) || '' }} \
             --out matrix.json
           echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
 
@@ -222,7 +222,7 @@ jobs:
           sandbox: read-only
           working-directory: replay/repo
           output-file: ${{ github.workspace }}/replay/findings.md
-          prompt: ${{ steps.resolve.outputs.codex_prompt }}
+          prompt: ${{ steps.resolve.outputs.first_pass_prompt }}
 
       - name: Record a failed replay
         if: steps.replay.outcome == 'failure'

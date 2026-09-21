@@ -24,7 +24,7 @@ jobs:
       - name: Validate registry config
         run: |
           jq -e '.version == 2' prompts/registry.json >/dev/null
-          jq -e '.codex_prompt == "codex-first-pass"' prompts/registry.json >/dev/null
+          jq -e '.first_pass_prompt == "first-pass"' prompts/registry.json >/dev/null
           jq -e '.control_arm == "control"' prompts/registry.json >/dev/null
           # An out-of-range split would route reviews to an arm that doesn't exist, or
           # silently pin every review to one side of a test that looks live.
@@ -74,7 +74,7 @@ jobs:
           # Only the *resolved* prompts must be marker-free. The *_prompt_template
           # outputs keep their {{PR}}/{{PROMPT_NAME}}/{{PROMPT_VERSION}} placeholders on
           # purpose — that is the template Datadog Prompt Tracking records.
-          for out in codex_prompt arm_prompt; do
+          for out in first_pass_prompt arm_prompt; do
             resolved=$(sed -n "/^$out<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p" /tmp/o4.txt | sed '1d;$d')
             if printf '%s' "$resolved" | grep -qE '\{\{'; then
               echo "Unresolved template markers remain in $out:" >&2
@@ -96,7 +96,7 @@ jobs:
           # template. They keep {{PR}}-style placeholders, but a shared-rule include
           # must already be expanded — an unexpanded {{@...}} would ship a template
           # that no longer matches the text the model actually saw.
-          for out in codex_prompt_template arm_prompt_template; do
+          for out in first_pass_prompt_template arm_prompt_template; do
             tmpl=$(sed -n "/^$out<</,/^_BIGGIEPOCKETS_PROMPT_EOF_$/p" /tmp/o5.txt | sed '1d;$d')
             test -n "$tmpl" || { echo "$out is empty" >&2; exit 1; }
             if printf '%s' "$tmpl" | grep -qE '\{\{@'; then

@@ -287,13 +287,22 @@ def to_record(span, model, commit=None):
         "metadata": {
             "severity": level,
             "stage2_verdict": tags.get("verdict"),
-            "findings_lines": int(tags.get("codex_findings_lines") or 0),
+            "findings_lines": int(
+                tags.get("first_pass_findings_lines")
+                or tags.get("codex_findings_lines")
+                or 0
+            ),
             "stage2_arm": tags.get("arm"),
             "reviewed_at": reviewed_at,
             # Which first-pass prompt produced these findings. A replay run under a
             # different prompt version is comparing two things at once, so the planner
-            # filters on this by default.
-            "codex_prompt_version": tags.get("codex_prompt_version"),
+            # filters on this by default. The tag is read under either name because a
+            # trailing window spans the rename; the record key stays stable so already
+            # exported rows keep matching.
+            "codex_prompt_version": (
+                tags.get("first_pass_prompt_version")
+                or tags.get("codex_prompt_version")
+            ),
             "trace_id": span.get("trace_id") or attributes.get("trace_id"),
             "span_id": span.get("span_id") or attributes.get("span_id"),
         },

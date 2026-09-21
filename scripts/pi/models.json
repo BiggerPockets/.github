@@ -1,20 +1,27 @@
 {
-  "//": "pi config for the Stage 2 review pass (BiggiePockets/.github).",
+  "//": "pi config for BOTH review stages (BiggiePockets/.github).",
   "//": "",
   "//": "pi resolves models from the config dir pointed at by PI_CODING_AGENT_DIR. This file",
-  "//": "declares the OpenRouter provider and every model Stage 2 is allowed to run on, each",
-  "//": "with its OpenRouter list rates, so a FRESH CI runner (no cached models-store.json)",
+  "//": "declares the OpenRouter provider and every model either stage is allowed to run on,",
+  "//": "each with its OpenRouter list rates, so a FRESH CI runner (no cached models-store.json)",
   "//": "resolves them deterministically. These models are absent from the catalog pi ships",
   "//": "and the live catalog refresh is a background fetch, not a startup step we can rely",
   "//": "on.",
   "//": "",
-  "//": "This is the allowlist behind the workflow.s pi_model input. A repo may point itself",
-  "//": "at any id listed here; the workflow fails early, by name, on a slug that is not.",
-  "//": "The default when a caller says nothing is deepseek/deepseek-v4.1-flash.",
+  "//": "This is the allowlist behind the workflow's pi_model and codex_model inputs. A repo",
+  "//": "may point a stage at any id whose `stages` list names that stage; the workflow fails",
+  "//": "early, by name, on a slug that is not listed for the stage requesting it. The default",
+  "//": "for Stage 1 is openai/gpt-5.6-luna and for Stage 2 deepseek/deepseek-v4.1-flash.",
   "//": "",
-  "//": "Context: the DeepSeek models carry ~1M tokens, Claude Haiku 4.5 carries 200k. Stage 2",
-  "//": "reads a diff plus the Codex handoff, so a very large pull request has less headroom on",
-  "//": "Haiku than the numbers elsewhere in this file suggest.",
+  "//": "`stages` is ours, not pi's. The workflow strips it with jq when it seeds pi's config",
+  "//": "dir, so pi only ever sees fields it defines. Keeping it here rather than in a sibling",
+  "//": "file means a model and the stages allowed to run it cannot drift apart.",
+  "//": "",
+  "//": "Context: every model here except Claude Haiku 4.5 (200k) carries ~1M tokens. Stage 1",
+  "//": "explores the repo over many turns and Stage 2 reads a diff plus the Stage 1 handoff,",
+  "//": "so a very large pull request has less headroom on Haiku than the numbers elsewhere in",
+  "//": "this file suggest. What a stage actually needs is charted weekly by",
+  "//": "scripts/pi/check_model_freshness.py against real usage, not guessed from these specs.",
   "//": "",
   "//": "Rates are $/1M tokens exactly as OpenRouter publishes them at the time of pinning.",
   "//": "pi computes cost.total from these, so they are what OpenRouter bills for standard",
@@ -22,8 +29,8 @@
   "//": "AND its published rates together; rolling one means updating both.",
   "//": "",
   "//": "The apiKey interpolation reads OPENROUTER_API_KEY from the workflow environment",
-  "//": "(the same org secret the Codex stage uses) — no interactive login or OAuth is",
-  "//": "involved. api/api identify the OpenAI-compatible endpoint pi uses.",
+  "//": "— no interactive login or OAuth is involved. api/api identify the OpenAI-compatible",
+  "//": "endpoint pi uses.",
   "providers": {
     "openrouter": {
       "baseUrl": "https://openrouter.ai/api/v1",
@@ -31,8 +38,33 @@
       "api": "openai-completions",
       "models": [
         {
+          "id": "openai/gpt-5.6-luna",
+          "name": "GPT-5.6 Luna",
+          "stages": ["stage1"],
+          "reasoning": true,
+          "cost": {
+            "input": 0.2,
+            "output": 1.2,
+            "cacheRead": 0.02,
+            "cacheWrite": 0.25
+          }
+        },
+        {
+          "id": "openai/gpt-5.6-sol",
+          "name": "GPT-5.6 Sol",
+          "stages": ["stage1"],
+          "reasoning": true,
+          "cost": {
+            "input": 2.0,
+            "output": 10.0,
+            "cacheRead": 0.2,
+            "cacheWrite": 2.5
+          }
+        },
+        {
           "id": "deepseek/deepseek-v4.1-flash",
           "name": "DeepSeek V4.1 Flash",
+          "stages": ["stage2"],
           "reasoning": true,
           "cost": {
             "input": 0.15,
@@ -44,6 +76,7 @@
         {
           "id": "anthropic/claude-haiku-4.5",
           "name": "Claude Haiku 4.5",
+          "stages": ["stage2"],
           "reasoning": true,
           "cost": {
             "input": 1.0,

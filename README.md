@@ -7,21 +7,32 @@ Org-wide GitHub defaults and shared reusable workflows.
 `.github/workflows/biggiepockets-review.yml` is a **reusable** workflow that runs a
 two-stage AI code review on a pull request:
 
-1. **Codex first pass** — reviews the diff against the PR's JIRA ticket and writes findings.
-2. **pi verify & synthesize** — validates Codex's findings, reviews the diff
+1. **First pass** — reviews the diff against the PR's JIRA ticket and writes findings.
+2. **Verify & synthesize** — validates the first pass's findings, reviews the diff
    independently (grepping for callers/tests, factoring in the existing PR discussion),
    checks the change against the ticket's acceptance criteria, and decides a single verdict.
+
+Both stages run on [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
+against models pinned in `scripts/pi/models.json`, each entry listing the stages allowed
+to run it. One harness means one allowlist, one set of published rates behind the cost
+telemetry, and the same early failure on an unpinned slug for either stage.
 
 The **BiggiePockets** service account then submits the resulting `approve` /
 `request_changes` review on the PR. If the PR has no `BIG-XXXXX` key in its title (or the
 ticket can't be fetched), the review degrades gracefully to a diff-based review instead of
 failing.
 
-Codex and pi run as separate GitHub Actions jobs. Codex uploads the reviewed commit's
-diff, ticket/discussion context, and findings as a short-lived artifact; pi downloads
-that immutable handoff. If the pi pass is rate-limited, use **Re-run failed jobs** on the workflow
-run. GitHub reruns only the pi job, reusing the completed Codex pass instead of invoking
-Codex again.
+The two stages run as separate GitHub Actions jobs. The first pass uploads the reviewed
+commit's diff, ticket/discussion context, and findings as a short-lived artifact; Stage 2
+downloads that immutable handoff. If Stage 2 is rate-limited, use **Re-run failed jobs** on
+the workflow run. GitHub reruns only the Stage 2 job, reusing the completed first pass
+instead of paying for it again.
+
+The first-pass job is named `codex` and takes a `codex_model` input. Both names are
+contracts consuming repos bind to — the required status check their branch protection
+matches on, and the `workflow_call` API their caller passes — so they are fixed
+independently of what runs the stage. The Datadog span names the harness:
+`pi.first_pass`.
 
 The review logic lives centrally in this repo. Each consuming repo only adds a thin
 **caller** workflow that owns the triggers and gating and delegates to this one.
@@ -32,7 +43,7 @@ Do this once per repo you want BiggiePockets to review.
 
 #### 1. Install nothing
 
-The Stage-2 verification stage runs [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent),
+Both stages run [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent),
 a plain npm CLI that the workflow installs onto the runner itself (`npm install -g`).
 There is no GitHub app, no OIDC, and no per-repo installation. pi authenticates to
 OpenRouter with the shared `OPENROUTER_API_KEY` described below — no OAuth login or
@@ -81,9 +92,9 @@ jobs:
       # pinned in `scripts/pi/models.json`. Reading it from a repository variable lets the
       # repo be moved between pinned models without a pull request.
       pi_model: ${{ vars.PI_MODEL || 'deepseek/deepseek-v4.1-flash' }}
-      # OpenRouter slug for the Stage 1 (Codex) pass. Omit it to review on the org default,
-      # gpt-5.6-luna. Set it to put this repo on a stronger model; the slug must be one
-      # OpenRouter accepts.
+      # OpenRouter slug for the Stage 1 first pass. Omit it to review on the org default,
+      # gpt-5.6-luna. Set it to put this repo on a stronger model; the slug must be one of
+      # the models pinned in `scripts/pi/models.json` with `stage1` in its `stages` list.
       codex_model: ${{ vars.CODEX_MODEL || 'openai/gpt-5.6-luna' }}
     secrets: inherit
 ```
@@ -91,7 +102,7 @@ jobs:
 #### 3. Make the secrets available
 
 The reusable workflow consumes several secrets via `secrets: inherit`: credentials for the
-the AI review provider (`OPENROUTER_API_KEY`, shared by both the Codex and pi stages),
+the AI review provider (`OPENROUTER_API_KEY`, shared by both stages),
 an Atlassian email + API token to fetch the PR's JIRA ticket for intent, and a personal access
 token for the BiggiePockets service account that submits the review. Configure them as
 **organization secrets** (recommended — set once, available to every repo) or as per-repo
@@ -102,7 +113,8 @@ Observability via `secrets.DATADOG_API_KEY`: verdict, timing, prompt template an
 (tracked as prompts, see below), the model each
 stage ran (`CODEX_MODEL`/`PI_MODEL` env vars in the workflow — both are OpenRouter
 model slugs and must be set; each comes from its input, `codex_model` and `pi_model`,
-so a repo's models are visible in its own traces), and the actual findings text from Codex and the summary pi wrote,
+so a repo's models are visible in its own traces), and the actual findings text from the
+first pass and the summary Stage 2 wrote,
 so review quality is inspectable, not just counted. This secret is optional — reviews still
 run and post normally without it, but no metrics are reported.
 
@@ -128,20 +140,16 @@ table. Instead each span carries whichever of the two things Datadog needs. For 
 in the catalog, token counts are enough. For one it does not carry, the span reports a
 `total_cost` metric taken at face value.
 
-The two passes record their usage differently. pi runs in `--mode json` and writes a
-JSON event stream; every assistant message carries a usage object with token counts and
-`cost.total` — a price computed by pi from the model's OpenRouter list rates, the same
-rates OpenRouter bills against, so it is the amount the pass is charged. Every model
-Stage 2 may run on is pinned with its rates in `scripts/pi/models.json` (the catalog pi
-ships predates them, and the live catalog refresh is a background fetch, not a startup
-step — a committed pin is what makes a fresh runner deterministic); adding or rolling a
-Stage-2 model means changing that file in the same commit. Codex writes running token counters
-to a session rollout on its own runner, and since its action exposes no usage output,
-the workflow reads that rollout in the Codex job and hands the totals to the reporting
-job. In both cases only usage objects are read — never message content, transcripts,
-prompts, or diffs. (The Claude Code harness that previously ran Stage 2 translated
-usage into Anthropic's schema, so OpenRouter's reported cost regularly did not survive
-to the span — the pi pass records usage itself and is what this repo now trusts.)
+Both passes record usage the same way. pi runs in `--mode json` and writes a JSON event
+stream; every assistant message carries a usage object with token counts and `cost.total`
+— a price computed by pi from the model's OpenRouter list rates, the same rates OpenRouter
+bills against, so it is the amount the pass is charged. Every model either stage may run
+on is pinned with its rates in `scripts/pi/models.json` (the catalog pi ships predates
+them, and the live catalog refresh is a background fetch, not a startup step — a committed
+pin is what makes a fresh runner deterministic); adding or rolling a model means changing
+that file in the same commit. Each stage reads its own event stream and hands the totals
+to the reporting job. Only usage objects are read — never message content, transcripts,
+prompts, or diffs.
 
 Two **organization-level variables** (`vars`, not secrets — **Settings → Secrets and
 variables → Actions → Variables** at the org level) configure where the trace lands.
@@ -191,15 +199,26 @@ The review-stage prompts are not inline in the workflow. They live in this repo 
 
 ```
 prompts/
-  registry.json                              # arms + control arm + split + codex prompt
-  codex-first-pass.md                        # Stage 1 prompt (template)
+  registry.json                              # arms + control arm + split + first-pass prompt
+  first-pass.md                              # Stage 1 prompt (template)
+  first-pass-system.md                       # Stage 1 system prompt (not registry-versioned)
   claude-synthesize.md                       # Stage 2 control arm (template)
   claude-synthesize-thesis-first.md          # Stage 2 thesis-first arm (template)
   _shared/{completeness,privacy,migration-data,perf,parsing,navigation,rename-compatibility,spec-value}-rules.md  # shared rule blocks
 ```
 
+- **The Stage 1 system prompt.** `prompts/first-pass-system.md` replaces pi's stock system
+  prompt for the first pass. pi's default casts the model as an editor that writes files and
+  spends a long block on pi's own documentation — both wrong for a read-only review, and the
+  latter is noise. Ours states how to operate: keep going rather than yield early, verify
+  before claiming, report security findings rather than soften them, use git history to
+  establish intent, cite real paths and line numbers, and treat the final message as the
+  deliverable. *What* to review stays in `first-pass.md`. It sits outside the registry's
+  arm/version machinery, so its SHA-256 prefix is tagged onto the span as
+  `first_pass_system_version` — editing it changes review behavior as surely as a Roll does
+  and has to be just as visible in Datadog.
 - **Templates + shared blocks.** Each prompt references the shared rule blocks via
-  `{{@prompts/_shared/<name>.md}}`, so the Codex and Stage-2 prompts can never drift out of
+  `{{@prompts/_shared/<name>.md}}`, so the Stage 1 and Stage-2 prompts can never drift out of
   sync. Prompts resolve `{{PR}}`, `{{PROMPT_NAME}}`, `{{PROMPT_VERSION}}` too.
 - **Content-derived versions.** `prompt_version` is a content hash of the template plus the
   shared blocks it includes — it changes only when that prompt's text changes, not per PR
@@ -232,7 +251,7 @@ prompts/
 - **Datadog.** Each review is one trace, tagged with the arm that ran it:
 
   ```
-  biggiepockets.review → codex.review, pi.synthesize
+  biggiepockets.review → pi.first_pass, pi.synthesize
   ```
 
   A tag key resolves to one value per submitted payload, so an `arm` tag is only
