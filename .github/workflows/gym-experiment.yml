@@ -58,6 +58,10 @@ on:
         description: 'Only replay records recorded under the current first-pass prompt.'
         required: false
         default: 'true'
+      max_parallel:
+        description: 'Concurrent replays. OpenRouter reserves credit per in-flight request, so too many return 402.'
+        required: false
+        default: '3'
 
 permissions:
   contents: read
@@ -139,9 +143,17 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      # Each job clones a target repository and makes a model call. This bounds concurrent
-      # load on both OpenRouter and the GitHub API; raise it if a full run is too slow.
-      max-parallel: 8
+      # OpenRouter reserves credit against every in-flight request, not just what a request
+      # finally costs, so concurrency is bounded by the account's available balance rather
+      # than by throughput. Running 8 replays of a large-context model at once returned
+      # "402 Payment Required: This request would exceed your available credits given your
+      # current in-flight requests" on well over half the jobs, and a 402 loses the replay
+      # rather than queueing it.
+      #
+      # This key is shared organization-wide, so the ceiling is shared with real reviews
+      # running at the same time: a wide gym run can starve production PR reviews of credit.
+      # Keep this low unless the balance is known to be generous.
+      max-parallel: ${{ fromJSON(inputs.max_parallel || '3') }}
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     name: ${{ matrix.arm }} · ${{ matrix.record }}
     env:
