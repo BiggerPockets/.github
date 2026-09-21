@@ -264,3 +264,108 @@ A `validate-prompts.yml` workflow guards the registry: it fails a PR if a templa
 dangling includes, `registry.json` references a missing prompt, two arms point at the
 same prompt, an arm's prompt fails to resolve, arm assignment isn't stable for a fixed PR,
 the resolver isn't deterministic, or a shared-rule edit doesn't bump versions.
+
+### Model gym: regression set for the first-pass model
+
+Stage 1's model is a pinned choice (`scripts/pi/models.json`), and swapping it changes what
+reaches a human reviewer. Nothing in a review notices a model that quietly stops reporting a
+class of defect: a finding that is never written leaves no trace, the run still passes, and
+Stage 2 verifies only what it was handed. The findings a *previous* first-pass model wrote
+are the only surviving record of what was catchable on those diffs, so they become the
+regression set.
+
+`gym/sol-first-pass-findings.yaml` is that set for `openai/gpt-5.6-sol`: one record per pull
+request, holding the PR to review and the findings Sol reported for it.
+
+```
+gym/sol-first-pass-findings.yaml     # the dataset (reviewable, diffable, org-independent)
+scripts/gym/export_sol_findings.py   # Datadog LLM Obs spans -> that YAML
+scripts/gym/upload_gym_dataset.py    # that YAML -> a Datadog LLM Obs experiments dataset
+```
+
+**Every record is pinned to the commit that was reviewed**, and that is what makes the
+file usable weeks later. A pull request is not a stable artifact: commits land on it after
+a review, its base branch advances, and it eventually merges and closes — 95 of the 97
+pull requests here are already closed. The findings cite exact `file:line` anchors, so
+replaying "PR 31230" against whatever that PR looks like today would show a candidate
+model different code from the one Sol read, and every drifted anchor would score as a
+missed finding that was never there to miss. That failure is silent and it biases the
+result toward false alarm, which is the worst way for a regression check to be wrong.
+
+The span carries no SHA, but its `run_id` tag embeds the GitHub Actions run, and that run
+records the `head_sha` it checked out. So each record carries `head_sha` (the exact
+reviewed commit) plus the `base_ref`/`base_sha` it was diffed against, and a harness
+reconstructs the review diff as:
+
+```sh
+git diff $(git merge-base <base_sha> <head_sha>) <head_sha>
+```
+
+Both anchors are needed: 15 of these 97 pull requests are stacked on another branch
+rather than on `main`, so assuming `main` silently produces the wrong diff for them. Pinning the commit also restores the *whole tree*, not just the diff — Stage 1
+explores the repo, so its findings routinely cite collaborating files the PR never
+touched, and those only resolve at the reviewed commit.
+
+Two things this cannot pin. A commit can become unreachable if its branch was deleted
+after a force-push; `head_sha` is recorded either way, so a harness can detect and skip
+such a row rather than review the wrong code. And the JIRA ticket a finding argues
+against ("the ticket requires X") is live and may since have been edited — nothing in the
+span or the run captures its state at review time, so a finding that turns on acceptance
+criteria can go stale even with the diff pinned correctly. Treat a candidate's "miss" on
+a ticket-intent finding as a prompt to check the ticket, not as an automatic regression.
+
+**What's in it, and what isn't.** Records are drawn from the `codex.review` span, which
+carries the first pass's findings text plus the repo, PR, model and Stage-2 verdict as tags.
+Included are passes that finished (`@status:ok`), wrote findings
+(`codex_findings_lines > 0`), and whose review Stage 2 verified into `request_changes` —
+that verdict is the closest available ground truth short of re-adjudicating every finding by
+hand, and it is the set whose loss would actually cost something. Passes Stage 2 approved are
+excluded by default (`--verdict any` includes them), because an approval usually means Stage 2
+judged those findings not worth blocking on. A pass whose text reports nothing actionable is
+dropped: there is no finding in it for a candidate model to miss.
+
+Each PR appears once. A PR is re-reviewed on every push and the span is reported once per
+Stage-2 attempt, so the raw query returns the same review many times over; the most recent
+qualifying pass wins.
+
+**Retention bounds it.** LLM Obs holds spans for a limited window, so the file covers what was
+still queryable when it was exported — not all history. Re-run the exporter periodically and
+merge rather than expecting one run to be complete; `--since`/`--until` set the window.
+
+**Running it.** The exporter refreshes or widens the set; the uploader pushes it into a
+Datadog LLM Obs experiments project, creating the project and dataset when absent:
+
+```sh
+pip install -r scripts/gym/requirements.txt
+
+# Needs an authenticated `gh` as well as the Datadog keys: the reviewed commit comes
+# from the GitHub Actions run, not from the span.
+DD_API_KEY=... DD_APP_KEY=... python3 scripts/gym/export_sol_findings.py \
+    --model openai/gpt-5.6-sol --since now-30d --out gym/sol-first-pass-findings.yaml
+
+python3 scripts/gym/upload_gym_dataset.py --project 'code-review-gym' --dry-run
+DD_API_KEY=... DD_APP_KEY=... python3 scripts/gym/upload_gym_dataset.py \
+    --project 'code-review-gym'
+```
+
+`DD_SITE` selects the Datadog site, as elsewhere in this repo. Uploading is additive and never
+deletes rows, so re-uploading the same file appends duplicates — refresh into a new
+`--dataset` name unless you mean to extend an existing one. `--dry-run` needs no credentials
+and prints the first record exactly as it would be sent.
+
+**Scoring a candidate.** An experiment reads `input`, checks out `head_sha`, runs the
+candidate first-pass model over the diff reconstructed above, and compares its output to
+`expected_output.findings`. The
+question is *did it report this defect*, not *did it phrase it the same way*, so the evaluator
+wants an LLM judge rather than string equality. `metadata.severity` (`blocker`, `blocking`,
+`non-blocking`) lets a judge weight a missed blocking finding above a missed nitpick, and
+`metadata.trace_id`/`span_id` link every row back to the review it came from.
+
+Every record has the same shape, deliberately — an experiment iterates all of them through one
+evaluator, and a single row with a different shape breaks the run or, worse, silently scores
+wrong. Keep new records structurally identical to their neighbours.
+
+**Member data.** The findings are model-written prose about source code, not member records.
+Datadog's sensitive data scanner masks matches in the stored span before this ever reads them,
+and the exporter scrubs email addresses again so the committed file doesn't depend on that
+scanner's configuration.

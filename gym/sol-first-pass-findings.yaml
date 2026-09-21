@@ -1,0 +1,2975 @@
+version: 1
+dataset:
+  name: sol-first-pass-findings
+  description: First-pass review findings produced by openai/gpt-5.6-sol that Stage 2 verified into a
+    request_changes verdict. Used to check whether a replacement first-pass model still catches them.
+source:
+  ml_app: biggiepockets-review
+  span_name: codex.review
+  model: openai/gpt-5.6-sol
+  query: '@ml_app:biggiepockets-review @name:codex.review codex_model:openai/gpt-5.6-sol verdict:request_changes
+    -codex_findings_lines:0 @status:ok'
+  window:
+    from: '2026-09-09'
+    to: '2026-09-18'
+  exported_at: '2026-09-21'
+records:
+- id: biggerpockets-pr30885
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 30885
+    head_sha: 03c4d19b992efcf2f8ebb472ad821f13ca341b57
+    base_ref: main
+    base_sha: 4f6d1959ef9e5868abaf1b5ccf35cef2b8c1e9c4
+    instruction: Review pr:30885 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      # Findings
+
+      - **[P0] Add Seat remains a no-op** — [SeatsBillingTab.tsx](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/OrganizationDashboard/SeatsBillingTab/SeatsBillingTab.tsx:69) retains an empty `onPress`, static roster data, and no API integration. Owners cannot enter or submit a name/email. Wire the modal/form to the new endpoint and refresh real seat data.
+
+      - **[P0] Invites neither provision nor charge a seat** — [add_seat_service.rb](/home/runner/work/biggerpockets/biggerpockets/app/services/marketplace/organizations/add_seat_service.rb:15) creates only a `SeatInvite`. It never creates the required invited/non-public `Marketplace::Business`, previews proration, or updates Stripe quantity. Because organization pricing derives quantity from businesses, the invite is currently uncharged and the subscription remains unchanged. The commit explicitly defers this to BIG-22200 without an accepted scope reduction.
+
+      - **[P0] Invite email contains a knowingly dead acceptance URL** — [seat_invite_mailer.rb](/home/runner/work/biggerpockets/biggerpockets/app/mailers/marketplace/seat_invite_mailer.rb:17) labels the route a placeholder with no controller. Recipients cannot accept the invite or enter Member Onboarding. Implement the acceptance handoff before sending invitations.
+
+      **Decision: request_changes**
+  metadata:
+    severity: blocker
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-09T17:18:08+00:00'
+    trace_id: 31c3ba0eed0fb7d94eac90e5e381a80d
+    span_id: 56179a7279a85b0b
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:30885
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocker
+- id: biggerpockets-pr30991
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 30991
+    head_sha: 3868f03901b40a3042bb85b66523d8a3c12b493e
+    base_ref: main
+    base_sha: 6f577e21f546f1d128053b81648aa28a13d338ed
+    instruction: Review pr:30991 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — `.agents/setup:209`**: The fallback runs `db:seed` after *any* `db:seed:with_backup` failure, including failures after a dump was restored or local seeding partially ran. This can rerun non-idempotent seeds over populated data. `SeedWithBackup` already handles missing/incompatible dumps safely; let other failures surface instead of retrying `db:seed`.
+
+      **Verdict: request_changes**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-09T17:44:53+00:00'
+    trace_id: 989abd858f37c196e0440e6551c89dfa
+    span_id: 0761d255deec57ae
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:30991
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr30994
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 30994
+    head_sha: 078cb5e0391439a97f4498eacacc6dfc518864a7
+    base_ref: main
+    base_sha: e222aa191c98d34b263f143f58fb10a40f3dc581
+    instruction: Review pr:30994 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — incomplete N+1 fix:** [app/controllers/search_controller.rb:268](/home/runner/work/biggerpockets/biggerpockets/app/controllers/search_controller.rb:268) preloads `forum` and `user.profile` but omits `first_post`, which every mobile topic result accesses at `_result.html+mobile.erb:16`. This leaves one query per topic on mobile. Add `:first_post` to `includes` and extend the performance spec to exercise the mobile variant and assert a constant query count.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 2
+    stage2_arm: control
+    reviewed_at: '2026-09-09T18:46:41+00:00'
+    trace_id: 6fadbb5ed89e449a68a59a8391d0f719
+    span_id: 9cf37cbe03a6d01c
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:30994
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr30996
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 30996
+    head_sha: 30df62d250f9ea86ffdff9755e431c970cd322b1
+    base_ref: main
+    base_sha: 4e425d2d299a6a785288be26503898fa4bc09d5f
+    instruction: Review pr:30996 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      **Request changes**
+
+      - **Privacy safeguard relies on a false staging-data claim** — `.claude/skills/pr-media/SKILL.md:74-82` says staging holds the same seeded rows as review apps and contains no real member records. However, staging releases do not load `db:seed:with_backup` (`lib/tasks/release.rake:60-69`), seed dumps are environment-scoped (`lib/infrastructure/db/seed_dump_store.rb:14-16,45-46`), and multiple user/content seeds are explicitly skipped on staging (`db/seeds.rb:16-17,45-50,86`). Staging is persistent and can therefore contain manually created member data. Do not broadly classify it as seeded-safe; require verification that every captured record is synthetic before allowing an upload.
+  metadata:
+    severity: non-blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-09T19:41:46+00:00'
+    trace_id: f764a5a8823ed8d33237664e2cd3cce0
+    span_id: 149be3dd79f978a3
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:30996
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:non-blocking
+- id: biggerpockets-pr30999
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 30999
+    head_sha: ad95b555a0e1f61848b3e7f0cb430831bfde0196
+    base_ref: main
+    base_sha: 9f76c92cd7fdb3fe11232db5bfcd6ce804dad567
+    instruction: Review pr:30999 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings — request changes
+
+      - **Blocking:** [`idempotent_migration_statements.rb:90`](/home/runner/work/biggerpockets/biggerpockets/lib/rubocop/cop/custom/idempotent_migration_statements.rb:90) checks only for the guard key, so `if_exists: false` or `if_not_exists: false` incorrectly passes. Require a literal `true` value.
+
+      - **Blocking:** [`idempotent_migration_statements.rb:32`](/home/runner/work/biggerpockets/biggerpockets/lib/rubocop/cop/custom/idempotent_migration_statements.rb:32) omits common non-transactional schema operations such as `add_reference`/`remove_reference`. The repository contains nine `add_reference` calls in migrations using `disable_ddl_transaction!`; future instances remain unchecked, making "every schema statement" incomplete.
+
+      - **Blocking:** [`idempotent_migration_statements.rb:63`](/home/runner/work/biggerpockets/biggerpockets/lib/rubocop/cop/custom/idempotent_migration_statements.rb:63) discovers `disable_ddl_transaction!` during source-order traversal. If that valid class macro appears after `change`/`up`, preceding statements evade the cop. Determine transaction status from the complete AST before inspecting statements.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: control
+    reviewed_at: '2026-09-09T20:19:24+00:00'
+    trace_id: 25c43bbf35c1c9e7a665ccd7f54336a3
+    span_id: 847e2526611b8c95
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:30999
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31006
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31006
+    head_sha: b3465b68efcb9ff7baf9ceec9963c20e7b06c069
+    base_ref: main
+    base_sha: 0b7729fcff02c1473aff749b6009185f3ee39fb7
+    instruction: Review pr:31006 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings — request changes
+
+      - **Blocking:** [account_closures_controller.rb](/home/runner/work/biggerpockets/biggerpockets/app/controllers/api/v1/account_closures_controller.rb:12) remains an active fourth closure path but bypasses `Accounts::Closure`. V1 closures therefore neither record the reason nor revoke refresh tokens. Migrate this caller to the shared service to complete the refactor.
+
+      - **Blocking:** [me_controller.rb](/home/runner/work/biggerpockets/biggerpockets/app/controllers/api/v3/me_controller.rb:95) accepts an unbounded `reason`, while `AccountClosureReason.reason` is limited to 255 characters. A longer client value raises a database error and prevents account closure with a 500. Enforce the limit and return a validation error, with a regression test.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-10T14:20:22+00:00'
+    trace_id: 714a679b5bc884897d1ad2c6e49adb8e
+    span_id: d4059a01d2102d29
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31006
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31007
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31007
+    head_sha: 6a02ea280e272731fa3230cc557423c037a8ce50
+    base_ref: main
+    base_sha: 0b7729fcff02c1473aff749b6009185f3ee39fb7
+    instruction: Review pr:31007 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Request changes:** [find_ceo_forum_topics_tool.rb:170](/home/runner/work/biggerpockets/biggerpockets/app/services/mcp/tools/admin/find_ceo_forum_topics_tool.rb:170) — `Topic.publicly_visible` still includes Pro-only forums, contrary to the tool’s stated exclusion of access-gated content. Add `.in_viewable_forums(nil)` or explicitly filter `forums.pro_only: false`, plus a regression test for a Pro-only topic.
+  metadata:
+    severity: non-blocking
+    stage2_verdict: request_changes
+    findings_lines: 2
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-09T22:18:01+00:00'
+    trace_id: 85ef781be9e75256b73ca8dc07498df6
+    span_id: c9ff61165dd1acb2
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31007
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:non-blocking
+- id: biggerpockets-pr31008
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31008
+    head_sha: 08e1649e707bdc7476236f20856d62b38ce70bbd
+    base_ref: main
+    base_sha: 5c2766a4d4723dea8318779443754966fef9292e
+    instruction: Review pr:31008 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — Gated PRO discussions are exposed** ([get_forum_topic_thread_tool.rb:84](/home/runner/work/biggerpockets/biggerpockets/app/services/mcp/tools/admin/get_forum_topic_thread_tool.rb:84)). `Topic.publicly_visible` does not exclude `forums.pro_only`; logged-out visitors are redirected from those topics. Filter through the guest-viewable forum scope and add a PRO-only regression test.
+
+      - **Blocking — Non-public posts can leak** ([get_forum_topic_thread_tool.rb:109](/home/runner/work/biggerpockets/biggerpockets/app/services/mcp/tools/admin/get_forum_topic_thread_tool.rb:109)). Filtering only hidden/deleted posts still returns unverified posts and posts without an active author, whereas guest rendering uses `visible_by_user(nil).has_author`. Reuse that visibility scope and test both cases.
+
+      **Recommendation: request_changes**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: control
+    reviewed_at: '2026-09-09T22:13:07+00:00'
+    trace_id: 5702a782042b28fa6878078a1ba72535
+    span_id: ea39952ae5900d86
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31008
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31009
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31009
+    head_sha: b5f10e4018262564c60f74d1ee8b171a95814a32
+    base_ref: main
+    base_sha: 0b7729fcff02c1473aff749b6009185f3ee39fb7
+    instruction: Review pr:31009 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[Blocking] Blocked members still appear in forum feed cards.** [app/models/topic.rb:203](/home/runner/work/biggerpockets/biggerpockets/app/models/topic.rb:203) filters only the topic author, while [topic_feed_payload.rb:282](/home/runner/work/biggerpockets/biggerpockets/app/services/simplified_forums/topic_feed_payload.rb:282) unconditionally serializes `topic.last_post`. If a blocked member wrote the latest reply to someone else’s topic, their identity and reply link remain visible. Resolve the last visible, non-blocked reply for the viewer and add a regression spec covering this case.
+
+      **Verdict:** request_changes.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-16T21:54:56+00:00'
+    trace_id: dba821be3cd791c13f43788e314626f9
+    span_id: 9c81f10e192f4d68
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31009
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31010
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31010
+    head_sha: dc45cc8275cc629262c0cb3081a18efc40d9220c
+    base_ref: main
+    base_sha: 0e046f3eab234de2b91f76f93d7bc8cacfd08b61
+    instruction: Review pr:31010 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Verdict: request_changes
+
+      - **Blocking — API verbs do not match the mobile contract.** [config/routes/api.rb:84](/home/runner/work/biggerpockets/biggerpockets/config/routes/api.rb:84) exposes `accept_request` and `ignore_request` only via `PATCH`, while BIG-22215 specifies `POST` endpoints. A client implemented against the ticket will receive a routing error. Register these actions as `post` routes (or support both verbs if compatibility is desired) and add routing/request coverage for the public URLs.
+
+      No privacy, deliverability, migration, parser, placeholder, or unresolved performance issues found.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-10T22:22:55+00:00'
+    trace_id: e7cff429303ce2634dddf82ea3cb17ae
+    span_id: f3361f00d1f17e81
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31010
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31012
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31012
+    head_sha: 8774f4f9b9d805cd1391bc98ba6e1fe66defc94b
+    base_ref: main
+    base_sha: 341ef2751bfe4ee09aed42da5f8cdbeb474edc28
+    instruction: Review pr:31012 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[Blocking] Event registrations accept email addresses without an MX lookup.** [app/models/event_registration.rb:21](/home/runner/work/biggerpockets/biggerpockets/app/models/event_registration.rb:21) validates syntax only, despite these addresses being retained for RSVP confirmation and later messaging. Add the existing `authenticable_email` validation when the email changes so domains without MX records are rejected.
+
+      - **[Blocking] The API can persist events without an end time.** [app/models/event.rb:24](/home/runner/work/biggerpockets/biggerpockets/app/models/event.rb:24) omits `ends_at` from presence validation, and the database column is nullable. API callers can therefore bypass the required UI field, undermining time-range validation and preventing feedback from ever opening. Require `ends_at` at the model/database boundary and add an API regression test.
+
+      **Verdict: request_changes**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-10T15:20:12+00:00'
+    trace_id: a8affb1db47ef98afeef2457497065c4
+    span_id: 0735e41f3be87166
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31012
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31013
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31013
+    head_sha: a31eb49ec766803bbe3cda249d07fb231bc22c74
+    base_ref: main
+    base_sha: c639dae8f3c4a495ee1fd3e066e82a440eb72aa6
+    instruction: Review pr:31013 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      **Request changes**
+
+      - **Blocking — Event changes never synchronize after creation.** [events_controller.rb:15](/home/runner/work/biggerpockets/biggerpockets/app/controllers/api/v3/events/events_controller.rb:15) invokes `EventTopicPublisher` only from `create`; no update/cancel/reopen path calls it. Consequently, the implemented update/hide/restore branches are unreachable in production, leaving projections stale. Wire every event mutation through the publisher transactionally.
+
+      - **Blocking — Server-rendered React bootstrap bypasses hosted-event privacy gating.** [react_topic_bootstrap.rb:56](/home/runner/work/biggerpockets/biggerpockets/app/services/simplified_forums/react_topic_bootstrap.rb:56) directly constructs `TopicPayload`, so hosted online topics serialize their canonical URL through the legacy payload even when the feature or policy denies access. Use `TopicPayload.for_topic` here and audit the other direct constructors.
+
+      - **Internal React navigation uses a raw anchor.** [EventAttendance.tsx:42](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/ForumTopic/components/EventAttendance.tsx:42) renders the internal hosted-event route with `<a href>`, causing a full reload. Use React Router’s `<Link to={event.hosted_event_url}>`.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: control
+    reviewed_at: '2026-09-10T18:59:03+00:00'
+    trace_id: f70c65eb3c1591b6fc807b5889fb0c97
+    span_id: f06da6345936e8f9
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31013
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31014
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31014
+    head_sha: 92971ded0e3a05035931de488f2e5264d212043f
+    base_ref: main
+    base_sha: 190e3212d8ce9c29407189fb7f8cebe997999384
+    instruction: Review pr:31014 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[Blocking] Failed member placement leaves a permanent unusable RSVP** — [registrations_controller.rb:18](/home/runner/work/biggerpockets/biggerpockets/app/controllers/api/v3/events/registrations_controller.rb:18). The registration is saved before `confirm`; if a full event has no waitlist, `confirm` fails but the `awaiting_confirmation` member record remains. Subsequent attempts hit `render_existing_registration` and never retry placement, returning success for an unconfirmed RSVP. Confirm before committing, destroy/rollback failed member registrations, or retry confirmation for existing awaiting member records.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 2
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-10T01:57:45+00:00'
+    trace_id: 9f5b442292a0efe22f4b7691bc28a513
+    span_id: ef1dab01d04eadec
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31014
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31015
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31015
+    head_sha: 063da5944a568a1c4cb36cd9e5c285022e15270b
+    base_ref: main
+    base_sha: 1b7e4568949c68d140317717d200a260c33f4548
+    instruction: Review pr:31015 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      # Findings
+
+      **Verdict: request_changes**
+
+      - **Blocking — Member last-name privacy bypass** — [app/services/event_payload.rb:73](/home/runner/work/biggerpockets/biggerpockets/app/services/event_payload.rb:73) serializes the registration’s stored `name`. A member may enable `hide_last_name` after registering, leaving a stale full-name snapshot exposed to hosts. Use `item.social_user.display_name` for member registrations, falling back to `item.name` only for external guests.
+
+      - **Performance — N+1 member queries** — [app/services/event_payload.rb:14](/home/runner/work/biggerpockets/biggerpockets/app/services/event_payload.rb:14) iterates every registration while [line 85](/home/runner/work/biggerpockets/biggerpockets/app/services/event_payload.rb:85) accesses `social_user`, issuing one query per member on dashboard loads and every mutation response. Preload with `event.registrations.includes(:social_user).order(...)`.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: control
+    reviewed_at: '2026-09-10T02:04:25+00:00'
+    trace_id: dc609646df77a2b0b9ce708c6b25d46e
+    span_id: 41408017edd70ea7
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31015
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31017
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31017
+    head_sha: 38a87f5fffa5d1039ecd9f6b51a85680d7e0435c
+    base_ref: main
+    base_sha: d45b5d0c4f1bc51e69ab7cf7aac4007a0f0017ef
+    instruction: Review pr:31017 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[Blocking] External guests can lose access before feedback opens** — [app/controllers/api/v3/events/feedbacks_controller.rb:9](/home/runner/work/biggerpockets/biggerpockets/app/controllers/api/v3/events/feedbacks_controller.rb:9) authenticates guests with the RSVP management token, but that token expires after 90 days. Guests registering more than 90 days before the event ends cannot submit feedback afterward or obtain a replacement once RSVPs close. Ensure the token remains valid through the feedback window or issue a post-event token.
+
+      **Verdict:** Request changes.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-10T14:31:15+00:00'
+    trace_id: b897fddb3fca090dc06abc6ae4c9828a
+    span_id: 0e485e03f63c8c5b
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31017
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31018
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31018
+    head_sha: 0b7729fcff02c1473aff749b6009185f3ee39fb7
+    base_ref: main
+    base_sha: 0b7729fcff02c1473aff749b6009185f3ee39fb7
+    instruction: Review pr:31018 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Verdict: request_changes
+
+      - **Blocking — Incomplete ticket implementation:** [geocodable.rb:5](/home/runner/work/biggerpockets/biggerpockets/app/models/concerns/marketplace/geocodable.rb:5) introduces only geocoding infrastructure. The requested dashboard map, filter, markers, popover, legend, endpoint, and feature-flag integration are absent. The commit explicitly calls this the “bottom layer” of a stack, with later branch commits supplying the missing backend and frontend. No ticket or PR discussion authorizes that scope reduction.
+
+      - **Blocking — Transient failures permanently lose geocoding:** [place_details.rb:24](/home/runner/work/biggerpockets/biggerpockets/lib/serp_api/google_maps/place_details.rb:24) catches timeouts, parse errors, and API failures and returns `nil`, causing the Sidekiq job to succeed despite `retry: 3`. A temporary failure therefore leaves new records ungeocoded indefinitely. Log and re-raise retryable errors so Sidekiq retries them.
+
+      - **Blocking — Removed place IDs retain stale coordinates:** [geocodable.rb:21](/home/runner/work/biggerpockets/biggerpockets/app/models/concerns/marketplace/geocodable.rb:21) schedules work only when the new place ID is present. Clearing `google_place_id` leaves the previous `lat`, `lng`, and `geocoded_at` intact, allowing an obsolete address marker to remain visible. Clear those fields whenever the place ID is removed, with coverage for this transition.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: control
+    reviewed_at: '2026-09-10T09:45:39+00:00'
+    trace_id: fd34b9a9ef3d510d25ddeb1abf992bd2
+    span_id: 062ee3bf06cf35a4
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31018
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31019
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31019
+    head_sha: 8f583f5150ece039a52b4771a13b8234805fd408
+    base_ref: big-22079-coverage-geocoding-infra
+    base_sha: 10c66c288bc9ff731a218898623eb20b1f9acb65
+    instruction: Review pr:31019 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      **Request changes**
+
+      - **[Blocking — member privacy]** [market_coverage_serializer.rb:90](/home/runner/work/biggerpockets/biggerpockets/app/serializers/api/v3/marketplace/market_coverage_serializer.rb:90) exposes the stored `lead.investor_name`, bypassing the investor’s `hide_last_name` preference. Preload `:investor` and serialize `lead.investor.display_name`.
+
+      - **[Blocking — incomplete integration]** [OverviewTab.tsx:58](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/OrganizationDashboard/OverviewTab/OverviewTab.tsx:58) continues rendering placeholder market-coverage data, while lines 155–157 explicitly acknowledge that the real endpoint is not wired up. The commit message defers frontend wiring to the next stack layer, but no ticket or author PR comment grants that scope reduction. Complete the integration and remove `mock-data.ts`.
+
+      - **[Blocking — hand-rolled structured parser]** [property_address_zip_code.rb:14](/home/runner/work/biggerpockets/biggerpockets/app/models/marketplace/businesses/leads/property_address_zip_code.rb:14) parses a postal address with a regexp. Use the project’s Geokit address/geocoding result and its postal-code field instead; free-form addresses can contain units, countries, or trailing metadata that this expression mishandles.
+
+      - **[Performance]** [market_coverage_serializer.rb:81](/home/runner/work/biggerpockets/biggerpockets/app/serializers/api/v3/marketplace/market_coverage_serializer.rb:81) loads and serializes every historical lead for every geocoded seat on each dashboard request. Response size and Ruby memory grow without bound. Fetch grouped ZIP/count/new-count aggregates in SQL and expose individual leads through a paginated, on-demand endpoint if the modal requires them.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 10
+    stage2_arm: control
+    reviewed_at: '2026-09-10T09:45:39+00:00'
+    trace_id: abea48e85fa26f63ce018380883df82c
+    span_id: eb8fc12beea91a0f
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31019
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31021
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31021
+    head_sha: f60a5006a7bdf3bbcf9a347d4b58c0e8048cd93f
+    base_ref: main
+    base_sha: 0b7729fcff02c1473aff749b6009185f3ee39fb7
+    instruction: Review pr:31021 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — incomplete ticket scope:** [app/models/concerns/marketplace/geocodable.rb:4](/home/runner/work/biggerpockets/biggerpockets/app/models/concerns/marketplace/geocodable.rb:4) introduces only foundational geocoding. The PR still lacks BIG-22079’s market-coverage card, owner-only Overview integration, agent filter, coverage markers/circles, statistics popover, and legend. The commit explicitly describes this as the “bottom layer” for later changes, but no ticket or author discussion grants that scope reduction. Request changes until the user-facing feature is completed.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 2
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-10T10:31:17+00:00'
+    trace_id: 6f71ea116ad68b8976f5d90569565db1
+    span_id: ef03f446f8edd263
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31021
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31023
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31023
+    head_sha: 0a3d543b4b58fe495b0cc3903ac7e7afaecb5b05
+    base_ref: main
+    base_sha: f3b5949dc097bf5ad67535d9cf7efdf028d9b482
+    instruction: Review pr:31023 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      # Findings
+
+      **Verdict: request_changes**
+
+      - **Blocking — Member last-name privacy bypass** — [market_coverage_serializer.rb:134](/home/runner/work/biggerpockets/biggerpockets/app/serializers/api/v3/marketplace/market_coverage_serializer.rb:134) falls back to the stored `lead.investor_name` when the associated investor is unavailable. That snapshot may contain the member’s full last name and cannot honor their current `hide_last_name` preference. Do not expose the snapshot; return an anonymized/omitted name unless it can be obtained through `SocialUser#display_name`.
+
+      - **Filtering does not refit the map** — [MarketCoverage.tsx:150](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/OrganizationDashboard/OverviewTab/MarketCoverage.tsx:150) computes new bounds when a single seat is selected, but `once` prevents `FitBounds` from applying them after the initial render. The selected agent can remain a tiny marker in the organization-wide viewport. Remove `once`, or explicitly refit when `seatFilter` changes.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-10T17:36:07+00:00'
+    trace_id: b42bcf40fa55fa41bc46e7ba6ba32725
+    span_id: 18d798396a9a79f9
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31023
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31026
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31026
+    head_sha: 3624cd809bea7054c0e0fa045f9a79c5eaa0afd8
+    base_ref: main
+    base_sha: f3cd0634d79df276a1ef366db69b6123ded2ee69
+    instruction: Review pr:31026 against ticket.json/pr.diff
+  expected_output:
+    findings: "## Findings\n\n- **[P1] Prevent stale DNS results from flagging a newly edited address**\
+      \ — `app/tasks/maintenance/flag_undeliverable_lead_emails_task.rb:44`  \n  The DNS lookup and save\
+      \ are not atomic. If an admin changes the address while the lookup is running, the task can apply\
+      \ the old address’s verdict to the new address after the model callback clears it. Persist only\
+      \ if `leads_email_address` still equals the checked value (for example, via a conditional update/lock),\
+      \ and add a concurrency regression test.\n\n**Verdict:** Request changes.\n"
+  metadata:
+    severity: non-blocking
+    stage2_verdict: request_changes
+    findings_lines: 5
+    stage2_arm: control
+    reviewed_at: '2026-09-10T14:30:31+00:00'
+    trace_id: d5df29fa0f61cd1310efc97c44b79f16
+    span_id: b5df07c58cf5bda7
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31026
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:non-blocking
+- id: biggerpockets-pr31032
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31032
+    head_sha: deedb2e63314e742cef4cbaa97f4373e31f86386
+    base_ref: main
+    base_sha: 9ea862c489216ac68a156d72a993239501db8dac
+    instruction: Review pr:31032 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings — request changes
+
+      - **Blocking — acceptance work is not integrated.** [accept_seat_invite_service.rb:8](/home/runner/work/biggerpockets/biggerpockets/app/services/marketplace/organizations/accept_seat_invite_service.rb:8) introduces a service with no caller and explicitly defers wiring it to the future acceptance flow. Consequently, accepting an invite cannot currently provision or bill the seat. Ship this once the acceptance path can invoke it.
+
+      - **Blocking — retries can double-charge seats.** [accept_seat_invite_service.rb:31](/home/runner/work/biggerpockets/biggerpockets/app/services/marketplace/organizations/accept_seat_invite_service.rb:31) performs the irreversible Stripe update inside a database transaction before the entitlement and invite are committed. A later validation/commit failure rolls back only the database; retrying increments Stripe again. Make the operation idempotent, serialize acceptance, and reconcile Stripe quantity from durable accepted-seat state.
+
+      - **Blocking — the displayed purchased quantity remains stale.** [accept_seat_invite_service.rb:66](/home/runner/work/biggerpockets/biggerpockets/app/services/marketplace/organizations/accept_seat_invite_service.rb:66) stores the new total only on the newly created entitlement, while `Organization#active_organization_entitlement` returns the first active record and [organization_dashboard_serializer.rb:36](/home/runner/work/biggerpockets/biggerpockets/app/serializers/api/v3/marketplace/organization_dashboard_serializer.rb:36) reads its quantity. The original entitlement can therefore continue reporting `1` after seats are added. Maintain the subscription quantity in a single authoritative record or calculate it consistently.
+
+      - **Blocking — billing copy contradicts bill-at-acceptance behavior.** [summarize-next-invoice.ts:17](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/OrganizationDashboard/SeatsBillingTab/summarize-next-invoice.ts:17) says invited seats are charged when sent, and [build-plan-rows.ts:43](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/OrganizationDashboard/SeatsBillingTab/build-plan-rows.ts:43) itemizes pending invitations as billed seats. The ticket confirms charging begins only upon acceptance; exclude pending invites and correct the note.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-10T19:21:07+00:00'
+    trace_id: b878963f5b734cd415e6c12534cb9306
+    span_id: 4d5d61efd35b1960
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31032
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31035
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31035
+    head_sha: 17d7dca4658eaaa13298cf1b920e78b6d18882da
+    base_ref: big-21346-onboarding-scaffolding
+    base_sha: e6a66ed8a3e09357f17e592c1983bfd76c40555f
+    instruction: Review pr:31035 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — Member last-name privacy:** [organizations_controller.rb:43](/home/runner/work/biggerpockets/biggerpockets/app/controllers/api/v3/marketplace/onboarding/organizations_controller.rb:43) serializes `user.full_name`, bypassing `hide_last_name`. Return `user.display_name` (and update the response type) so API consumers cannot expose a hidden surname.
+
+      **Verdict:** Request changes.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-10T17:52:19+00:00'
+    trace_id: dcc988d6b4a6f0cdb13287e8b117b7b0
+    span_id: 6b8bc345097f62b9
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31035
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31039
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31039
+    head_sha: edcf38b086b50c7afde34ec9167eb61159ba6dc0
+    base_ref: main
+    base_sha: c639dae8f3c4a495ee1fd3e066e82a440eb72aa6
+    instruction: Review pr:31039 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — incomplete specialization roll-up** ([team_page_content.rb:54](/home/runner/work/biggerpockets/biggerpockets/app/models/marketplace/team_page_content.rb:54)): The ticket requires specialties grouped as strategies and property types, but the presenter returns unrelated `subtypes` and `specialties` lists and explicitly defers interpretation to BIG-22068. Implement the required classification/grouping rather than leaving this portion unresolved.
+
+      ## Verdict
+
+      **Request changes.**
+
+      Focused specs could not run because `bundle` is unavailable.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-10T20:50:22+00:00'
+    trace_id: 0e1a6cecf9f51a1fa093fd085f7251ea
+    span_id: 9f0762d0717f1563
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31039
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31071
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31071
+    head_sha: f540a8725f18d73582d93cab96b9b61ea2402e2f
+    base_ref: big-21346-onboarding-scaffolding
+    base_sha: 731c9e0b4bb83f16046f36caa6408dc7c72ed083
+    instruction: Review pr:31071 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — “Select all” clears the row instead of selecting it.** [`SpecialtyGroup.tsx:45`](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/OrganizationOnboarding/steps/SpecialtyGroup.tsx:45) treats React Aria’s `Selection` as an iterable set, but it can be the sentinel string `'all'`. Keyboard select-all therefore produces `['a', 'l', 'l']` and removes every specialty. Handle `keys === 'all'` by selecting all `lineIds`, as existing TagGroup adapters do.
+
+      **Verdict:** request_changes.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-14T13:40:51+00:00'
+    trace_id: dc0966d2bf9aca9900b6be1c2f1ed463
+    span_id: 6ddd36eb571066b4
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31071
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31073
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31073
+    head_sha: 270593ff6a33f8338941026c8bd363865c0a6a63
+    base_ref: big-21346-onboarding-scaffolding
+    base_sha: 149ad2ac92dc5119b0962f35c6f36d326d7c37ff
+    instruction: Review pr:31073 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — deferred, incomplete sizing fix:** [steps.module.scss:298](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/OrganizationOnboarding/steps/steps.module.scss:298) introduces a TODO and local override while acknowledging that `frontend/styles/pockets.css` contains stale sizing for every Pockets button. Correct the shared size shims and remove this temporary override; validate affected button variants rather than deferring the known defect to BIG-22283.
+
+      **Verdict:** request_changes.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-14T13:42:38+00:00'
+    trace_id: be587eb5bc93e1f7539bfb3674b436ae
+    span_id: 231fc6410baf4068
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31073
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31082
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31082
+    head_sha: b2f223f854d47b167b9355c42ae14ad089e2c65b
+    base_ref: worktree-agent-a79acd2048133b3c2
+    base_sha: 249a355c7963fe3af1edaef594e16ee401308c5c
+    instruction: Review pr:31082 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[P1] Paginated comment lookup breaks on PRs with over 100 comments** — `.claude/skills/heroku-dynos/scripts/cwa_needed.py:187`. `gh api --paginate --jq '[.[].body]'` emits one JSON array per page, while `run_json` calls `json.loads` once; multiple pages therefore produce “extra data” and exit 3. Use `--slurp` and flatten the pages, or emit one body per page and collect the lines.
+
+      - **[P1] Any image can falsely satisfy the screenshot requirement** — `.claude/skills/pr-checks/scripts/pr_checks.py:68`. `IMAGE_RE` accepts arbitrary Markdown/HTML images, including status badges, tracking pixels, and unrelated diagrams, allowing a visual PR with no UI evidence to pass. Restrict satisfaction to `bp-pull-request-media` assets or otherwise distinguish screenshots/recordings from incidental images.
+
+      **Verdict: request_changes**
+  metadata:
+    severity: non-blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-14T15:31:53+00:00'
+    trace_id: 258c8c6259349d71e71e236c91bd0edc
+    span_id: cc2009319d50fadd
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31082
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:non-blocking
+- id: biggerpockets-pr31084
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31084
+    head_sha: a33068aed3c79bda871ecb817c18edb97be872b6
+    base_ref: main
+    base_sha: 037f385f02ec59fcbe4d3312ae0e833cea9bc4a5
+    instruction: Review pr:31084 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — Organization plans remain purchasable through the legacy checkout.** [app/models/billing/plan.rb:65](/home/runner/work/biggerpockets/biggerpockets/app/models/billing/plan.rb:65) makes the monthly plan discoverable through `Billing::Plan.find_by_plan_id`, which `Subscriptions::SubscriptionsController#membership_plan` uses without excluding organization plans. A logged-in user can request `/subscriptions/new?plan_id=<organization-price>` and, when the React redesign is disabled or bypassed by a native client, create a hosted Stripe subscription without an organization customer or required organization/business metadata—the exact invalid purchase guarded against only in the API controller. Reject organization plans in the legacy controller or restrict its plan resolver to consumer plans.
+
+      **Verdict: request_changes**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-14T17:07:27+00:00'
+    trace_id: 9e93659863115808f77105aa8d8d216f
+    span_id: 85911d6da92303d4
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31084
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31085
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31085
+    head_sha: b80c8acaf5dc56bf98a8a8336698a9ed838b7302
+    base_ref: big-22154-sell-organization-plan
+    base_sha: 048d2b7e57856f07307d79254442dc12478de084
+    instruction: Review pr:31085 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Request changes — queued mail can be permanently lost.** [`add_seat_service.rb:43`](/home/runner/work/biggerpockets/biggerpockets/app/services/marketplace/organizations/add_seat_service.rb:43) and [`provision_paid_organization.rb:63`](/home/runner/work/biggerpockets/biggerpockets/app/services/billing/stripe_events/v2/provision_paid_organization.rb:63) persist `sent_at` before Sidekiq’s transactional enqueue occurs. `transactional_push!` defers the Redis push until after the database commit; if that push fails, the transaction cannot roll back, but the invite remains marked sent and the payment-webhook retry skips it. The added failure spec only raises from `Mailer.with` before commit, so it does not exercise this failure mode. Use a transactional outbox, or enqueue an idempotent delivery job while retaining retryable state and set `sent_at` only after successful delivery.
+  metadata:
+    severity: non-blocking
+    stage2_verdict: request_changes
+    findings_lines: 2
+    stage2_arm: control
+    reviewed_at: '2026-09-14T21:43:33+00:00'
+    trace_id: 409104b0897d334c168032d97dfd5081
+    span_id: 446f1baa7248320a
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31085
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:non-blocking
+- id: biggerpockets-pr31092
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31092
+    head_sha: 0f386f9d626204e32ba7e936e586494ac3c37bf1
+    base_ref: main
+    base_sha: 9f843c9dd744b959018d32ef225cdc122282024f
+    instruction: Review pr:31092 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Verdict: Request changes
+
+      - **Blocking — Enables acknowledged placeholder behavior in staging.** [organizations_controller.rb:45](/home/runner/work/biggerpockets/biggerpockets/app/controllers/api/v3/marketplace/onboarding/organizations_controller.rb:45) expands access to a scaffolded Pay step that grants complimentary annual entitlements without payment; lines 71–73 explicitly defer the real implementation to BIG-22154. No ticket, PR body, or author comment grants this deferral. Complete the payment-backed flow before enabling this endpoint on staging.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 2
+    stage2_arm: control
+    reviewed_at: '2026-09-14T18:25:34+00:00'
+    trace_id: 0275c8452a0e18ba6e3401c7ba7266c3
+    span_id: 8fb91f2c38ca3453
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31092
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31093
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31093
+    head_sha: ef60b31b4b45bfe6bfc428fca140138c0abb3fd9
+    base_ref: main
+    base_sha: 6cf2557d885387b98d6aa5498f4f23f1a42c281a
+    instruction: Review pr:31093 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — incomplete ticket implementation** ([devices_controller.rb:14](/home/runner/work/biggerpockets/biggerpockets/app/controllers/api/v3/mobile/devices_controller.rb:14)): The PR adds only the JWT registration endpoint. It does not add the Beams/notification SDK, request permission, register or deregister the Expo device, handle foreground/background/cold-start notifications, or apply badge counts. No ticket or PR discussion grants this scope reduction. Complete and integrate the client-side work before merging.
+
+      ## Verdict
+
+      **Request changes.**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-14T18:49:16+00:00'
+    trace_id: 32d60f3996f4c2f192cd3bdaac2e3c22
+    span_id: bd305beb409e85b5
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31093
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31094
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31094
+    head_sha: 72e4a04971ca5fc9a9d877709914e83d3f0731a1
+    base_ref: big-22154-sell-organization-plan
+    base_sha: b37fdb4cd2859d0e9e0caca183c72c8da045825c
+    instruction: Review pr:31094 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      # Findings
+
+      **Verdict: request_changes**
+
+      - **Blocking — Removed invitees are still emailed after payment.** [create_organization_service.rb:128](/home/runner/work/biggerpockets/biggerpockets/app/services/marketplace/onboarding/create_organization_service.rb:128) explicitly retains pending invites omitted from a later Pay submission. Going Back, deleting an invite, and returning to Pay therefore still causes the webhook to email that address. Reconcile pending invites to the submitted set, cancelling/removing omitted unsent invites before checkout.
+
+      - **Blocking — Checkout creation is not idempotent.** [use-organization-checkout.ts:20](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/OrganizationOnboarding/steps/use-organization-checkout.ts:20) limits requests only per component mount, while [organizations_controller.rb:156](/home/runner/work/biggerpockets/biggerpockets/app/controllers/api/v3/marketplace/onboarding/organizations_controller.rb:156) always creates a new Stripe session. Reloading or revisiting Pay leaves multiple payable sessions for the same organization, permitting duplicate subscriptions. Persist and reuse/expire the active session or supply a stable Stripe idempotency key.
+
+      - **Performance — N+1 queries while locating an unpaid organization.** [organizations_controller.rb:145](/home/runner/work/biggerpockets/biggerpockets/app/controllers/api/v3/marketplace/onboarding/organizations_controller.rb:145) iterates every owned organization, then queries organization and per-seat entitlements at lines 151–153. Replace this with a single SQL relation using joins/`NOT EXISTS`, or preload both entitlement associations before iteration.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: control
+    reviewed_at: '2026-09-15T19:43:43+00:00'
+    trace_id: 9c250c8a8360c12464b8226b122e21e2
+    span_id: eab83e48e2ba02a1
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31094
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31095
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31095
+    head_sha: 9fddce395729f2060f5f4b3050d571dddd3f5c8e
+    base_ref: big-22154-pay-endpoint
+    base_sha: 233283cbdf61e0dd19247fb0851be112a1483128
+    instruction: Review pr:31095 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      # Findings
+
+      **Verdict: request_changes**
+
+      - **Blocking — Pay can attach checkout to the wrong organization.** [use-organization-checkout.ts:29](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/OrganizationOnboarding/steps/use-organization-checkout.ts:29) activates an endpoint whose `organization_in_progress` selects the owner’s newest unpaid organization, regardless of whether this flow created it. Existing owners can therefore lose the submitted organization details and purchase a subscription for an unrelated organization. Reuse should require an onboarding-specific identifier/idempotency key.
+
+      - **Blocking — Back-navigation silently discards edited answers.** [OrganizationOnboarding.tsx:98](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/OrganizationOnboarding/OrganizationOnboarding.tsx:98) allows leaving Pay after the organization and invites have been persisted. Returning submits updated form values, but the endpoint reuses the original records without updating them, so the displayed answers can differ from the organization ultimately purchased. Either synchronize edits before reopening checkout or prevent returning to editable screens after persistence.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-15T18:48:15+00:00'
+    trace_id: 1607f526c5744df81eff35259794d4a1
+    span_id: 20c93bfedc17de08
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31095
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31098
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31098
+    head_sha: fd2a7529dbc5999458f919a3b40e0985f597753e
+    base_ref: main
+    base_sha: b95d792e6d58ff52167f06c73d807cd35fb3f019
+    instruction: Review pr:31098 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      **Request changes**
+
+      - **Blocking — Self-service success cannot be measured.** [event_tracking.rb:34](/home/runner/work/biggerpockets/biggerpockets/app/models/marketplace/organizations/event_tracking.rb:34) removes `seat_management_task_completed` entirely, including `completed_via`, `required_intervention`, and `duration_ms`. Consequently add, remove, reassign, and billing tasks cannot feed the ticket’s self-service success metric. Restore the completion event across every supported completion path.
+
+      - **Blocking — Revenue impact cannot be measured.** [event_tracking.rb:26](/home/runner/work/biggerpockets/biggerpockets/app/models/marketplace/organizations/event_tracking.rb:26) explicitly defers `mrr_delta`, while the emitted properties at [event_tracking.rb:69](/home/runner/work/biggerpockets/biggerpockets/app/models/marketplace/organizations/event_tracking.rb:69) omit it. This leaves no reliable way to calculate resulting MRR change, a core success metric. Resolve the marginal price from Stripe or another authoritative source before publishing.
+
+      - **Blocking — Paid onboarding invites are knowingly untracked.** [add_seat_service.rb:32](/home/runner/work/biggerpockets/biggerpockets/app/services/marketplace/organizations/add_seat_service.rb:32) suppresses tracking for `deliver: false` and acknowledges that later delivery has no hook. Successfully paid onboarding seats are delivered at [provision_paid_organization.rb:60](/home/runner/work/biggerpockets/biggerpockets/app/services/billing/stripe_events/v2/provision_paid_organization.rb:60) but never recorded. Add tracking at the actual delivery/completion path while preserving the initiating actor.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-17T15:51:30+00:00'
+    trace_id: 569f969ab0a1d6147a67ddac30fa5cda
+    span_id: 33f2c331c0730b74
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31098
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31100
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31100
+    head_sha: 27c7c35a631640eec27178f8b3f092e2195a6564
+    base_ref: main
+    base_sha: 91042f8f5f4187f4eb9d614546820bfdbb7f4a59
+    instruction: Review pr:31100 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — incorrect tenure at calendar boundaries** ([frontend/utils/dates.ts:164](/home/runner/work/biggerpockets/biggerpockets/frontend/utils/dates.ts:164)). Using fixed 365.25/30.44-day thresholds makes an exact one-year anniversary in a 365-day span display as “11 months”; future timestamps also display “less than a day.” Compute completed calendar units with the project’s date library and add anniversary, leap-day, month-end, and clock-skew tests.
+
+      **Verdict:** Request changes.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-14T21:37:28+00:00'
+    trace_id: a564e66907e19fab5410ba7a9b0853ee
+    span_id: 8f3a86b1cd8f02a3
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31100
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31104
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31104
+    head_sha: c86dc9b46f945aeec8c09c8b47fd86f6dd5fbbf9
+    base_ref: main
+    base_sha: b4f89f7bf8b9a604fe89cc239e1a7d703b85dbf0
+    instruction: Review pr:31104 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — stale API test leaves the contract migration incomplete.** [`frontend/api/marketplace/organizations/seats.test.ts:66`](/home/runner/work/biggerpockets/biggerpockets/frontend/api/marketplace/organizations/seats.test.ts:66) still passes and expects `{ name, email }`, despite `AddSeatInput` now accepting only `email`. This can cause a TypeScript excess-property failure and no longer tests the intended request payload. Update it to submit and assert `{ email: '[Standard Email Address Scanner]' }`.
+
+      ## Verdict
+
+      **Request changes.** Focused Ruby specs could not be run because `bundle` is unavailable.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-15T02:44:05+00:00'
+    trace_id: 48710f53e8bc4e4ed6a5b86ff6f85682
+    span_id: 6b44b5a2db671c60
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31104
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31110
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31110
+    head_sha: 69598b03fca9dedfbd87026612cdcf6c94bdd6ef
+    base_ref: main
+    base_sha: d74e3d86ae582a4203b64b66799cad6930ad4fb0
+    instruction: Review pr:31110 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      **Request changes**
+
+      - **Blocking — Coverage spans can render off-screen.** [MarketCoverage.tsx:123](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/OrganizationDashboard/OverviewTab/MarketCoverage.tsx:123) calculates bounds from seat/business addresses, but spans are now centered on potentially distant market cities. Include every visible market’s coordinates—and ideally polygon extents—in `coverageMapBounds`.
+
+      - **Blocking — Overlap still becomes darker.** [MarketCoverage.tsx:181](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/OrganizationDashboard/OverviewTab/MarketCoverage.tsx:181) merely lowers opacity to `0.05`; MapLibre still alpha-composites each overlapping feature, so N overlaps remain darker than one. Dissolve/union the polygons or use rendering that paints the combined area once. The added test only checks the opacity constant and cannot catch this regression.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: control
+    reviewed_at: '2026-09-15T16:02:27+00:00'
+    trace_id: b31729915fa29e061b385227544a441b
+    span_id: ed1b11c47eecfc98
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31110
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31112
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31112
+    head_sha: 6785b4984b4d45f3153d490bf81734b16f07d043
+    base_ref: main
+    base_sha: f6bd9fc9ca753f94f89cf1cd7ff42d3308233008
+    instruction: Review pr:31112 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Verdict: request_changes
+
+      - **[P2] Note dates vary by the moderator’s browser timezone** — [index.tsx:23](/home/runner/work/biggerpockets/biggerpockets/frontend/components/ModeratorNotesDrawer/index.tsx:23). `Intl.DateTimeFormat` converts `created_at` into the browser’s local timezone, whereas the existing view displays the application’s Pacific-time date. Notes near midnight can therefore appear under the wrong day. Format explicitly in `America/Los_Angeles` and add a boundary-time test.
+  metadata:
+    severity: non-blocking
+    stage2_verdict: request_changes
+    findings_lines: 2
+    stage2_arm: control
+    reviewed_at: '2026-09-15T15:41:51+00:00'
+    trace_id: e7e1aa33094c247ce976b8da9385d817
+    span_id: efb1a4805c14fcd9
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31112
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:non-blocking
+- id: biggerpockets-pr31114
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31114
+    head_sha: b411e104bfd59e0642c95f27c9bd97b425c1fcd4
+    base_ref: main
+    base_sha: 9cc814704bfd1d079f013441159a2597559acaf9
+    instruction: Review pr:31114 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — [.circleci/continue_config.yml:1469](/home/runner/work/biggerpockets/biggerpockets/.circleci/continue_config.yml:1469):** Both Jest jobs still transitively wait for `build`: they require `check-stack-position`, which itself requires `build` at line 1458. This leaves the PR’s stated optimization ineffective. Remove `build` from `check-stack-position` so the lightweight gate can run in parallel with the build.
+
+      ## Verdict
+
+      **Request changes.**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-15T15:49:54+00:00'
+    trace_id: 53adacf960ff0791a62e78393b6c3cb8
+    span_id: fb8f510a7b626454
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31114
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31116
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31116
+    head_sha: 59c2b4a81274308ac466adc1a9f101dc68e291f3
+    base_ref: main
+    base_sha: b8263ceeefe66f1236bcb8fcf6e990c13c6a0d63
+    instruction: Review pr:31116 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Request changes:** [scope 2 documentation](/home/runner/work/biggerpockets/biggerpockets/docs/shape-up/BIG-22015-business-member-onboarding/scopes/02-seat-the-signed-in-member.md:17) remains `uphill`, and its completed PR 1 work is still marked unchecked from line 34 onward. The diff confirms these items are implemented, so update the scope status/checklist and corresponding [scope-map row](/home/runner/work/biggerpockets/biggerpockets/docs/shape-up/BIG-22015-business-member-onboarding/scope-map.md:176). The ticket explicitly requires these documents to remain current because they are used as implementation truth.
+  metadata:
+    severity: non-blocking
+    stage2_verdict: request_changes
+    findings_lines: 2
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-16T18:38:58+00:00'
+    trace_id: 1bd6622e7bb9bc0096c4cd93ed8b526d
+    span_id: ac2340884f29c58f
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31116
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:non-blocking
+- id: biggerpockets-pr31119
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31119
+    head_sha: f03254c0db667b35886422969a204277f26370f2
+    base_ref: main
+    base_sha: 221ddcc0031bbfe7783f73ebbe533528e97d4511
+    instruction: Review pr:31119 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — ignored posts can no longer be revealed.** [topic_payload.rb:821](/home/runner/work/biggerpockets/biggerpockets/app/services/simplified_forums/topic_payload.rb:821) filters ignored authors’ replies from the API entirely. Promoting React while deleting the system spec for “Show this post” removes the existing reader-controlled reveal behavior. Return masked posts with an ignored flag and add a React reveal control before removing the ERB path/spec.
+
+      - **Internal navigation uses a raw anchor.** [NotificationRow.tsx:156](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Notifications/components/NotificationRow.tsx:156) links to the now-promoted React `/forums/:id` route with `<a>`, causing a full reload. Use `<Link to={forumUrl}>`; native requests do not execute this React component.
+
+      **Verdict: request_changes.**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-15T20:29:09+00:00'
+    trace_id: 818e03628f8cd7b136b3642c130c3053
+    span_id: c507948ebd9f340d
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31119
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31121
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31121
+    head_sha: 98ae7e701c1aa4a99a555aeff5089db542da136f
+    base_ref: big-22317-seat-invite-acceptance-route
+    base_sha: 9d660542594035e89a55b393e36b9c4e0fd4b8a7
+    instruction: Review pr:31121 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — concurrent invites can double-bill and raise an unhandled exception** ([create_seat_from_invite_service.rb:28](/home/runner/work/biggerpockets/biggerpockets/app/services/marketplace/organizations/create_seat_from_invite_service.rb:28), [create_seat_from_invite_service.rb:78](/home/runner/work/biggerpockets/biggerpockets/app/services/marketplace/organizations/create_seat_from_invite_service.rb:78)). Two invites accepted concurrently by the same owner can both pass `existing_seat`, bill independently, then race to create the business. The loser raises `ActiveRecord::RecordNotUnique`, not the rescued `RecordInvalid`, leaving two billed/accepted invites but only one seat. Reserve or serialize the `(organization_id, owner_id)` seat before billing, recheck under that protection, and handle the database uniqueness exception with a clear failure.
+
+      **Verdict: request_changes**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-15T19:46:44+00:00'
+    trace_id: 615127bac61e3ffc362f240a469da611
+    span_id: 5e1d65688701acfd
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31121
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31122
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31122
+    head_sha: 266f6241790fc7dc772b03106debdcf4dee9f90a
+    base_ref: main
+    base_sha: 221ddcc0031bbfe7783f73ebbe533528e97d4511
+    instruction: Review pr:31122 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[P1] Newly added state markets cannot be hidden in the same save** — [EditMarketsModal.tsx:110](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/TeamPage/EditMarketsModal.tsx:110) identifies new states as `state-CO`, while the server compares `hidden_ids` against `state-<usstate_id>` at [organization_markets_form.rb:69](/home/runner/work/biggerpockets/biggerpockets/app/forms/marketplace/organization_markets_form.rb:69). Selecting a state, clicking Hide, and saving therefore creates it as visible. Use one canonical identifier on both sides, or translate abbreviations to persisted IDs before applying hidden state.
+
+      **Verdict:** request_changes.
+  metadata:
+    severity: non-blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-15T18:39:09+00:00'
+    trace_id: 63223448f6a22fabe00bffefe4697ccf
+    span_id: 330e133336a50064
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31122
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:non-blocking
+- id: biggerpockets-pr31124
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31124
+    head_sha: 5960138405347ef259588e84f0e347c036ce5232
+    base_ref: main
+    base_sha: f6bd9fc9ca753f94f89cf1cd7ff42d3308233008
+    instruction: Review pr:31124 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      # Findings
+
+      ## Request changes
+
+      - **Blocking — backfill incorrectly seats solo subscriptions** — `app/tasks/maintenance/backfill_marketplace_seats_task.rb:60` selects every Stripe-backed entitlement with an `organization_id`, including ordinary individual Business Membership plans. Since solo businesses receive organizations and entitlement `organization_id`s, this could create meaningless seats for much of the paying population despite the task’s stated paid-team scope. Restrict the query to `Billing::Plan.organization_plan_monthly/annual` plan IDs and add a paid-solo exclusion spec.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-15T19:24:48+00:00'
+    trace_id: a0c622408b4df65e67973994b8ce9931
+    span_id: 92ac2c7c8426265f
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31124
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31125
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31125
+    head_sha: 667b422e1657c4a068f720c9b1757afd3b57d862
+    base_ref: big-22318-seat-the-signed-in-member
+    base_sha: eea8aa6f32626f3fd30bc6de4cf9f806794d9bc6
+    instruction: Review pr:31125 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[Blocking] Concurrent accepts can bill a duplicate seat and then raise a 500.** [create_seat_from_invite_service.rb](/home/runner/work/biggerpockets/biggerpockets/app/services/marketplace/organizations/create_seat_from_invite_service.rb:78) rescues `ActiveRecord::RecordInvalid`, but the unique index race described above it raises `ActiveRecord::RecordNotUnique`. With concurrent invites for one member, both may be billed before one insert fails, leaving an accepted, billed invite without a business. Rescue `RecordNotUnique` and reconcile/avoid the billing side effect atomically.
+
+      - **[Blocking] The already-seated-member flow remains incomplete.** [AcceptSeatInvite.tsx](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/AcceptSeatInvite/AcceptSeatInvite.tsx:108) turns the service’s specific duplicate-seat response into a generic retry banner. The member is neither told they already hold a seat nor sent to their profile, and the scope document still marks this task incomplete. Return the existing business/profile destination and render a dedicated message and redirect/link.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-15T20:16:29+00:00'
+    trace_id: bf741052d9c84cf79233f94870355732
+    span_id: 9e5ef526044f02c2
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31125
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31128
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31128
+    head_sha: 34ff2127e4ddb339dc2e8d6e68db33759baea11d
+    base_ref: main
+    base_sha: e29e4c9b4e05dc75d2cf4e68ad8873ea8ca42846
+    instruction: Review pr:31128 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — [SeatRemovedBanner/index.tsx:39](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Dashboard/features/widgets/SeatRemovedBanner/index.tsx:39):** The banner claims “We also emailed you these steps,” but `RemoveSeatService` and its callers never send or queue such an email. Either add the removal email delivery or remove the false claim.
+
+      **Verdict:** Request changes.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-17T15:54:40+00:00'
+    trace_id: 5187bc5e72de8e1e6470475c5e9fe1cb
+    span_id: 107b5e43d1059335
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31128
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31131
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31131
+    head_sha: ad886d27536e6d7bcde1d374c58e67d69246552e
+    base_ref: main
+    base_sha: 0309e698691ef13c0138205bfcf9ccde0b074411
+    instruction: Review pr:31131 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — incomplete geometry repair:** [import_census_places_task.rb:63](/home/runner/work/biggerpockets/biggerpockets/app/tasks/maintenance/import_census_places_task.rb:63) says generalized self-intersecting polygons are repaired, but `multi_polygon` only parses/promotes geometry. Invalid boundaries can still fail writes or spatial queries. Implement validity checking and repair, such as PostGIS `ST_MakeValid`, before persisting.
+
+      - **Blocking — pagination can silently omit places:** [tiger_web_client.rb:91](/home/runner/work/biggerpockets/biggerpockets/app/services/census/tiger_web_client.rb:91) uses offset pagination without a deterministic `orderByFields`. ArcGIS may reorder equal queries between pages, causing skipped or duplicated records. Order by a stable unique field such as `GEOID`.
+
+      - **Performance — per-place N+1 writes:** [import_census_places_task.rb:41](/home/runner/work/biggerpockets/biggerpockets/app/tasks/maintenance/import_census_places_task.rb:41) performs a lookup followed by a write for every one of roughly 32,600 places. Buffer each fetched page and use `upsert_all` keyed by the GEOID unique index.
+
+      **Verdict: request_changes.**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-15T23:23:23+00:00'
+    trace_id: 0d35650848cbb4bb1708bbfb26cb0ad6
+    span_id: da312fd8d538cd15
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31131
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31132
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31132
+    head_sha: 0cb8431fe1a59a81ecf4ef7ede87cdf1bbe29bda
+    base_ref: main
+    base_sha: 1b93868328eacd60b85fee69eaf032a36f095bb1
+    instruction: Review pr:31132 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[Blocking] Invalid geocoder coordinates become a valid-looking `(0, 0)` result** — [ip_location_controller.rb:42](/home/runner/work/biggerpockets/biggerpockets/app/controllers/api/v3/dashboard/map/ip_location_controller.rb:42). `CustomGeoPluginGeocoder` marks a result successful based only on the presence of a city, while `nil.to_f` and malformed strings become `0.0`. An incomplete upstream response therefore centers the map in the Gulf of Guinea instead of returning `location: null`. Validate that both coordinates are numeric, finite, and within geographic bounds before constructing the response, and add coverage for a successful result with missing/malformed coordinates.
+
+      **Verdict:** request_changes
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-15T23:32:01+00:00'
+    trace_id: 5acc2e3debbccdad44536f86ea253b68
+    span_id: 3fd47861c650a9bb
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31132
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31139
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31139
+    head_sha: be11f1da04dc2d82e77ff64e7e8d1d830c18c567
+    base_ref: big-22317-seat-invite-acceptance-route
+    base_sha: 59c2b4a81274308ac466adc1a9f101dc68e291f3
+    instruction: Review pr:31139 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocker:** [`copy_organization_defaults_to_business_service.rb:64`](/home/runner/work/biggerpockets/biggerpockets/app/services/marketplace/organizations/copy_organization_defaults_to_business_service.rb:64) skips type synchronization precisely when the organization is a feature-enabled team. A reused owner seat can therefore retain its old type while receiving the organization’s new subtypes and markets. The internal reconciliation path should bypass the member-edit validation and force the seat type to match the organization.
+
+      - **Blocker:** [`copy_organization_defaults_to_business_service.rb:141`](/home/runner/work/biggerpockets/biggerpockets/app/services/marketplace/organizations/copy_organization_defaults_to_business_service.rb:141) iterates every organization market while `existing_keys` remains unchanged. Because organization markets have neither a uniqueness validation nor index, duplicate source rows produce duplicate seat markets in one copy operation. Iterate unique market keys or add each newly created key to `existing_keys`.
+
+      **Verdict:** request_changes.
+  metadata:
+    severity: blocker
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: control
+    reviewed_at: '2026-09-16T17:51:00+00:00'
+    trace_id: 566eacec4b336120203e8182be6a5035
+    span_id: 4d899ae3ed97e9c7
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31139
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocker
+- id: biggerpockets-pr31147
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31147
+    head_sha: aa66163c81aa2f6b210f395d3e5f1760d47dc01e
+    base_ref: BIG-22093-lead-bundles-the-zip-purchase-door-writer-service-and-endpoint
+    base_sha: 24a00cf5809be759f1e043523b16247caef826d7
+    instruction: Review pr:31147 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — [report_idle_territories_job.rb:24](/home/runner/work/biggerpockets/biggerpockets/app/jobs/billing/lead_bundles/report_idle_territories_job.rb:24):** Rescuing every `ActiveRecordError` also swallows connection loss and query timeouts. The job can emit an error per bundle, finish successfully, and suppress Sidekiq retries while the weekly report remains incomplete. Only rescue genuinely bundle-specific failures; re-raise systemic/transient database errors.
+
+      - **Blocking — [report_idle_territories_job.rb:13](/home/runner/work/biggerpockets/biggerpockets/app/jobs/billing/lead_bundles/report_idle_territories_job.rb:13):** The weekly full-set job performs a separate search count for every idle bundle; state bundles additionally query city IDs at [scopes.rb:94](/home/runner/work/biggerpockets/biggerpockets/app/models/billing/lead_bundles/scopes.rb:94). This is an N+1 over a production-growing collection. Batch/preload city IDs by state and classify bundles using grouped demand queries rather than per-bundle queries.
+
+      **Verdict: request_changes**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: control
+    reviewed_at: '2026-09-16T22:00:12+00:00'
+    trace_id: afe2bd8104d08b91cb37f7882edf4ba1
+    span_id: 59520540f24d2aa6
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31147
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31153
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31153
+    head_sha: 32ddc30779b6e1e84ae57c1cc4b336acd16cf236
+    base_ref: main
+    base_sha: 666d1fbbf41975132e0fa5c7c33714bd474b28c1
+    instruction: Review pr:31153 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — test suite failure:** [organization_dashboards_controller_spec.rb:22](/home/runner/work/biggerpockets/biggerpockets/spec/controllers/api/v3/marketplace/organization_dashboards_controller_spec.rb:22) asserts the complete response but omits the newly added `open_seats` field. CI confirms this spec fails. Update the expected payload.
+
+      - **Blocking — expiry date shifts by timezone:** [SeatsBillingTab.tsx:194](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/OrganizationDashboard/SeatsBillingTab/SeatsBillingTab.tsx:194) formats the ISO timestamp in the browser’s timezone. For example, `2027-09-14T00:00:00Z` renders as Sep 13 in US timezones, misreporting the prepaid-through date. Format it explicitly in UTC or return/parse a date-only value.
+
+      **Verdict: request changes.**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-16T19:21:55+00:00'
+    trace_id: 7057394f771237d1f8c65dd9b9e8ffc9
+    span_id: 604198fa708d879a
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31153
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31154
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31154
+    head_sha: 9901bb656d3c32d849cd5c2334f2204daf15d3c5
+    base_ref: main
+    base_sha: 348d01856835669b81e408745caa536854b3df50
+    instruction: Review pr:31154 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — Investment-address privacy:** [organization_lead_detail_serializer.rb:148](/home/runner/work/biggerpockets/biggerpockets/app/serializers/api/v3/marketplace/organization_lead_detail_serializer.rb:148) returns a lender lead’s `property_address` verbatim to another member. Mask it with `Api::V3::Dashboard::Map::StreetAddressMasker.mask`; any associated coordinates must also use `LocationObfuscator.obfuscate`.
+
+      - **Blocking — Incomplete product logic:** [organization_lead_detail_serializer.rb:43](/home/runner/work/biggerpockets/biggerpockets/app/serializers/api/v3/marketplace/organization_lead_detail_serializer.rb:43) explicitly says the one-year “Established” cutoff is an undocumented assumption pending confirmation, while line 116 ships that arbitrary classification. Confirm and implement the product-defined rule before merging.
+
+      ## Verdict
+
+      **Request changes.**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: control
+    reviewed_at: '2026-09-17T13:16:34+00:00'
+    trace_id: 2f43b9ed3759b873f39b240168cda529
+    span_id: 384a61aca56cde71
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31154
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31155
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31155
+    head_sha: 16442f96a7e3463bacf3b4281bdebe3f938ee3a3
+    base_ref: main
+    base_sha: 348d01856835669b81e408745caa536854b3df50
+    instruction: Review pr:31155 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Verdict: request_changes
+
+      - **Blocking — partial OpenSearch state is treated as complete** ([session-start.sh:355](/home/runner/work/biggerpockets/biggerpockets/.claude/hooks/session-start.sh:355)). The hook skips provisioning when *any* index exists, although `search:indices:create_now` manages many indices. An interrupted run or newly added model leaves required indices missing permanently. Check the complete expected index set and create missing indices individually.
+
+      - **Blocking — only the primary database is checked** ([session-start.sh:376](/home/runner/work/biggerpockets/biggerpockets/.claude/hooks/session-start.sh:376)). The hook claims to prepare both `primary` and `insights2`, but skips `db:schema:load` solely from `biggerpo_test` state. If the insights database is absent or a prior multi-database load failed after primary completed, every subsequent session remains broken. Validate both databases before skipping, or prepare each independently.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-16T18:57:37+00:00'
+    trace_id: 17028c469ff887d52a8f0fb59ef6b1b0
+    span_id: 713ac8eb5cb9cca6
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31155
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31159
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31159
+    head_sha: ac71a5b275a596c7ff159ff0b74c4cfe5176b7da
+    base_ref: main
+    base_sha: b8263ceeefe66f1236bcb8fcf6e990c13c6a0d63
+    instruction: Review pr:31159 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      **Verdict: request changes**
+
+      - **Blocking — N+1/full-topic queries:** [activity_feed_serializer.rb:144](/home/runner/work/biggerpockets/biggerpockets/app/serializers/api/v3/network/activity_feed_serializer.rb:144) issues one query per distinct discussion while serializing the feed, loading every reply in each topic. A feed group can contain replies across an unbounded number of topics, compounding query count and rows loaded. Batch visible replies for all topic IDs in one query, partition them by topic, and build each `ReplyTree` from the partition; alternatively omit `page`, as the ticket permits.
+
+      - **Non-blocking — ineffective reader-visibility spec:** [activity_feed_serializer_spec.rb:126](/home/runner/work/biggerpockets/biggerpockets/spec/serializers/api/v3/network/activity_feed_serializer_spec.rb:126) claims to verify reader-specific placement but creates no replies whose visibility differs by reader. It passes even if serializer context is ignored. Place a visibility-dependent reply at the page boundary and assert different page results for an ordinary reader and a moderator.
+
+      Tests could not run because `bundle` is unavailable.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: control
+    reviewed_at: '2026-09-16T18:09:50+00:00'
+    trace_id: 35ad0379c647c5a55f6e448e92b4a491
+    span_id: b2b715c0a6f3169d
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31159
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31160
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31160
+    head_sha: 2a060aa595d4f324c44483de74d0824217b4436a
+    base_ref: main
+    base_sha: 14d06fae3e636d5427e2515a9a4d3e6ac7418a7b
+    instruction: Review pr:31160 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      # Findings
+
+      **Verdict: request_changes**
+
+      - **Blocking — forum notices disappear after redirects.** [forums_controller.rb:166](/home/runner/work/biggerpockets/biggerpockets/app/controllers/simplified_forums/forums_controller.rb:166) now sends every desktop request to the React layout, which never renders `flash[:navigation_notice]`. Banned members and onboarding links therefore arrive without the explanatory/“Next Step” notice. Expose and render server flash data in the React shell before completing rollout.
+
+      - **Blocking — gated forum signup is removed without a replacement.** [forums_controller.rb:166](/home/runner/work/biggerpockets/biggerpockets/app/controllers/simplified_forums/forums_controller.rb:166) bypasses the navigation partial that mounts `Signup::GatedPopupComponent`, so the popup can no longer appear on desktop forum pages. Mount equivalent gating in the React experience before removing the fallback.
+
+      - **Blocking — changing the forum sort no longer persists the preference.** [TopicListToolbar/index.tsx:153](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/ForumsIndex/components/TopicListToolbar/index.tsx:153) only updates local/URL state, while the removed Rails path persisted `default_sort`. Update the preferences endpoint/client mutation to save the selected sort so subsequent visits retain it.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: control
+    reviewed_at: '2026-09-16T18:16:15+00:00'
+    trace_id: 325e4a3e39957e99749fdc55b62f4efa
+    span_id: 614a913d8a0a10b3
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31160
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31161
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31161
+    head_sha: 5e5c0980f3b557decacd9021b4cc5128dddb825f
+    base_ref: main
+    base_sha: 55faf07a3de3c3b00589ae2e2a1fd1a8dd16f45d
+    instruction: Review pr:31161 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — legacy registration answers are orphaned.** [registration.rb](/home/runner/work/biggerpockets/biggerpockets/app/models/conferences/registration.rb:54) returns no question definitions for persisted registrations with an empty snapshot, while [the migration](/home/runner/work/biggerpockets/biggerpockets/db/migrate/20260916155504_add_multi_event_registration_to_conferences.rb:7) explicitly skips backfilling the new fields. Existing records consequently lose their legacy answers in management and admin views. Add a one-off maintenance task mapping the legacy question columns into `registration_questions_snapshot` and `custom_responses`, or retain a compatibility path.
+
+      **Verdict: request_changes**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-16T18:52:11+00:00'
+    trace_id: e34c8d61a7506021d887f53263254d2a
+    span_id: c540b3a0b90caec2
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31161
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31165
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31165
+    head_sha: 5d8f928e6d498a734c505b8322c05862b4340126
+    base_ref: main
+    base_sha: ee9ef370b88b85092d36f1c26e4e9484a4fd598d
+    instruction: Review pr:31165 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — Overbroad backfill corrupts unrelated properties.** [db/seeds/dashboard_map.rb:271](/home/runner/work/biggerpockets/biggerpockets/db/seeds/dashboard_map.rb:271) stamps every coordinate-bearing property in any seeded city—including non-fixture or restored records—as an exact geocode, without even matching state. This bypasses `reliably_geocoded` for locations of unknown accuracy. Restrict the update to properties owned by the deterministic seed users/investments, ideally by recorded fixture IDs or seeded email identities.
+
+      **Verdict:** Request changes.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-16T21:31:11+00:00'
+    trace_id: b27e8920778ef1f788599896ac125dfb
+    span_id: af5cf896b40b6938
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31165
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31166
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31166
+    head_sha: c9178a5ab840d6d23ae668fba208afd777e2b418
+    base_ref: main
+    base_sha: 4828df6985aa93dea2942a110c9f3178f0a1f730
+    instruction: Review pr:31166 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — incomplete phone recovery integration** — [phone_step.rb:9](/home/runner/work/biggerpockets/biggerpockets/app/models/onboardings/steps/basics_v3/phone_step.rb:9): The flow advertises account recovery, but the verified number is only stored in onboarding JSON and a TODO explicitly defers consuming it. Either integrate it with account recovery now or remove the recovery claim and unused collection.
+
+      - **Blocking — hand-rolled address parser** — [properties_step.rb:126](/home/runner/work/biggerpockets/biggerpockets/app/models/onboardings/steps/basics_v3/properties_step.rb:126): Splitting on commas and regex-matching the final token misparses valid structured addresses. Use the project’s address/geocoding infrastructure, such as `Address.parse` or Geokit, and consume its structured result.
+
+      - **Blocking — unsafe migration prerequisite** — [dedupe_basics_v3_flows_task.rb:13](/home/runner/work/biggerpockets/biggerpockets/app/tasks/maintenance/dedupe_basics_v3_flows_task.rb:13), [migration:23](/home/runner/work/biggerpockets/biggerpockets/db/migrate/20260915174726_add_unique_basics_v3_flow_per_user_to_onboardings_flows.rb:23): The PR says a manually run task must finish before deployment, otherwise the concurrent unique-index build leaves an invalid index. Moreover, `if_not_exists: true` can then skip that invalid index on retry. Provide a deploy-safe prerequisite/cleanup sequence and explicitly remove or rebuild an existing invalid index.
+
+      **Verdict: request_changes**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: control
+    reviewed_at: '2026-09-16T21:27:52+00:00'
+    trace_id: dc18894b3e66f351622374d46f6ef6ef
+    span_id: 5af8fb1b92644ef3
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31166
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31167
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31167
+    head_sha: 3c7b6a576c17d2783223adfb0f4561022b822293
+    base_ref: main
+    base_sha: e29e4c9b4e05dc75d2cf4e68ad8873ea8ca42846
+    instruction: Review pr:31167 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Request changes:** [ShareButton.tsx:33](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/TeamPage/ShareButton.tsx:33) — On mobile, `order: 1` places the Share button after every default-order child in the hero stack, including metadata, description, and website—not immediately after the identity block as intended. Long profiles push sharing to the bottom of the card. Group the identity block with the button or assign explicit sibling ordering.
+
+      Tests could not run because dependencies are not installed.
+  metadata:
+    severity: non-blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-16T21:50:52+00:00'
+    trace_id: d0e21de5cfafd051e711ac580eef20cb
+    span_id: a13de74060bdaeba
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31167
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:non-blocking
+- id: biggerpockets-pr31171
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31171
+    head_sha: d0d98103fbc717236d98d3a7a032b9f3e4900e2d
+    base_ref: BIG-22094-lead-bundles-make-an-idle-zip-territory-visible
+    base_sha: aa66163c81aa2f6b210f395d3e5f1760d47dc01e
+    instruction: Review pr:31171 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — N+1 queries in Stripe webhook fulfillment:** [`create_bundle.rb:87`](/home/runner/work/biggerpockets/biggerpockets/app/services/billing/lead_bundles/create_bundle.rb:87) calls `FeaturedInMarket#validate!` once per service line and location. These validations perform uniqueness and association queries, producing O(lines + locations) database round trips—potentially around 1,000—inside the webhook transaction. Preload/batch the referenced records and validate the collection without per-factor queries, while retaining the database unique-index backstop.
+
+      **Verdict:** Request changes.
+
+      Tests could not be run because `bundle` is unavailable in the environment.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-16T23:53:59+00:00'
+    trace_id: 7c7e42c998f121525d1584b3cb4d89a7
+    span_id: 1b4aca0824f08c4e
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31171
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31172
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31172
+    head_sha: 277c9bfdc70c248f7cc9b8fd0adb292d87b222d7
+    base_ref: main
+    base_sha: ad987f91f894c834275f827475ff31bf659d5181
+    instruction: Review pr:31172 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — Incomplete ticket implementation** — [event_detail_serializer.rb:32](/home/runner/work/biggerpockets/biggerpockets/app/serializers/api/v3/dashboard/map/event_detail_serializer.rb:32): The PR only exposes `is_attending`. It does not wire Directions to the device’s map app, navigate RSVP to the forum topic, or render the “RSVP’d” state. No ticket or author statement grants reduced scope. Implement and integrate both pin-sheet actions and button state.
+
+      - **Blocking — Existing controller spec fails** — [pins_controller_spec.rb:1216](/home/runner/work/biggerpockets/biggerpockets/spec/controllers/api/v3/dashboard/map/pins_controller_spec.rb:1216): The exact payload expectation omits the newly returned `is_attending` property. CI confirms this failure. Update the expectation and verify the suite passes.
+
+      **Verdict: request_changes**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-16T22:26:41+00:00'
+    trace_id: 6af09453a785ee8955ad5ffb6d1573a0
+    span_id: 026ea700c13c12ec
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31172
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31174
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31174
+    head_sha: c64d0effc6f5dad7b96256a523693d6ffa7713dc
+    base_ref: main
+    base_sha: d10041dff1fb352aee58e5c5372e958f26532a94
+    instruction: Review pr:31174 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[Blocking] The React forum never renders the required placeholder.** [topic_payload.rb:883](/home/runner/work/biggerpockets/biggerpockets/app/services/simplified_forums/topic_payload.rb:883) now sends `blocked: true` with nullable body/votes, but [ReplyThread.tsx:26](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/ForumTopic/components/ReplyThread.tsx:26) still renders a normal `Post`, and [index.ts:499](/home/runner/work/biggerpockets/biggerpockets/frontend/api/forums/index.ts:499) does not model `blocked` or the new nullability. Blocked replies consequently appear as blank ordinary cards—not “You blocked this member”—while controls such as Reply/Share remain visible. Add the discriminated payload type and placeholder rendering, preserving nested replies.
+
+      - **[Blocking] Deep-link placement still uses the old spliced tree.** [topic_payload.rb:838](/home/runner/work/biggerpockets/biggerpockets/app/services/simplified_forums/topic_payload.rb:838) now paginates with blocked nodes retained, while [reply_tree.rb:46](/home/runner/work/biggerpockets/biggerpockets/app/services/simplified_forums/reply_tree.rb:46) still removes them for `PostsController` placement. Children of blocked replies can therefore be assigned a different root/page, producing incorrect deep-link redirects. Build placement from the same retained tree and add coverage for a nested child across a pagination boundary.
+
+      **Verdict: request_changes**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-17T00:02:43+00:00'
+    trace_id: bc9c28ab896037ed9eda8c9f814065c4
+    span_id: aec5578bb5fad0a2
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31174
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31178
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31178
+    head_sha: 082cc096d4bcb85683e4e613f5b7470be9c75e56
+    base_ref: BIG-22088-lead-bundles-each-bundle-declares-its-own-targeting-mode
+    base_sha: 1bfbb50962427d1c271c623816fb9b546be5145b
+    instruction: Review pr:31178 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Verdict: request_changes
+
+      - **Blocking — stale quote responses can lose or cross-contaminate coverage.** [CoverageCard.tsx:79](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/LeadBundlePurchase/CoverageCard.tsx:79) captures the old `locations` and `businessId` across an asynchronous request. Concurrent ZIP submissions overwrite one another, and a response arriving after a business switch can repopulate the new business with the previous business’s ZIP, violating AC-8. Cancel/ignore stale requests and update coverage functionally against current state; also avoid clearing a newer draft at line 85.
+
+      - **Blocking — new UI violates the frontend styling contract.** [BusinessPicker.module.scss:1](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/LeadBundlePurchase/BusinessPicker.module.scss:1) and [ConfigureStep.module.scss:1](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/LeadBundlePurchase/ConfigureStep.module.scss:1) introduce CSS modules, legacy Sass colors, and arbitrary pixel values despite `frontend/AGENTS.md` requiring `css(...)` and Pockets tokens for modified React UI. Convert these styles to the prescribed Pockets styling system.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-17T03:38:04+00:00'
+    trace_id: 0f1ed6e37bf18fc638055310d7ee55b1
+    span_id: 158719a818f76ee5
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31178
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31182
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31182
+    head_sha: 417e5c1769a020752ca5ca852b51d4b1a9006f87
+    base_ref: BIG-22088-lead-bundles-each-bundle-declares-its-own-targeting-mode
+    base_sha: 2921aa24292c61acab63b9a447173f8c86597545
+    instruction: Review pr:31182 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Verdict: request_changes
+
+      - **Blocking — stale quote can cross business boundaries.** [`CoverageCard.tsx:95`](frontend/pages/Marketplace/LeadBundlePurchase/CoverageCard.tsx:95) applies a quote after awaiting it without confirming `businessId` is still current. If the buyer submits a ZIP for business A, switches to business B, then A’s request resolves, that ZIP is re-added after [`PurchaseWizard.tsx:72`](frontend/pages/Marketplace/LeadBundlePurchase/PurchaseWizard.tsx:72) cleared coverage. The summary and totals can consequently price B using A’s quote. Cancel pending requests on unmount/business change or attach the business ID to the update and reject stale results.
+
+      The prior overlapping-ZIP data-loss finding is resolved at `CoverageCard.tsx:95`, but the remaining race still makes the purchase configuration unsafe. Tests could not run because the read-only environment provides no writable Yarn cache.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-17T16:00:28+00:00'
+    trace_id: df9e1e99ec301dce0bcefd9fbc0e9a44
+    span_id: d83688f44cc306ce
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31182
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31193
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31193
+    head_sha: 79103b6a3db3213ab1b5ca0d82296edb04447154
+    base_ref: main
+    base_sha: 8825dddbffbf87c004bfc2db3dcdcd02a10fbf10
+    instruction: Review pr:31193 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      # Findings
+
+      **Verdict: request_changes**
+
+      - **Blocking — Duplicate social profiles can be created.** [organization_profile_form.rb:152](/home/runner/work/biggerpockets/biggerpockets/app/forms/marketplace/organization_profile_form.rb:152) validates each submitted row against persisted records only. Duplicate networks in one request—or concurrent requests—can therefore insert multiple rows because the migration adds no unique owner/network index. Reject duplicate request entries and add a database uniqueness constraint for organization/network pairs.
+
+      - **Blocking — Product work is explicitly unresolved.** [organization_profile_form.rb:51](/home/runner/work/biggerpockets/biggerpockets/app/forms/marketplace/organization_profile_form.rb:51) marks the tagline limit as a TODO and acknowledges that 80 characters is not a product decision. Resolve the limit with product/design and remove the deferred-work comment before merging.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-17T16:46:21+00:00'
+    trace_id: a10991e8c1e4348208a873a7214b7f8e
+    span_id: ac53dca9b73af692
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31193
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31195
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31195
+    head_sha: 591c22fef1333d04799c3ab8f991155cacd65a2a
+    base_ref: main
+    base_sha: 23125c5746c729522e0f6ad3bb59820b5f0e3424
+    instruction: Review pr:31195 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Request changes
+
+      - [frontend/pages/Marketplace/OrganizationOnboarding/team.ts:21](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/OrganizationOnboarding/team.ts:21) — The Team screen still tells logged-out visitors, “You'll create this account at the last step.” Account is now the immediately following step 6, not the last step. Update this user-facing copy and its test coverage to reflect the new flow.
+
+      Focused tests could not run because the read-only environment provides no writable Yarn cache.
+  metadata:
+    severity: non-blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-17T17:05:03+00:00'
+    trace_id: a1c62067ac92d08ad78255d7be5b045c
+    span_id: 709eabb191241653
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31195
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:non-blocking
+- id: biggerpockets-pr31198
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31198
+    head_sha: 4c0da2edbf8d5778e49f472f03c7a54fc75c2bf0
+    base_ref: main
+    base_sha: 0b4aea3f61826e01557ab33de14b2f07540a40af
+    instruction: Review pr:31198 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — incomplete ticket implementation:** [me_controller.rb](/home/runner/work/biggerpockets/biggerpockets/app/controllers/api/v3/me_controller.rb:147) only exposes a UUID prerequisite. The PR adds neither monthly/annual subscription sheets nor interception of non-subscriber navigation to Pro-only features, which are the ticket’s core behavior. Implement and integrate those flows, or provide explicit author-approved evidence that this PR is scoped solely to the backend prerequisite.
+
+      **Verdict:** Request changes.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-17T17:10:53+00:00'
+    trace_id: d42e621f290f9492283e6acfcde5e62a
+    span_id: e10a8192eb25f6d1
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31198
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: biggerpockets-pr31213
+  input:
+    repo: biggerpockets/biggerpockets
+    pr: 31213
+    head_sha: c7af50a184f3cd7773a77aa1b85bc16f11de34d2
+    base_ref: main
+    base_sha: 2c9ce8fc2412f8c0fc9328abab2ad3450b4ebdcf
+    instruction: Review pr:31213 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Verdict: request_changes
+
+      - **Blocking — account creation never advances to onboarding.** [`AcceptSeatInvite.tsx:225`](/home/runner/work/biggerpockets/biggerpockets/frontend/pages/Marketplace/AcceptSeatInvite/AcceptSeatInvite.tsx:225) merely invalidates the invite query after seating, leaving the new member on “You already accepted this invite.” The ticket requires landing on the next step already signed in and seated. The previously deferred route now exists at `/team/onboarding`; navigate there after successful acceptance and add a regression test.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 2
+    stage2_arm: control
+    reviewed_at: '2026-09-18T03:15:20+00:00'
+    trace_id: f73ba4a4e40c6801a45820206569de49
+    span_id: eb96ee59c73c8ca2
+  tags:
+  - repo:biggerpockets/biggerpockets
+  - pr:31213
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: claude-skills-pr12
+  input:
+    repo: biggerpockets/claude-skills
+    pr: 12
+    head_sha: b8cd1945245e31d5e876f9d15416a64f558aa5cc
+    base_ref: main
+    base_sha: 3a04f304544f4d375fdc350d52153b3f584cd4cf
+    instruction: Review pr:12 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[Blocking] Dispatched review runs can be attributed to the wrong PR** — [pr_checks.py:590](/home/runner/work/claude-skills/claude-skills/plugins/pr-checks/skills/pr-checks/scripts/pr_checks.py:590). The fallback accepts any new `workflow_dispatch` run since the pre-review-request snapshot. A concurrent dispatch during the initial wait can therefore be reported and monitored as this PR’s review. Add a unique dispatch correlation input/run name and match it when polling.
+
+      - **[Blocking] Screenshot detection accepts non-images** — [pr_checks.py:80](/home/runner/work/claude-skills/claude-skills/plugins/pr-checks/skills/pr-checks/scripts/pr_checks.py:80). Any `<img>` tag counts, including one without `src` or inside a Markdown code example, allowing a visual PR to pass without an actual screenshot. Parse rendered Markdown/HTML and require a genuine image source.
+
+      **Verdict: request_changes.**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-17T16:46:25+00:00'
+    trace_id: 71b01ddba488382b0daed17e0520ce68
+    span_id: 289a30c4fe1e719f
+  tags:
+  - repo:biggerpockets/claude-skills
+  - pr:12
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr10
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 10
+    head_sha: 0be37a08f80f158a5f0cc6ba7964de79cb0b1e9e
+    base_ref: main
+    base_sha: 0b13c6acdfa80611b3e38a40ebcbeceece1f7c8c
+    instruction: Review pr:10 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      # Findings
+
+      **Verdict: request_changes**
+
+      - **Blocking — Messaging was replaced with a no-op toast.** [pin-detail-sheet.tsx:130](/home/runner/work/pockets-app/pockets-app/src/components/map/pin-detail-sheet.tsx:130) previously opened/created a conversation through `messagePerson`; it now only displays “Opens your thread…”. Restore functional navigation and integration for API-backed investors rather than shipping this stub.
+
+      - **Blocking — Cluster zoom ignores east/west bounds.** [index.tsx:207](/home/runner/work/pockets-app/pockets-app/src/app/(tabs)/index.tsx:207) calculates the target span solely from `north - south`. Wide clusters can remain clustered or appear clipped. Fit the complete server-provided bounds, preferably with `fitToCoordinates`/`fitToElements`, or account for both latitude and longitude spans plus the viewport aspect ratio.
+
+      - **Minor — Empty property locations bypass the fallback label.** [index.tsx:35](/home/runner/work/pockets-app/pockets-app/src/app/(tabs)/index.tsx:35) uses `??` after `join()`, but `join()` returns `""`, not `null`/`undefined`. A property lacking address, city, and state therefore renders a blank label. Use `joined || "Your property"`.
+
+      Verification could not run because `bunx` is unavailable in the review environment.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 10
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-09T19:07:58+00:00'
+    trace_id: 38ee4e1e9692cb801d899acc42520b87
+    span_id: 0abdec2d54439181
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:10
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr12
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 12
+    head_sha: 5b6cd4478d2ba54034922baee88fab8a0d4ac960
+    base_ref: main
+    base_sha: 6afced2ede23b15e64ded213bd15654069ef0fac
+    instruction: Review pr:12 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[Blocking] Transient refresh failures still log the member out on cold start** — [`src/auth/AuthContext.tsx:39`](/home/runner/work/pockets-app/pockets-app/src/auth/AuthContext.tsx:39). Any non-`refreshed` outcome, including offline/5xx `unavailable`, transitions to `loggedOut`, exposing the login screen despite retaining valid refresh credentials. Preserve a loading/error state with retry for `unavailable`; only transition to `loggedOut` for `rejected`.
+
+      **Verdict:** request_changes.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-09T19:13:39+00:00'
+    trace_id: d3e1d7e31d53abfd91a65713bf618715
+    span_id: 6124db19233d25c1
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:12
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr15
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 15
+    head_sha: 6297616ce4731d7dd7ee57323709d9b78d420e1c
+    base_ref: main
+    base_sha: 0d9c2534787cacc26473095be72cb8e4b761cb7e
+    instruction: Review pr:15 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings — request changes
+
+      - **Blocking:** [password-reset.ts](/home/runner/work/pockets-app/pockets-app/src/api/password-reset.ts:8) explicitly stops after requesting an email and defers completion to the website. The ticket calls for setting the new password, and no GET/PUT reset implementation or reset screen exists.
+
+      - **Blocking:** [signup.tsx](/home/runner/work/pockets-app/pockets-app/src/app/(auth)/signup.tsx:174) never renders `first_name` or `last_name` error messages; it only changes field styling. Other unmapped server fields are also silently discarded after [fieldErrors](/home/runner/work/pockets-app/pockets-app/src/app/(auth)/signup.tsx:83) returns them. Render every server-named field error or fall back to a general error.
+
+      - **Blocking:** [validation-errors.ts](/home/runner/work/pockets-app/pockets-app/src/api/validation-errors.ts:16) parses a structured JSON Pointer with a regexp, missing RFC 6901 escaping such as `~0` and `~1`. Use a standards-compliant JSON Pointer parser, such as `json-pointer`’s `parse`.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: control
+    reviewed_at: '2026-09-09T19:32:00+00:00'
+    trace_id: 82cfa879a3016b35eaaaef079ef29512
+    span_id: 51193925aea3403e
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:15
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr17
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 17
+    head_sha: 9ebd89acbcfe821c3216fb1457c743e31f49e712
+    base_ref: main
+    base_sha: 99f111c6b962cc9cac3d591aa56e348648ed3c03
+    instruction: Review pr:17 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings — request_changes
+
+      - **Blocking:** [create-post.tsx:12](/home/runner/work/pockets-app/pockets-app/src/app/create-post.tsx:12) explicitly defers topic creation; `canPost` is hardcoded false at line 83 and media is disabled at line 27. The PR branch is scoped to create-post functionality, but the screen cannot post anything.
+
+      - **Blocking:** [plain-text.ts:21](/home/runner/work/pockets-app/pockets-app/src/components/activity/plain-text.ts:21) parses HTML and entities with regular expressions. Regex cannot reliably parse HTML; use a project-compatible HTML parser/renderer such as `react-native-render-html`.
+
+      - **Blocking:** [post/[id].tsx:269](/home/runner/work/pockets-app/pockets-app/src/app/post/[id].tsx:269) discards the server-provided permission action URL and displays a toast. Members blocked for upgrade or missing-profile reasons cannot perform the action required to reply. Open `action.url` through the appropriate Expo linking/browser API.
+
+      - **Bug:** [use-topic-thread.ts:173](/home/runner/work/pockets-app/pockets-app/src/components/forums/use-topic-thread.ts:173) fetches on `topicSlug` changes without resetting topic, replies, pagination, permissions, or server IDs. Reusing the route for another post can display and mutate the previous discussion until the request completes, and failed requests leave its data visible. Reset or key the state per slug and reject stale pagination responses.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-09T20:04:52+00:00'
+    trace_id: ef3138711c21d424553881fd80657341
+    span_id: a2426cdab75d2e62
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:17
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr31
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 31
+    head_sha: 73b8738f02b510fed7d474a47f44e8a96b29454f
+    base_ref: main
+    base_sha: 42cd8049a13fe0142fc72a621572f8bba4b697b5
+    instruction: Review pr:31 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[Blocking] `.claude/skills/testflight/scripts/ship-testflight.sh:42`** — `--allow-branch` is ignored when `main` is ahead of or diverged from `origin/main`, despite the new comment and commit stating it skips both safeguards. Gate the synchronization check on `ALLOW_BRANCH == 0`.
+
+      - **[Blocking] `.claude/skills/testflight/SKILL.md:15-19,32-36`** — The skill still says non-main builds must never be attempted and never documents `--allow-branch`. Since agents must follow this skill, the new escape hatch remains unusable through its intended workflow. Update the instructions and failure guidance.
+
+      **Verdict:** request changes.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: control
+    reviewed_at: '2026-09-14T17:19:58+00:00'
+    trace_id: b32685ee966b2cfeea53fe86f635d57b
+    span_id: 08588037a40729ae
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:31
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr47
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 47
+    head_sha: 9c8c56c7e4e9d000cd0c933d84ec92a59d7a58d1
+    base_ref: main
+    base_sha: 0d9c2534787cacc26473095be72cb8e4b761cb7e
+    instruction: Review pr:47 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — author editing is incomplete and falls back to the website.** [src/api/forums-topic-edit.ts:72](/home/runner/work/pockets-app/pockets-app/src/api/forums-topic-edit.ts:72) acknowledges that discussion authors cannot use the native editor, while [post-menu-sheet.tsx:141](/home/runner/work/pockets-app/pockets-app/src/components/forums/post-menu-sheet.tsx:141) routes them to a web editor. This contradicts the ticket’s native-only intent and the commit’s claim that members can edit discussions they started. Add an author-capable API/native flow or remove the claimed capability until it is complete.
+
+      ## Verdict
+
+      **request_changes**
+
+      Verification was unavailable because `bunx` is not installed in the review environment.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: control
+    reviewed_at: '2026-09-14T16:03:07+00:00'
+    trace_id: 2efbfa29555807058af555b6bf4a8b4f
+    span_id: 5da59f5d4d4ece48
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:47
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr50
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 50
+    head_sha: bfe2ca26be0cb7bca8d0aa31221f24a7b391ecab
+    base_ref: main
+    base_sha: bfe2ca26be0cb7bca8d0aa31221f24a7b391ecab
+    instruction: Review pr:50 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — incomplete diagnosis/fix** ([test/screens/map.test.tsx:144](/home/runner/work/pockets-app/pockets-app/test/screens/map.test.tsx:144)): The test replaces native `Marker` hit-testing with a `Pressable`, so it cannot reproduce or diagnose the physical-device failure. The PR neither establishes the device/simulator behavior nor fixes the reported issue. Reproduce and instrument this on-device, then address the cause and add an appropriate regression test; otherwise record non-reproduction and close without merging speculative changes.
+
+      **Verdict:** Request changes.
+
+      **Verification:** Could not run checks because Bun is unavailable in the environment.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-14T18:57:13+00:00'
+    trace_id: 0a2654bd9d858f32e003905193a8abd3
+    span_id: eb0180df4785452d
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:50
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr51
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 51
+    head_sha: eef203645d7b7c439838f564c5464de4357e3f2c
+    base_ref: main
+    base_sha: bfe2ca26be0cb7bca8d0aa31221f24a7b391ecab
+    instruction: Review pr:51 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — [src/components/map/legend-sheet.tsx:83](/home/runner/work/pockets-app/pockets-app/src/components/map/legend-sheet.tsx:83):** The investor legend still uses the removed pastel `avatarColors` treatment and old action-border styling, contradicting the new blue/white pin semantics. Update the legend to depict and explain both connected and not-yet-connected states.
+
+      ## Verdict
+
+      **Request changes.**
+
+      Verification could not run because `bunx` is unavailable in the environment.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-14T19:59:42+00:00'
+    trace_id: 03e2278425160b41ff167d84217c0ec8
+    span_id: 3848a75f9ef58489
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:51
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr59
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 59
+    head_sha: d4cab967ae5c654aa34c9600c2b2efa454ca91b0
+    base_ref: main
+    base_sha: 8247efb834c5a17f275a5c940b0454d291d3d36c
+    instruction: Review pr:59 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — splash hand-off still flashes a different background** ([app.config.ts](/home/runner/work/pockets-app/pockets-app/app.config.ts:84)): The splash uses blue backgrounds, but the first rendered logged-out/unverified screens paint `theme.colors.bg.DEFAULT` (for example, [login.tsx](/home/runner/work/pockets-app/pockets-app/src/app/(auth)/login.tsx:63)). Removing the native splash therefore produces the visible color jump the ticket sought to avoid. Add a matching transition/background layer or otherwise coordinate the splash and initial rendered screen colors.
+
+      **Verdict:** Request changes.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-14T22:51:39+00:00'
+    trace_id: 1a11b137bf51751f38b049f7847d6aef
+    span_id: 3cc4517226fa1f90
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:59
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr60
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 60
+    head_sha: 1c2dc2cfd1b7432b61ba59776ef4744247ae829d
+    base_ref: main
+    base_sha: 90be1309476a2e31a81c535c7e198069e1ef5009
+    instruction: Review pr:60 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — `.claude/settings.json:7`:** `mcp__Atlassian` auto-approves every Atlassian MCP operation, including mutating or destructive Jira actions. Allowlist only the specific read operations and narrowly required write tools instead of granting server-wide permission.
+
+      ## Verdict
+
+      **Request changes.**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-15T15:10:13+00:00'
+    trace_id: ed3822cfaf70cfaeb1c06b82647c1ce1
+    span_id: af9ec6ac81917321
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:60
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr68
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 68
+    head_sha: bd5dfad22efbfa8ea2a197f9c82ced8f55749e2e
+    base_ref: main
+    base_sha: 09941eb0318e2c1adba80e31284d167852fd0149
+    instruction: Review pr:68 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      # Findings
+
+      **Verdict: request_changes**
+
+      - **Blocking — Overlap grouping can leave markers colliding.** [proximity.ts:94](/home/runner/work/pockets-app/pockets-app/src/components/map/proximity.ts:94) compares every candidate only with the group’s seed. For a chain where A overlaps B and B overlaps C, C remains separate and can overlap the newly rendered A/B bubble. Build connected components or repeatedly merge against every group member/result until no collisions remain.
+
+      - **Blocking — Unbounded quadratic work on the UI thread.** [proximity.ts:102](/home/runner/work/pockets-app/pockets-app/src/components/map/proximity.ts:102) rescans the complete viewport response for every pin, with no API-side bound visible. Use a screen-space grid/spatial index so each marker checks only neighboring cells.
+
+      - **Bug — Dateline-spanning bubble taps compute a nearly world-wide extent.** [client-clustering.ts:54](/home/runner/work/pockets-app/pockets-app/src/components/map/client-clustering.ts:54) takes raw longitude minima/maxima, despite proximity and centroid logic supporting antimeridian wrapping. Investors around `179.999/-179.999` produce a ~360° span at [index.tsx:226](/home/runner/work/pockets-app/pockets-app/src/app/(tabs)/index.tsx:226). Calculate the shortest wrapped longitude extent.
+
+      Verification could not run because `bunx` is unavailable in the review environment.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 10
+    stage2_arm: control
+    reviewed_at: '2026-09-15T15:18:06+00:00'
+    trace_id: 81109da35b2ea4a4bcec1e40f8476efb
+    span_id: 0e92e1fc7665d8ab
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:68
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr70
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 70
+    head_sha: b05c5ac18112ec7a635e8a5795fdb8a34c1051c1
+    base_ref: main
+    base_sha: 2b99169b0e816c3d49f8d274b9794c22832c47e0
+    instruction: Review pr:70 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      # Findings
+
+      - **Blocking — `src/observability/sentry.ts:256`: performance events bypass privacy scrubbing.** `tracesSampleRate: 0.1` emits transaction/span events, but `beforeSend` only processes error events. Query strings or member data in performance telemetry can therefore reach Sentry despite the PR’s privacy guarantee. Disable tracing or implement equivalent `beforeSendTransaction`/span scrubbing.
+
+      - **Blocking — `src/observability/sentry.ts:44`: relative URLs are parsed manually.** Splitting structured URLs with `/[?#]/` violates the parser requirement. Use `new URL(url, safeBase)` and return the parsed pathname for relative URLs.
+
+      Verdict: **request_changes**.
+
+      Verification could not run because dependencies are not installed (`jest` and `bunx` unavailable).
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-15T17:15:07+00:00'
+    trace_id: c16d815af29acdcb12142361dd1d348e
+    span_id: 8320bb5931e23ba8
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:70
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr71
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 71
+    head_sha: 94549a64edfa58eaf01f6461fc34ef21a648b4ae
+    base_ref: main
+    base_sha: ed060c18fce54883148abe8d735bef4869dc0387
+    instruction: Review pr:71 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[P1] Undefined log directory breaks the rebuild command** — [`.claude/skills/simulator-screenshots/SKILL.md:46`](/home/runner/work/pockets-app/pockets-app/.claude/skills/simulator-screenshots/SKILL.md:46) writes to `$SCRATCHPAD`, which the repository and skill never define. When unset, this becomes `/build-run-ios.log`, normally causing `tee: Permission denied` and a failed pipeline. Define/create a temporary directory first (for example with `mktemp -d`) or use an explicit writable path.
+
+      **Verdict:** request changes.
+  metadata:
+    severity: non-blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-17T13:31:42+00:00'
+    trace_id: 2853e666bc42084d9444c80ae45f7ed5
+    span_id: 5493b969842a7b53
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:71
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:non-blocking
+- id: pockets-app-pr73
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 73
+    head_sha: 5c4b1d6220aff612bd1f99bb29b9d9f1a15ec626
+    base_ref: main
+    base_sha: 18aff6fb9f26976912be3b4d95c5725eeb6853a6
+    instruction: Review pr:73 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Verdict: Request changes
+
+      - **Blocking — production Android builds remain broken** ([.env.example:60](/home/runner/work/pockets-app/pockets-app/.env.example:60), [app.config.ts:114](/home/runner/work/pockets-app/pockets-app/app.config.ts:114)). The PR explicitly leaves the production API key unavailable while still generating production Android builds. Such builds omit the Maps key and, as the added comments acknowledge, crash on the home tab. Provision a production-restricted key before merging, and fail configuration/build validation clearly whenever an Android build lacks it.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 2
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-15T22:16:20+00:00'
+    trace_id: 0ad783cfe3787ae7f6ec87671659ab84
+    span_id: 036be3d0776c88c1
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:73
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr74
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 74
+    head_sha: 86da7380d68fa4063e6f9d7729014b1b4ae46d3b
+    base_ref: main
+    base_sha: 73076f912865ac4a831ef69d5f9bf152c3df04e3
+    instruction: Review pr:74 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[P2] Pinch/rotate gestures do not prevent late recentering** — [src/app/(tabs)/index.tsx:225](/home/runner/work/pockets-app/pockets-app/src/app/(tabs)/index.tsx:225) only marks `onPanDrag` as member movement. If the member pinch-zooms or rotates while location resolves, the late result still moves them away. Track all map touches/gestures, such as via `onTouchStart`, and add a regression test.
+
+      **Verdict:** Request changes.
+
+      **Verification:** Automated checks could not run because `bunx` is unavailable.
+  metadata:
+    severity: non-blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: control
+    reviewed_at: '2026-09-15T23:47:05+00:00'
+    trace_id: 82470a1f1984db85a17cadd062a7f4bc
+    span_id: 5ca5bda59b4059bb
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:74
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:non-blocking
+- id: pockets-app-pr77
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 77
+    head_sha: 2a6cbe40c280218aa52d523571b0b9253613d855
+    base_ref: main
+    base_sha: 82131b1bbed2888fc297dc94319bafb14610dbb3
+    instruction: Review pr:77 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — fallback can take twice the documented timeout.** [resolve-site-link.ts](/home/runner/work/pockets-app/pockets-app/src/links/resolve-site-link.ts:74) gives both `HEAD` and fallback `GET` independent five-second timers, so a stalled server leaves a tap unresponsive for up to ten seconds. Use one shared deadline/`AbortSignal` across both attempts.
+
+      - **Blocking — URL path structure is parsed with a regexp.** [resolve-site-link.ts](/home/runner/work/pockets-app/pockets-app/src/links/resolve-site-link.ts:13) uses `REDIRECT_ONLY_PATH` to interpret URL path components. Use the `URL` constructor followed by the project’s segment-based route matching, or `URLPattern`.
+
+      **Verdict:** request_changes.
+
+      **Verification:** lint, typecheck, and specs could not run because `bunx` is unavailable in the review environment.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-16T18:39:03+00:00'
+    trace_id: 7cdbbf06c5355222214e07d7969f18dd
+    span_id: 20ab0f322cb0fdd6
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:77
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr78
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 78
+    head_sha: 0623d135b8fe57c5789188e24fae2ae7bc0412c8
+    base_ref: main
+    base_sha: 6d3c8d59cb9dfe9b17b63e9c8fb40ba597790f3f
+    instruction: Review pr:78 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Verdict: request_changes
+
+      - **Blocking — indentation still compounds:** [reply-thread.tsx:210](/home/runner/work/pockets-app/pockets-app/src/components/forums/reply-thread.tsx:210) adds `marginLeft` around every descendant subtree. Despite `INDENT_CAP = 1`, deeper replies continue staircasing right. Remove the recursive wrapper indentation and test effective screen position, not each rail’s local margin.
+
+      - **Blocking — machine-specific dependency symlink committed:** [node_modules:1](/home/runner/work/pockets-app/pockets-app/node_modules:1) points to an absolute macOS path, breaking clean checkouts and preventing verification. Remove it from Git.
+
+      - **Blocking — configuration migration is incomplete:** [.env.example:14](/home/runner/work/pockets-app/pockets-app/.env.example:14) changes `EXPO_PUBLIC_API_URL` to Android-only, but [README.md:86](/home/runner/work/pockets-app/pockets-app/README.md:86) still documents it as the universal override and tells physical-iOS users to set it. Update the README to document both platform variables; following its current instructions leaves iOS pointed at unreachable `localhost`.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-16T18:13:42+00:00'
+    trace_id: 2235fe8e06e91484b6dc69b66f1f6d4d
+    span_id: e96b71a49f604f07
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:78
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr79
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 79
+    head_sha: 4a4523f17b867f253d34144636327ca9ff942066
+    base_ref: main
+    base_sha: 6d3c8d59cb9dfe9b17b63e9c8fb40ba597790f3f
+    instruction: Review pr:79 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — [src/push/use-notification-taps.ts:66](/home/runner/work/pockets-app/pockets-app/src/push/use-notification-taps.ts:66):** Unroutable BiggerPockets URLs open in `expo-web-browser`, which does not share the authenticated session. The ticket explicitly requires the signed-in WebView; members may instead see a login screen. Route these URLs through the authenticated WebView.
+
+      - **Blocking — [src/push/use-notification-taps.ts:70](/home/runner/work/pockets-app/pockets-app/src/push/use-notification-taps.ts:70):** An unrecognized `selected_tab` with no usable URL performs no navigation. This contradicts the ticket’s requirement that unknown tabs still open somewhere sensible. Add a defined fallback destination and update the test at [use-notification-taps.test.ts:105](/home/runner/work/pockets-app/pockets-app/src/push/__tests__/use-notification-taps.test.ts:105).
+
+      **Verdict: request_changes**
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: control
+    reviewed_at: '2026-09-16T17:50:01+00:00'
+    trace_id: 43d9cc46554b662ca0bc69080717529f
+    span_id: d21f0ff3d5da838f
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:79
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr81
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 81
+    head_sha: f332f4a5cff1d83d077e23d610dab768fe3b0157
+    base_ref: main
+    base_sha: 82131b1bbed2888fc297dc94319bafb14610dbb3
+    instruction: Review pr:81 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — edited names remain stale** ([use-profile.ts:180](/home/runner/work/pockets-app/pockets-app/src/components/profile/use-profile.ts:180)): After the edit screen triggers a refresh, the newly fetched API `displayName` is overwritten with the old auth-session name. A successful name change therefore still shows the previous name until the session is refreshed. Preserve `mine.person.name` after the API responds or update the auth state when saving, and add a refresh test covering a changed name.
+
+      ## Verdict
+
+      **request_changes**
+
+      Verification could not run because `bunx` and installed project binaries are unavailable.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: control
+    reviewed_at: '2026-09-16T18:51:44+00:00'
+    trace_id: 14ddaf041889ef7ee893ab5c030c2ac3
+    span_id: 0016177a4d3c82d1
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:81
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr83
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 83
+    head_sha: efd4d3f8dbd2e29e91a072333c897b2e6d26fcf4
+    base_ref: main
+    base_sha: 9fa5cb45f45ed9f8a13371bde9f8bc137a21793b
+    instruction: Review pr:83 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[Blocking] Background taps are incorrectly suppressed for 250 ms after any marker tap** — `src/components/map/marker-tap-guard.ts:11,36-38`. The time window treats a separate rapid background tap as the marker’s propagated press, so it may fail to dismiss the sheet. Consume a one-shot marker flag for the immediate parent event and clear it after the dispatch turn.
+
+      ## Verdict
+
+      **Request changes.**
+
+      Verification could not run because Bun and dependencies are unavailable in the review environment.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 8
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-16T20:07:53+00:00'
+    trace_id: c6c85878a01dabd3211be911deb25fac
+    span_id: cf2071b7f06dd0e6
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:83
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr85
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 85
+    head_sha: 2de166a3d1bb20c0f39223876b3510c8ac6f2f09
+    base_ref: main
+    base_sha: db91e5cdfd914e264ebaa2f2b76c631fce1de6d3
+    instruction: Review pr:85 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[P2, blocking] Locked accounts with a missing name cannot save profession/headline changes** — [edit.tsx:71](/home/runner/work/pockets-app/pockets-app/src/app/profile/edit.tsx:71). `canSave` always requires a nonempty name, even when `canChangeName` is false and no name input is available. The API mapping explicitly supports `editable_full_name: null`, so such members are permanently blocked from saving the new profession selector. Apply the name requirement only when the name is editable.
+
+      - **[P3, non-blocking] Spec asserts the opposite of its named behavior** — [edit-profile.test.tsx:244](/home/runner/work/pockets-app/pockets-app/test/screens/edit-profile.test.tsx:244). “never sends a name” currently asserts that `full_name` is present, so it cannot catch that regression. Assert `not.toHaveProperty("full_name")`, or rename the behavior if sending the unchanged value is intended.
+
+      ## Verdict
+
+      **request_changes**
+
+      Automated checks could not run because Bun and installed dependencies are unavailable.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 10
+    stage2_arm: control
+    reviewed_at: '2026-09-16T21:42:31+00:00'
+    trace_id: 333f624f8266eae81a61ea549fc70815
+    span_id: b0fcfeb6e40ec18b
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:85
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr86
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 86
+    head_sha: 32b768c85a87e0658a840fd4d88bdda7f2b5126f
+    base_ref: main
+    base_sha: cced4de25fecf580bb71c2140a9aa559fa6e64f8
+    instruction: Review pr:86 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — incomplete ticket scope:** [activity-item-card.tsx:33](/home/runner/work/pockets-app/pockets-app/src/components/activity/activity-item-card.tsx:33) explicitly defers feed reporting to BIG-22379, while DM reporting is untouched. The ticket’s purpose is App Store-ready reporting and blocking; shipping only blocking is a half-measure. Implement both report paths before merging.
+
+      - **Blocking — existing blocks cannot be managed:** [profile-view.tsx:78](/home/runner/work/pockets-app/pockets-app/src/components/profile/profile-view.tsx:78) always initializes `blocked` to `false`, and `fetchBlocks()` is never used outside tests. Reopening an already-blocked member’s profile incorrectly offers Follow/Block instead of Unblock. Load or centrally retain block state and initialize the profile from it.
+
+      - **Race condition:** [use-activity-feed.ts:98](/home/runner/work/pockets-app/pockets-app/src/components/activity/use-activity-feed.ts:98) can restore blocked-member items when a refresh or pagination request started before the block finishes afterward. Persist blocked usernames and filter every incoming page, or invalidate/refetch outstanding feed requests after blocking.
+
+      ## Verdict
+
+      **Request changes.** Verification could not run because `bunx` is unavailable in the review environment.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 10
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-16T21:42:44+00:00'
+    trace_id: f645289a5a302f9d7d4a6cc5b5493b15
+    span_id: 2c443fc1d4bc7cd7
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:86
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr88
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 88
+    head_sha: 823ef8117697e131b2c6111ccd1e52ff3cb7f75c
+    base_ref: main
+    base_sha: db91e5cdfd914e264ebaa2f2b76c631fce1de6d3
+    instruction: Review pr:88 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **[P1] Closing the profile sheet does not cancel pending Message navigation** — [use-message-member.ts:73](/home/runner/work/pockets-app/pockets-app/src/components/profile/use-message-member.ts:73). `mountedRef` remains true while `ProfileSheet` animates closed, so a lookup completing after the user dismisses the sheet can still navigate to compose/thread. Invalidate the request when closing starts or unmount `ProfileView` immediately.
+
+      **Verdict:** request_changes.
+  metadata:
+    severity: non-blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-16T21:46:32+00:00'
+    trace_id: 149f74212d5b64fb2ab487c5cc3d03b3
+    span_id: 8be1a7150a2ead3a
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:88
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:non-blocking
+- id: pockets-app-pr89
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 89
+    head_sha: 1f3218403ced65f9c320a6dba2e115f3ee56d9d3
+    base_ref: main
+    base_sha: eefdfbb54e8c51790dcde6baedb60cf4ac959171
+    instruction: Review pr:89 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — Hand-built query strings** ([open-directions.ts:33](/home/runner/work/pockets-app/pockets-app/src/links/open-directions.ts:33), [open-directions.ts:44](/home/runner/work/pockets-app/pockets-app/src/links/open-directions.ts:44), [open-directions.ts:48](/home/runner/work/pockets-app/pockets-app/src/links/open-directions.ts:48)): Direction URLs are assembled through interpolation and `encodeURIComponent`. Build each URL with `URL` and `URLSearchParams` so labels and parameters are encoded as structured data.
+
+      **Verdict:** `request_changes`
+
+      **Verification:** Lint, typecheck, and tests could not run because `bunx` and installed dependencies are unavailable. Expo SDK 57 documentation was unreachable due disabled DNS.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-16T22:09:41+00:00'
+    trace_id: b022a745b06d3fa71735829403aed495
+    span_id: 3886f541afc81f3f
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:89
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr90
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 90
+    head_sha: df4642b45836c4b98b3f050062df199d5b26af81
+    base_ref: main
+    base_sha: eefdfbb54e8c51790dcde6baedb60cf4ac959171
+    instruction: Review pr:90 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Verdict: Request changes
+
+      - **Blocking — Incomplete visual migration:** [src/components/map/legend-sheet.tsx:134](/home/runner/work/pockets-app/pockets-app/src/components/map/legend-sheet.tsx:134) still renders off-market deals as the old light circular marker, while the map now uses a dark rounded badge with a white rim. Update the legend swatch—preferably by reusing `DealPin`—and cover it with a focused test.
+
+      Tests could not be run because Bun and installed dependencies are unavailable in the review environment.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: control
+    reviewed_at: '2026-09-16T22:22:37+00:00'
+    trace_id: c83a2aa106f9d168b71de1a5cd845763
+    span_id: e149b1d61fb1a586
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:90
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr93
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 93
+    head_sha: 05b9e84b5c80e6c2ac28bd3266c50ddd5fc0aa88
+    base_ref: main
+    base_sha: 30b10462b02d2f2c1a17abe7dbf68eb2b15c39ab
+    instruction: Review pr:93 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — [src/app/(tabs)/index.tsx:598](/home/runner/work/pockets-app/pockets-app/src/app/(tabs)/index.tsx:598):** The PR avoids truncation by deleting “Add one from your portfolio” plus the property position/door count. This removes intended information instead of fixing its presentation—a clear half-measure. Preserve both lines and make the row responsive; restore coverage for empty and populated states.
+
+      **Verdict:** Request changes.
+
+      **Verification:** Could not run lint, typecheck, or tests because `bunx` is unavailable.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: control
+    reviewed_at: '2026-09-17T14:21:20+00:00'
+    trace_id: 77bd9bd7910c67b025c7fdb5e87d1d6c
+    span_id: ce73f0c284f36725
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:93
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr94
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 94
+    head_sha: 5fd70a50cd25401a25115319435934537991ca70
+    base_ref: main
+    base_sha: 12111903299fe074958e9675990abdf53dd314c4
+    instruction: Review pr:94 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Verdict: request_changes
+
+      - **Blocking — Failed sorts cannot be retried.** [`use-topic-thread.ts:875`](/home/runner/work/pockets-app/pockets-app/src/components/forums/use-topic-thread.ts:875) compares against `sortRef`, but line 877 changes that ref before the request succeeds. After failure, tapping the same option becomes a no-op while the UI still shows the previous sort. Commit the ref only after success or restore it on failure, and expose a retryable error.
+
+      - **Blocking — Pagination can race the sort request and mix sort orders.** [`use-topic-thread.ts:615`](/home/runner/work/pockets-app/pockets-app/src/components/forums/use-topic-thread.ts:615) allows `loadMore` while `sortChanging` is true; the list’s `onEndReached` remains active. Page 2 of the new sort can consequently append to the old reply window, permanently if page 1 fails. Gate pagination on `sortChangingRef` or use a separate generation for every request.
+
+      Verification could not run because `bunx` is unavailable in the review environment.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: control
+    reviewed_at: '2026-09-16T23:40:47+00:00'
+    trace_id: aa5f15a79c86fcb406db7f6dcb4eb556
+    span_id: f700fc885ecdeb5a
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:94
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr98
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 98
+    head_sha: 0415dd4854d5157d5615656be8c9a5f114f467a6
+    base_ref: main
+    base_sha: 12111903299fe074958e9675990abdf53dd314c4
+    instruction: Review pr:98 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings
+
+      - **Blocking — mention-only replies remain possible** ([reply-composer.tsx:70](/home/runner/work/pockets-app/pockets-app/src/components/forums/reply-composer.tsx:70)): `hasWrittenContent` strips the auto-tag only when the original trailing space remains. Deleting that space leaves the valid mention text (`@Investor Jane`), enables “Post reply,” and permits an otherwise empty reply. Strip the mention independently of optional separator whitespace and add a regression test for this backspace case.
+
+      **Verdict:** Request changes.
+
+      **Verification:** Automated checks could not run because `bunx` is unavailable in the environment.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 6
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-16T23:47:20+00:00'
+    trace_id: 8c6126a162fd31bf5f9d35427c3dd8bc
+    span_id: 587a1bb92fee57fc
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:98
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
+- id: pockets-app-pr103
+  input:
+    repo: biggerpockets/pockets-app
+    pr: 103
+    head_sha: 17a843d2f98bfb590086ad14141816491309ded9
+    base_ref: main
+    base_sha: 90896e0ecddf4a5edd7a989fc7a190f06d978af5
+    instruction: Review pr:103 against ticket.json/pr.diff
+  expected_output:
+    findings: |
+      ## Findings — request changes
+
+      - **Blocking:** [src/components/activity/post-card.tsx:295](/home/runner/work/pockets-app/pockets-app/src/components/activity/post-card.tsx:295) still displays “Share link copied” without copying or sharing anything. This component remains rendered by `ProfileView`, so the ticket’s second known broken share path survives unchanged. Wire it to `shareLink` with a real permalink, or remove the unusable control.
+
+      Verification could not run because `bunx` is unavailable.
+  metadata:
+    severity: blocking
+    stage2_verdict: request_changes
+    findings_lines: 4
+    stage2_arm: thesis-first
+    reviewed_at: '2026-09-17T16:22:39+00:00'
+    trace_id: f4d832f083799f386c87a253edf2e80d
+    span_id: 55e42ebe033a29d3
+  tags:
+  - repo:biggerpockets/pockets-app
+  - pr:103
+  - source_model:openai/gpt-5.6-sol
+  - stage:first_pass
+  - severity:blocking
