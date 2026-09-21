@@ -58,36 +58,23 @@ class ToApiRecords(unittest.TestCase):
         self.assertEqual(record['input']['pr'], 1)
         self.assertIn('broken', record['expected_output']['findings'])
 
-    def test_carries_the_yaml_row_id_into_metadata(self):
-        self.assertEqual(self.records[0]['metadata']['record_id'], 'repo-pr1')
+    def test_keeps_the_yaml_row_id_as_the_record_id(self):
+        # Deduplication keys on this, so a re-upload reconciles instead of doubling
+        # the dataset, and a failing result names the pull request it came from.
+        self.assertEqual(self.records[0]['id'], 'repo-pr1')
 
-    def test_sends_no_tags_field(self):
-        # This API version drops it; a read-back shows tags: []. Sending it would make
-        # the record look tagged in the file and untagged in Datadog.
-        self.assertNotIn('tags', self.records[0])
+    def test_sends_the_tags_from_the_file(self):
+        self.assertEqual(self.records[0]['tags'], ['repo:org/repo', 'pr:1'])
 
-    def test_folds_unstructured_tag_dimensions_into_metadata(self):
+    def test_leaves_metadata_as_the_file_wrote_it(self):
+        self.assertEqual(self.records[0]['metadata'],
+                         {'severity': 'blocking', 'stage2_verdict': 'request_changes'})
+
+    def test_copies_metadata_rather_than_aliasing_the_document(self):
         document = upload.load(write())
-        document['records'][0]['tags'] = ['source_model:openai/gpt-5.6-sol',
-                                          'stage:first_pass']
         record = upload.to_api_records(document)[0]
-        self.assertEqual(record['metadata']['source_model'], 'openai/gpt-5.6-sol')
-        self.assertEqual(record['metadata']['stage'], 'first_pass')
-
-    def test_skips_tag_dimensions_already_structured_elsewhere(self):
-        document = upload.load(write())
-        document['records'][0]['tags'] = ['repo:org/repo', 'pr:1', 'severity:blocking']
-        record = upload.to_api_records(document)[0]
-        for key in ('repo', 'pr'):
-            self.assertNotIn(key, record['metadata'])
-        # severity is already a real metadata field; folding must not overwrite it
-        self.assertEqual(record['metadata']['severity'], 'blocking')
-
-    def test_never_overwrites_an_existing_metadata_field(self):
-        document = upload.load(write())
-        document['records'][0]['tags'] = ['stage2_verdict:approve']
-        record = upload.to_api_records(document)[0]
-        self.assertEqual(record['metadata']['stage2_verdict'], 'request_changes')
+        record['metadata']['severity'] = 'changed'
+        self.assertEqual(document['records'][0]['metadata']['severity'], 'blocking')
 
     def test_every_record_has_the_same_keys(self):
         document = upload.load(write())
@@ -96,8 +83,13 @@ class ToApiRecords(unittest.TestCase):
         self.assertEqual({frozenset(r) for r in records},
                          {frozenset(records[0])})
 
+    def test_a_row_without_tags_still_carries_the_field(self):
+        document = upload.load(write())
+        del document['records'][0]['tags']
+        self.assertEqual(upload.to_api_records(document)[0]['tags'], [])
 
-class FindByName(unittest.TestCase):
+
+class FindProject(unittest.TestCase):
     def setUp(self):
         self.calls = []
         self.original = upload.request_json
@@ -111,35 +103,56 @@ class FindByName(unittest.TestCase):
 
     def test_returns_the_id_of_an_exact_name_match(self):
         self.stub({'data': [{'id': 'abc', 'attributes': {'name': 'gym'}}]})
-        self.assertEqual(
-            upload.find_by_name('datadoghq.com', 'k', 'a', 'projects', 'gym'), 'abc')
+        self.assertEqual(upload.find_project('datadoghq.com', 'k', 'a', 'gym'), 'abc')
 
     def test_ignores_a_near_miss_from_a_contains_filter(self):
         self.stub({'data': [{'id': 'abc', 'attributes': {'name': 'gym-staging'}}]})
-        self.assertIsNone(
-            upload.find_by_name('datadoghq.com', 'k', 'a', 'projects', 'gym'))
+        self.assertIsNone(upload.find_project('datadoghq.com', 'k', 'a', 'gym'))
 
     def test_returns_none_when_nothing_matches(self):
         self.stub({'data': []})
-        self.assertIsNone(
-            upload.find_by_name('datadoghq.com', 'k', 'a', 'datasets', 'gym'))
+        self.assertIsNone(upload.find_project('datadoghq.com', 'k', 'a', 'gym'))
 
     def test_url_encodes_the_name(self):
         self.stub({'data': []})
-        upload.find_by_name('datadoghq.com', 'k', 'a', 'projects', 'a b')
+        upload.find_project('datadoghq.com', 'k', 'a', 'a b')
         self.assertIn('a%20b', self.calls[0][1])
 
-    def test_ignores_a_same_named_dataset_in_another_project(self):
-        self.stub({'data': [{'id': 'abc', 'attributes': {
-            'name': 'gym', 'project_id': 'somewhere-else'}}]})
-        self.assertIsNone(upload.find_by_name(
-            'datadoghq.com', 'k', 'a', 'datasets', 'gym', project_id='ours'))
 
-    def test_matches_a_dataset_inside_the_requested_project(self):
-        self.stub({'data': [{'id': 'abc', 'attributes': {
-            'name': 'gym', 'project_id': 'ours'}}]})
-        self.assertEqual(upload.find_by_name(
-            'datadoghq.com', 'k', 'a', 'datasets', 'gym', project_id='ours'), 'abc')
+class ProjectDatasets(unittest.TestCase):
+    """The org-wide datasets listing ignores a project filter, so membership can only be
+    read from the route that carries the project in its path."""
+
+    def setUp(self):
+        self.calls = []
+        self.original = upload.request_json
+        self.addCleanup(setattr, upload, 'request_json', self.original)
+
+    def stub(self, payload):
+        def request_json(site, api_key, app_key, method, path, body=None):
+            self.calls.append((method, path, body))
+            return payload
+        upload.request_json = request_json
+
+    def test_maps_every_dataset_name_to_its_id(self):
+        self.stub({'data': [{'id': 'd1', 'attributes': {'name': 'gym'}},
+                            {'id': 'd2', 'attributes': {'name': 'other'}}]})
+        self.assertEqual(upload.project_datasets('datadoghq.com', 'k', 'a', 'ours'),
+                         {'gym': 'd1', 'other': 'd2'})
+
+    def test_asks_the_project_scoped_route(self):
+        self.stub({'data': []})
+        upload.project_datasets('datadoghq.com', 'k', 'a', 'ours')
+        self.assertEqual(self.calls[0][1], '/api/v2/llm-obs/v1/ours/datasets')
+
+    def test_is_empty_when_the_project_holds_nothing(self):
+        self.stub({'data': []})
+        self.assertEqual(upload.project_datasets('datadoghq.com', 'k', 'a', 'ours'), {})
+
+    def test_skips_an_entry_missing_a_name_or_an_id(self):
+        self.stub({'data': [{'id': 'd1', 'attributes': {}},
+                            {'attributes': {'name': 'gym'}}]})
+        self.assertEqual(upload.project_datasets('datadoghq.com', 'k', 'a', 'ours'), {})
 
 
 class EntityId(unittest.TestCase):
@@ -157,16 +170,22 @@ class EntityId(unittest.TestCase):
 
 
 class CreateGuards(unittest.TestCase):
-    """A create that yields no id must stop the run. The datasets endpoint files a
-    dataset under the org's default project when it cannot place it, so an id that
-    quietly came back None once put 97 rows where no experiment could see them."""
+    """A create that yields no id, or a dataset that is not in the project afterwards,
+    must stop the run. Sending the project in the body instead of the URL returns 200
+    and files the dataset under the org's default project, which once put 97 rows where
+    no experiment could see them."""
 
     def setUp(self):
+        self.calls = []
         self.original = upload.request_json
         self.addCleanup(setattr, upload, 'request_json', self.original)
+        self.original_sleep = upload.time.sleep
+        upload.time.sleep = lambda seconds: None
+        self.addCleanup(setattr, upload.time, 'sleep', self.original_sleep)
 
     def stub(self, responses):
         def request_json(site, api_key, app_key, method, path, body=None):
+            self.calls.append(f'{method} {path}')
             for fragment, payload in responses.items():
                 if fragment in f'{method} {path}':
                     return payload
@@ -183,24 +202,23 @@ class CreateGuards(unittest.TestCase):
         with self.assertRaises(upload.DatadogError):
             upload.create_dataset('datadoghq.com', 'k', 'a', 'ours', 'gym', '')
 
-    def test_dataset_landing_in_another_project_raises(self):
-        self.stub({
-            'POST': {'data': {'id': 'ds1'}},
-            'GET': {'data': {'id': 'ds1',
-                             'attributes': {'project_id': 'default-project'}}},
-        })
+    def test_creates_under_the_project_scoped_route(self):
+        self.stub({'POST': {'data': {'id': 'ds1'}},
+                   'GET': {'data': [{'id': 'ds1', 'attributes': {'name': 'gym'}}]}})
+        upload.create_dataset('datadoghq.com', 'k', 'a', 'ours', 'gym', '')
+        self.assertIn('POST /api/unstable/llm-obs/v1/ours/datasets', self.calls)
+
+    def test_a_dataset_absent_from_the_project_afterwards_raises(self):
+        self.stub({'POST': {'data': {'id': 'ds1'}},
+                   'GET': {'data': [{'id': 'elsewhere',
+                                     'attributes': {'name': 'gym'}}]}})
         with self.assertRaises(upload.DatadogError) as caught:
             upload.create_dataset('datadoghq.com', 'k', 'a', 'ours', 'gym', '')
-        self.assertIn('default-project', str(caught.exception))
+        self.assertIn('ds1', str(caught.exception))
 
     def test_an_unreadable_create_response_falls_back_to_a_lookup_by_name(self):
-        self.stub({
-            'POST': {'data': {}},
-            'GET /api/unstable/llm-obs/v1/datasets?': {'data': [{
-                'id': 'ds1', 'attributes': {'name': 'gym', 'project_id': 'ours'}}]},
-            'GET /api/unstable/llm-obs/v1/datasets/': {
-                'data': {'attributes': {'project_id': 'ours'}}},
-        })
+        self.stub({'POST': {'data': {}},
+                   'GET': {'data': [{'id': 'ds1', 'attributes': {'name': 'gym'}}]}})
         self.assertEqual(
             upload.create_dataset('datadoghq.com', 'k', 'a', 'ours', 'gym', ''), 'ds1')
 
@@ -209,30 +227,76 @@ class CreateGuards(unittest.TestCase):
         with self.assertRaises(upload.DatadogError):
             upload.create_dataset('datadoghq.com', 'k', 'a', 'ours', 'gym', '')
 
-    def test_dataset_landing_in_the_requested_project_returns_its_id(self):
-        self.stub({
-            'POST': {'data': {'id': 'ds1'}},
-            'GET': {'data': {'id': 'ds1', 'attributes': {'project_id': 'ours'}}},
-        })
+    def test_a_listing_that_lags_the_create_is_retried_not_failed(self):
+        # The project listing catches up a moment after the create; a dataset missing
+        # from the first read has not gone anywhere.
+        listings = iter([{'data': []},
+                         {'data': [{'id': 'ds1', 'attributes': {'name': 'gym'}}]}])
+
+        def request_json(site, api_key, app_key, method, path, body=None):
+            if method == 'POST':
+                return {'data': {'id': 'ds1'}}
+            return next(listings)
+        upload.request_json = request_json
         self.assertEqual(
             upload.create_dataset('datadoghq.com', 'k', 'a', 'ours', 'gym', ''), 'ds1')
+
+    def test_a_dataset_present_in_the_project_returns_its_id(self):
+        self.stub({'POST': {'data': {'id': 'ds1'}},
+                   'GET': {'data': [{'id': 'ds1', 'attributes': {'name': 'gym'}}]}})
+        self.assertEqual(
+            upload.create_dataset('datadoghq.com', 'k', 'a', 'ours', 'gym', ''), 'ds1')
+
+
+class AppendRecords(unittest.TestCase):
+    def setUp(self):
+        self.calls = []
+        self.original = upload.request_json
+        self.addCleanup(setattr, upload, 'request_json', self.original)
+
+        def request_json(site, api_key, app_key, method, path, body=None):
+            self.calls.append((method, path, body))
+            return {}
+        upload.request_json = request_json
+
+    def test_writes_to_the_project_scoped_batch_update_route(self):
+        upload.append_records('datadoghq.com', 'k', 'a', 'ours', 'ds1', [{'id': 'r1'}])
+        self.assertEqual(self.calls[0][1],
+                         '/api/v2/llm-obs/v1/ours/datasets/ds1/batch_update')
+
+    def test_sends_the_rows_as_inserts(self):
+        upload.append_records('datadoghq.com', 'k', 'a', 'ours', 'ds1', [{'id': 'r1'}])
+        attributes = self.calls[0][2]['data']['attributes']
+        self.assertEqual(attributes['insert_records'], [{'id': 'r1'}])
+        self.assertEqual(attributes['update_records'], [])
+        self.assertEqual(attributes['delete_records'], [])
+
+    def test_deduplicates_so_a_re_upload_reconciles(self):
+        upload.append_records('datadoghq.com', 'k', 'a', 'ours', 'ds1', [{'id': 'r1'}])
+        self.assertIs(self.calls[0][2]['data']['attributes']['deduplicate'], True)
+
+    def test_cuts_a_new_version_so_a_result_can_name_what_it_ran_against(self):
+        upload.append_records('datadoghq.com', 'k', 'a', 'ours', 'ds1', [{'id': 'r1'}])
+        self.assertIs(self.calls[0][2]['data']['attributes']['create_new_version'],
+                      True)
 
 
 class Batching(unittest.TestCase):
     def test_uploads_every_record_across_batches(self):
         sent = []
 
-        def append_records(site, api_key, app_key, dataset_id, records):
+        def append_records(site, api_key, app_key, project_id, dataset_id, records):
             sent.append(len(records))
             return {}
 
         original = upload.append_records
         upload.append_records = append_records
         try:
-            records = [{'input': {}, 'expected_output': {}, 'metadata': {}, 'tags': []}
-                       for _ in range(upload.BATCH_SIZE + 3)]
+            records = [{'id': str(n), 'input': {}, 'expected_output': {},
+                        'metadata': {}, 'tags': []}
+                       for n in range(upload.BATCH_SIZE + 3)]
             for start in range(0, len(records), upload.BATCH_SIZE):
-                upload.append_records('s', 'k', 'a', 'd',
+                upload.append_records('s', 'k', 'a', 'p', 'd',
                                       records[start:start + upload.BATCH_SIZE])
             self.assertEqual(sum(sent), upload.BATCH_SIZE + 3)
             self.assertEqual(sent, [upload.BATCH_SIZE, 3])
@@ -251,10 +315,11 @@ class ProjectIdFlag(unittest.TestCase):
 
         def request_json(site, api_key, app_key, method, path, body=None):
             self.calls.append(f'{method} {path}')
-            if method == 'GET' and '/datasets/' in path:
-                return {'data': {'attributes': {'project_id': 'given-uuid'}}}
             if method == 'POST' and path.endswith('/datasets'):
                 return {'data': {'id': 'ds1'}}
+            if method == 'GET' and path.endswith('/datasets'):
+                return {'data': [{'id': 'ds1', 'attributes': {
+                    'name': 'sol-first-pass-findings'}}]}
             return {'data': []}
         upload.request_json = request_json
 
