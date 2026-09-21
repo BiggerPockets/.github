@@ -75,33 +75,84 @@ def request_json(site, api_key, app_key, method, path, body=None):
         raise DatadogError(f"{method} {path} failed: {error}") from error
 
 
-def find_by_name(site, api_key, app_key, kind, name):
+def find_by_name(site, api_key, app_key, kind, name, project_id=None):
     """The id of the project/dataset called `name`, or None.
 
     Datadog's filter is a contains-match on some deployments, so the exact name is
-    re-checked here; picking a near-miss would silently write into the wrong dataset."""
+    re-checked here; picking a near-miss would silently write into the wrong dataset.
+
+    Dataset names are unique per project, not per org, so a lookup that ignores
+    `project_id` will happily return a same-named dataset belonging to somewhere
+    else and append this file's rows to it."""
     path = f"{API_PREFIX}/{kind}?filter%5Bname%5D={urllib.request.quote(name)}"
     payload = request_json(site, api_key, app_key, "GET", path)
     for item in payload.get("data") or []:
-        if ((item.get("attributes") or {}).get("name")) == name:
-            return item.get("id")
+        attributes = item.get("attributes") or {}
+        if attributes.get("name") != name:
+            continue
+        if project_id and attributes.get("project_id") != project_id:
+            continue
+        return item.get("id")
     return None
+
+
+def entity_id(payload):
+    """The id Datadog assigned, whether it wraps the object or a list of one."""
+    data = payload.get("data")
+    if isinstance(data, list):
+        data = data[0] if data else None
+    if isinstance(data, dict) and data.get("id"):
+        return data["id"]
+    return payload.get("id")
 
 
 def create_project(site, api_key, app_key, name):
     body = {"data": {"type": "projects", "attributes": {"name": name}}}
     payload = request_json(site, api_key, app_key, "POST", f"{API_PREFIX}/projects", body)
-    return (payload.get("data") or {}).get("id")
+    project_id = entity_id(payload)
+    if not project_id:
+        raise DatadogError(
+            f"created project {name} but the response carried no id: "
+            f"{json.dumps(payload)[:300]}")
+    return project_id
+
+
+def dataset_project(site, api_key, app_key, dataset_id):
+    """The project a dataset actually belongs to, read back from Datadog."""
+    payload = request_json(site, api_key, app_key, "GET",
+                           f"{API_PREFIX}/datasets/{dataset_id}")
+    data = payload.get("data")
+    if isinstance(data, list):
+        data = data[0] if data else None
+    return ((data or {}).get("attributes") or {}).get("project_id")
 
 
 def create_dataset(site, api_key, app_key, project_id, name, description):
+    """Create the dataset and confirm it landed in the project that was asked for.
+
+    An absent or unrecognised `project_id` does not fail this endpoint: Datadog files
+    the dataset under the org's default project instead, so the upload reports success
+    while the rows sit where no experiment in the intended project can reach them. The
+    read-back is what turns that into an error."""
     body = {"data": {"type": "datasets", "attributes": {
         "name": name,
         "description": description,
         "project_id": project_id,
     }}}
     payload = request_json(site, api_key, app_key, "POST", f"{API_PREFIX}/datasets", body)
-    return (payload.get("data") or {}).get("id")
+    dataset_id = entity_id(payload)
+    if not dataset_id:
+        raise DatadogError(
+            f"created dataset {name} but the response carried no id: "
+            f"{json.dumps(payload)[:300]}")
+
+    landed = dataset_project(site, api_key, app_key, dataset_id)
+    if landed != project_id:
+        raise DatadogError(
+            f"dataset {name} ({dataset_id}) belongs to project {landed!r}, not the "
+            f"requested {project_id!r}. Nothing was uploaded. Delete that dataset, "
+            f"then retry.")
+    return dataset_id
 
 
 def append_records(site, api_key, app_key, dataset_id, records):
@@ -192,7 +243,8 @@ def main(argv=None):
             project_id = create_project(site, api_key, app_key, args.project)
             print(f"Created project {args.project} ({project_id})")
 
-        dataset_id = find_by_name(site, api_key, app_key, "datasets", dataset_name)
+        dataset_id = find_by_name(site, api_key, app_key, "datasets", dataset_name,
+                                  project_id=project_id)
         if not dataset_id:
             dataset_id = create_dataset(site, api_key, app_key, project_id,
                                         dataset_name, description)

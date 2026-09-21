@@ -129,6 +129,78 @@ class FindByName(unittest.TestCase):
         upload.find_by_name('datadoghq.com', 'k', 'a', 'projects', 'a b')
         self.assertIn('a%20b', self.calls[0][1])
 
+    def test_ignores_a_same_named_dataset_in_another_project(self):
+        self.stub({'data': [{'id': 'abc', 'attributes': {
+            'name': 'gym', 'project_id': 'somewhere-else'}}]})
+        self.assertIsNone(upload.find_by_name(
+            'datadoghq.com', 'k', 'a', 'datasets', 'gym', project_id='ours'))
+
+    def test_matches_a_dataset_inside_the_requested_project(self):
+        self.stub({'data': [{'id': 'abc', 'attributes': {
+            'name': 'gym', 'project_id': 'ours'}}]})
+        self.assertEqual(upload.find_by_name(
+            'datadoghq.com', 'k', 'a', 'datasets', 'gym', project_id='ours'), 'abc')
+
+
+class EntityId(unittest.TestCase):
+    def test_reads_an_id_from_a_single_object(self):
+        self.assertEqual(upload.entity_id({'data': {'id': 'abc'}}), 'abc')
+
+    def test_reads_an_id_from_a_list_of_one(self):
+        self.assertEqual(upload.entity_id({'data': [{'id': 'abc'}]}), 'abc')
+
+    def test_falls_back_to_a_top_level_id(self):
+        self.assertEqual(upload.entity_id({'id': 'abc'}), 'abc')
+
+    def test_is_none_when_the_response_carries_no_id(self):
+        self.assertIsNone(upload.entity_id({'data': []}))
+
+
+class CreateGuards(unittest.TestCase):
+    """A create that yields no id must stop the run. The datasets endpoint files a
+    dataset under the org's default project when it cannot place it, so an id that
+    quietly came back None once put 97 rows where no experiment could see them."""
+
+    def setUp(self):
+        self.original = upload.request_json
+        self.addCleanup(setattr, upload, 'request_json', self.original)
+
+    def stub(self, responses):
+        def request_json(site, api_key, app_key, method, path, body=None):
+            for fragment, payload in responses.items():
+                if fragment in f'{method} {path}':
+                    return payload
+            return {}
+        upload.request_json = request_json
+
+    def test_project_create_without_an_id_raises(self):
+        self.stub({'POST': {'data': {}}})
+        with self.assertRaises(upload.DatadogError):
+            upload.create_project('datadoghq.com', 'k', 'a', 'gym')
+
+    def test_dataset_create_without_an_id_raises(self):
+        self.stub({'POST': {'data': {}}})
+        with self.assertRaises(upload.DatadogError):
+            upload.create_dataset('datadoghq.com', 'k', 'a', 'ours', 'gym', '')
+
+    def test_dataset_landing_in_another_project_raises(self):
+        self.stub({
+            'POST': {'data': {'id': 'ds1'}},
+            'GET': {'data': {'id': 'ds1',
+                             'attributes': {'project_id': 'default-project'}}},
+        })
+        with self.assertRaises(upload.DatadogError) as caught:
+            upload.create_dataset('datadoghq.com', 'k', 'a', 'ours', 'gym', '')
+        self.assertIn('default-project', str(caught.exception))
+
+    def test_dataset_landing_in_the_requested_project_returns_its_id(self):
+        self.stub({
+            'POST': {'data': {'id': 'ds1'}},
+            'GET': {'data': {'id': 'ds1', 'attributes': {'project_id': 'ours'}}},
+        })
+        self.assertEqual(
+            upload.create_dataset('datadoghq.com', 'k', 'a', 'ours', 'gym', ''), 'ds1')
+
 
 class Batching(unittest.TestCase):
     def test_uploads_every_record_across_batches(self):
