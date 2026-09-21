@@ -193,6 +193,22 @@ class CreateGuards(unittest.TestCase):
             upload.create_dataset('datadoghq.com', 'k', 'a', 'ours', 'gym', '')
         self.assertIn('default-project', str(caught.exception))
 
+    def test_an_unreadable_create_response_falls_back_to_a_lookup_by_name(self):
+        self.stub({
+            'POST': {'data': {}},
+            'GET /api/unstable/llm-obs/v1/datasets?': {'data': [{
+                'id': 'ds1', 'attributes': {'name': 'gym', 'project_id': 'ours'}}]},
+            'GET /api/unstable/llm-obs/v1/datasets/': {
+                'data': {'attributes': {'project_id': 'ours'}}},
+        })
+        self.assertEqual(
+            upload.create_dataset('datadoghq.com', 'k', 'a', 'ours', 'gym', ''), 'ds1')
+
+    def test_raises_when_neither_the_response_nor_a_lookup_yields_an_id(self):
+        self.stub({'POST': {'data': {}}, 'GET': {'data': []}})
+        with self.assertRaises(upload.DatadogError):
+            upload.create_dataset('datadoghq.com', 'k', 'a', 'ours', 'gym', '')
+
     def test_dataset_landing_in_the_requested_project_returns_its_id(self):
         self.stub({
             'POST': {'data': {'id': 'ds1'}},
