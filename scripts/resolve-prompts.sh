@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # resolve-prompts.sh — resolve the BiggiePockets review prompts from the registry.
 #
-# prompts/registry.json declares the codex prompt, one or more arms (each a stored
+# prompts/registry.json declares the first-pass prompt, one or more arms (each a stored
 # prompt template), the control arm, and what percentage of pull requests an
 # experiment arm gets. This script picks ONE arm per review — hash('<repo>:<pr>')
 # mod 100, below experiment_split_percent means the experiment arm — and emits only
@@ -29,7 +29,7 @@
 #
 # Inputs (env): REGISTRY_DIR, PR, GITHUB_REPOSITORY (falls back to "unknown", which
 # only changes which arm a PR lands in, never whether assignment is deterministic).
-# Outputs: codex_prompt{,_name,_version,_template}; arm_prompt{,_name,_version,_template}
+# Outputs: first_pass_prompt{,_name,_version,_template}; arm_prompt{,_name,_version,_template}
 # for the ASSIGNED arm; assigned_arm (its key); control_arm; experiment_split_percent;
 # assignment_bucket (0-99, so an assignment can be recomputed and audited from the tag
 # alone).
@@ -46,15 +46,15 @@ if [ ! -f "$REGISTRY_FILE" ]; then
 fi
 
 MAP_VERSION=$(jq -r '.version // empty' "$REGISTRY_FILE")
-CODEX_NAME=$(jq -r '.codex_prompt // empty' "$REGISTRY_FILE")
+FIRST_PASS_NAME=$(jq -r '.first_pass_prompt // empty' "$REGISTRY_FILE")
 CONTROL_ARM=$(jq -r '.control_arm // empty' "$REGISTRY_FILE")
 SPLIT_PERCENT=$(jq -r '.experiment_split_percent // 0' "$REGISTRY_FILE")
 ARMS=()
 while IFS= read -r arm; do ARMS+=("$arm"); done < <(jq -r '.arms | keys[]' "$REGISTRY_FILE")
 
-for name in "$CODEX_NAME" "$CONTROL_ARM"; do
+for name in "$FIRST_PASS_NAME" "$CONTROL_ARM"; do
   if [ -z "$name" ]; then
-    echo "::error::registry.json is missing codex_prompt or control_arm" >&2
+    echo "::error::registry.json is missing first_pass_prompt or control_arm" >&2
     exit 1
   fi
 done
@@ -157,7 +157,7 @@ write_output() { # name value — multiline-safe via GITHUB_OUTPUT heredoc; fixe
   printf '%s<<_BIGGIEPOCKETS_PROMPT_EOF_\n%s\n_BIGGIEPOCKETS_PROMPT_EOF_\n' "$name" "$value" >> "$GITHUB_OUTPUT"
 }
 
-emit_prompt "codex" "$CODEX_NAME"
+emit_prompt "first_pass" "$FIRST_PASS_NAME"
 
 # Experiment arm = the first arm that is not the control arm; there may be none (a
 # single-arm registry, e.g. after the experiment is merged away).
@@ -184,4 +184,4 @@ write_output "assignment_bucket" "$BUCKET"
 write_output "assigned_arm" "$ASSIGNED_ARM"
 emit_prompt "arm" "$(jq -r --arg a "$ASSIGNED_ARM" '.arms[$a]' "$REGISTRY_FILE")"
 
-echo "Resolved $MAP_VERSION prompts: codex=$CODEX_NAME assigned=$ASSIGNED_ARM (bucket $BUCKET, split ${SPLIT_PERCENT}% to ${EXPERIMENT_ARM:-none})"
+echo "Resolved $MAP_VERSION prompts: first_pass=$FIRST_PASS_NAME assigned=$ASSIGNED_ARM (bucket $BUCKET, split ${SPLIT_PERCENT}% to ${EXPERIMENT_ARM:-none})"

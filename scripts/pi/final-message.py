@@ -2,24 +2,22 @@
 """Print a pi pass's final assistant message from its JSON event stream.
 
 The Stage 1 review prompt's contract is that the model's final message IS the
-findings report, captured verbatim and handed to Stage 2. The Codex harness
-honored that with its own `output-file`; pi (--mode json) writes an event stream
-instead, so the report has to be lifted back out of it.
+findings report, captured verbatim and handed to Stage 2. pi (--mode json) writes
+a JSON event stream, so the report is lifted back out of it here.
 
-Extracting the message rather than asking pi to write the report to a file keeps
-that prompt — and therefore its content-derived prompt_version, which Datadog
-Prompt Tracking groups runs by — byte-identical across the harness switch. Stage 1
-output before and after the switch stays directly comparable on the same prompt
-version, which is the whole point of changing one variable at a time.
+Extracting the message keeps the review prompt free of any instruction to write
+its report to a file, which keeps the prompt's content-derived prompt_version —
+what Datadog Prompt Tracking groups runs by — a function of the review criteria
+alone.
 
 pi reports the same message twice: once as its own `message_end` event and again
 inside the terminal `agent_end` event's transcript. Either is a valid source, so
 whichever appears last wins; a run killed before `agent_end` still has its
 `message_end` events.
 
-Writes nothing and exits 0 when there is no usable message — a Stage 1 failure
-leaves empty findings and Stage 2 proceeds on its own, exactly as it did when
-Codex failed. This never fails the review.
+Writes nothing and exits 0 when there is no usable message: a Stage 1 failure
+leaves empty findings and Stage 2 proceeds on its own. This never fails the
+review.
 
 Usage: final-message.py <pi-event-stream.jsonl>
 """

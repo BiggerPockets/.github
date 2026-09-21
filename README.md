@@ -28,10 +28,11 @@ downloads that immutable handoff. If Stage 2 is rate-limited, use **Re-run faile
 the workflow run. GitHub reruns only the Stage 2 job, reusing the completed first pass
 instead of paying for it again.
 
-Some identifiers still read `codex` — the `codex` job, `codex-findings.md`, the
-`codex_model` input. They are external contracts (a required status check name, a
-filename the Stage 2 prompts reference, the `workflow_call` API) rather than descriptions
-of the harness. The Datadog span names it: `pi.first_pass`.
+The first-pass job is named `codex` and takes a `codex_model` input. Both names are
+contracts consuming repos bind to — the required status check their branch protection
+matches on, and the `workflow_call` API their caller passes — so they are fixed
+independently of what runs the stage. The Datadog span names the harness:
+`pi.first_pass`.
 
 The review logic lives centrally in this repo. Each consuming repo only adds a thin
 **caller** workflow that owns the triggers and gating and delegates to this one.
@@ -198,8 +199,8 @@ The review-stage prompts are not inline in the workflow. They live in this repo 
 
 ```
 prompts/
-  registry.json                              # arms + control arm + split + codex prompt
-  codex-first-pass.md                        # Stage 1 prompt (template)
+  registry.json                              # arms + control arm + split + first-pass prompt
+  first-pass.md                              # Stage 1 prompt (template)
   first-pass-system.md                       # Stage 1 system prompt (not registry-versioned)
   claude-synthesize.md                       # Stage 2 control arm (template)
   claude-synthesize-thesis-first.md          # Stage 2 thesis-first arm (template)
@@ -212,7 +213,7 @@ prompts/
   latter is noise. Ours states how to operate: keep going rather than yield early, verify
   before claiming, report security findings rather than soften them, use git history to
   establish intent, cite real paths and line numbers, and treat the final message as the
-  deliverable. *What* to review stays in `codex-first-pass.md`. It sits outside the registry's
+  deliverable. *What* to review stays in `first-pass.md`. It sits outside the registry's
   arm/version machinery, so its SHA-256 prefix is tagged onto the span as
   `first_pass_system_version` — editing it changes review behavior as surely as a Roll does
   and has to be just as visible in Datadog.

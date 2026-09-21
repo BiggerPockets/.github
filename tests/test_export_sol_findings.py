@@ -160,6 +160,24 @@ class ToRecord(unittest.TestCase):
         self.assertEqual(record['metadata']['stage2_verdict'], 'request_changes')
         self.assertEqual(record['metadata']['findings_lines'], 4)
 
+    def test_reads_the_prompt_version_and_line_count_under_either_tag_name(self):
+        # A trailing export window spans the tag rename, so both names appear in it.
+        renamed = span()
+        renamed['attributes']['tags'] = [
+            t for t in renamed['attributes']['tags']
+            if not t.startswith('codex_findings_lines:')
+        ] + ['first_pass_findings_lines:7', 'first_pass_prompt_version:abc123def456']
+        record = export.to_record(renamed, 'openai/gpt-5.6-sol')
+        self.assertEqual(record['metadata']['findings_lines'], 7)
+        self.assertEqual(record['metadata']['codex_prompt_version'], 'abc123def456')
+
+    def test_still_reads_the_older_tag_names(self):
+        legacy = span()
+        legacy['attributes']['tags'].append('codex_prompt_version:beefbeefbeef')
+        record = export.to_record(legacy, 'openai/gpt-5.6-sol')
+        self.assertEqual(record['metadata']['findings_lines'], 4)
+        self.assertEqual(record['metadata']['codex_prompt_version'], 'beefbeefbeef')
+
     def test_findings_are_emitted_as_a_yaml_block(self):
         record = export.to_record(span(), 'openai/gpt-5.6-sol')
         self.assertIsInstance(record['expected_output']['findings'], export.Block)

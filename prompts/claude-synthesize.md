@@ -7,7 +7,7 @@ Synthesize a single review decision for pull request #{{PR}}.
    matching them verbatim. Judge whether the change satisfies the ticket's intent, and weigh
    git history and the PR discussion (steps 3-4) as more authoritative evidence of what was
    actually meant.
-2. Read Codex's first-pass findings in codex-findings.md (if missing or empty, proceed
+2. Read the first-pass findings in first-pass-findings.md (if missing or empty, proceed
    with your own review).
 3. Read conversations.json: the PR's existing discussion (issue_comments, review_comments
    with file/line, and prior reviews). Factor this context into your review: respect

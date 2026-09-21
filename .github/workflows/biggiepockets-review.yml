@@ -76,14 +76,11 @@ on:
           trial one on a low-traffic repo before rolling it everywhere.
 
           The slug MUST be one of the models pinned in scripts/pi/models.json with "stage1"
-          in its `stages` list. Both stages now run on pi, so Stage 1 resolves models from
-          that file exactly as Stage 2 does and the run is failed early, by name, on an
-          unlisted slug rather than dying mid-review.
+          in its `stages` list, so the run fails early and by name on an unlisted slug
+          rather than dying mid-review.
 
-          The input keeps its `codex_model` name although Codex no longer runs it. Renaming
-          a workflow_call input breaks every caller that passes it, and the rename buys
-          nothing a comment cannot: the telemetry, which is what anyone debugging Stage 1
-          reads, already names pi.
+          `codex_model` is part of the workflow_call API every caller passes, so the name
+          is fixed by that contract rather than by what runs the stage.
         required: false
         default: openai/gpt-5.6-luna
         type: string
@@ -92,10 +89,6 @@ jobs:
   # The two stages intentionally run in separate jobs. GitHub can only re-run a
   # failed job (not an individual step), so this boundary lets a rate-limited Stage 2
   # run be retried without paying for another first pass.
-  #
-  # The job id is part of the required-status-check name a consuming repo's branch
-  # protection matches on, so it is an external contract rather than a description of
-  # what runs here. See the first-pass step below.
   codex:
     runs-on: ubuntu-latest
     outputs:
@@ -238,21 +231,17 @@ jobs:
         run: registry/scripts/resolve-prompts.sh
 
       # Stage 1: the first pass reviews the diff against the ticket intent and writes
-      # findings to codex-findings.md, which Stage 2 consumes.
+      # findings to first-pass-findings.md, which Stage 2 consumes.
       #
       # This pass runs on pi, the same harness as Stage 2: one place to pin a model
       # (scripts/pi/models.json), one set of published rates behind the cost telemetry,
       # and the same early failure on an unpinned slug for both stages.
       #
-      # The `codex` names here — this job, codex-findings.md, the codex_model input —
-      # are load-bearing outside this file: the filename appears in the Stage 2 prompts
-      # under prompts/, the job name is what a consuming repo's branch protection lists
-      # as a required status check, and the input name is part of the workflow_call API.
-      # They do not describe the harness. The Datadog span does (pi.first_pass), and
-      # that is what anyone debugging a first pass reads.
+      # The `codex` job id is fixed by a contract outside this file: it is what a
+      # consuming repo's branch protection lists as a required status check.
       #
       # continue-on-error keeps a first-pass failure from blocking the review: Stage 2
-      # proceeds on its own when codex-findings.md is missing or empty. The next step
+      # proceeds on its own when first-pass-findings.md is missing or empty. The next step
       # still surfaces the failure as a warning so a genuinely broken Stage 1 (e.g. a bad
       # key) doesn't silently disappear.
       - name: Install pi
@@ -283,16 +272,16 @@ jobs:
           fi
 
       - name: Record first-pass start time
-        run: echo "CODEX_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
+        run: echo "FIRST_PASS_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
 
       - name: First-pass review
-        id: codex
+        id: first_pass
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          CODEX_PROMPT: ${{ steps.resolve.outputs.codex_prompt }}
+          FIRST_PASS_PROMPT: ${{ steps.resolve.outputs.first_pass_prompt }}
         run: |
-          printf '%s' "$CODEX_PROMPT" > first-pass-prompt.txt
+          printf '%s' "$FIRST_PASS_PROMPT" > first-pass-prompt.txt
 
           # pi's stock system prompt casts the model as an editor that writes files
           # and devotes a long block to pi's own documentation — both wrong for a
@@ -329,61 +318,61 @@ jobs:
             --no-context-files --no-skills --no-extensions \
             --no-themes --no-prompt-templates \
             @first-pass-prompt.txt \
-            > codex-output.jsonl 2> codex-error.log || pi_exit=$?
+            > first-pass-output.jsonl 2> first-pass-error.log || pi_exit=$?
           pi_exit="${pi_exit:-0}"
 
-          echo "CODEX_OUTPUT_FILE=$GITHUB_WORKSPACE/codex-output.jsonl" >> "$GITHUB_ENV"
+          echo "FIRST_PASS_OUTPUT_FILE=$GITHUB_WORKSPACE/first-pass-output.jsonl" >> "$GITHUB_ENV"
 
           # The prompt's contract: the model's final message is the findings report.
-          python3 registry/scripts/pi/final-message.py codex-output.jsonl > codex-findings.md
-          if [ ! -s codex-findings.md ]; then
+          python3 registry/scripts/pi/final-message.py first-pass-output.jsonl > first-pass-findings.md
+          if [ ! -s first-pass-findings.md ]; then
             echo "::error::first-pass review produced no findings (pi exit $pi_exit)" >&2
-            tail -60 codex-error.log >&2 || true
+            tail -60 first-pass-error.log >&2 || true
             exit 1
           fi
 
       # If the first pass failed it may have left no findings file at all, so make sure
       # Stage 2 cleanly takes its no-findings path, and record a warning for observability.
       - name: Note skipped first pass
-        if: steps.codex.outcome == 'failure'
+        if: steps.first_pass.outcome == 'failure'
         run: |
           echo "::warning::Stage 1 first-pass review failed; continuing with a Stage 2-only review."
-          : > codex-findings.md
+          : > first-pass-findings.md
 
       # Persist the handoff even when the first pass failed. Stage 2 consumes the same
       # diff, ticket/discussion context, and (possibly empty) findings on every retry.
       - name: Record first-pass completion metadata
         if: always()
         run: |
-          codex_end_ns=$(date +%s%N)
-          echo "CODEX_END_NS=$codex_end_ns" >> "$GITHUB_ENV"
+          first_pass_end_ns=$(date +%s%N)
+          echo "FIRST_PASS_END_NS=$first_pass_end_ns" >> "$GITHUB_ENV"
           # pi records its usage (tokens, turn count, and a cost.total computed from the
           # model's pinned OpenRouter rates) in the event stream it just wrote. Read it
           # here and hand it to the job that reports the trace, since that stream stays
           # on this runner. One line, because the handoff is read as env.
-          codex_usage=$(python3 registry/scripts/llm-usage.py pi "${CODEX_MODEL:-unspecified}" \
-            "${CODEX_OUTPUT_FILE:-}" | tr -d '\n') || codex_usage=""
+          first_pass_usage=$(python3 registry/scripts/llm-usage.py pi "${CODEX_MODEL:-unspecified}" \
+            "${FIRST_PASS_OUTPUT_FILE:-}" | tr -d '\n') || first_pass_usage=""
           {
             echo "BASE_REF=$BASE_REF"
             echo "REVIEW_START_NS=$REVIEW_START_NS"
-            echo "CODEX_START_NS=$CODEX_START_NS"
-            echo "CODEX_END_NS=$codex_end_ns"
-            echo "CODEX_STATUS=${{ steps.codex.outcome }}"
-            echo "CODEX_USAGE_JSON=$codex_usage"
+            echo "FIRST_PASS_START_NS=$FIRST_PASS_START_NS"
+            echo "FIRST_PASS_END_NS=$first_pass_end_ns"
+            echo "FIRST_PASS_STATUS=${{ steps.first_pass.outcome }}"
+            echo "FIRST_PASS_USAGE_JSON=$first_pass_usage"
             echo "FIRST_PASS_SYSTEM_VERSION=${FIRST_PASS_SYSTEM_VERSION:-unknown}"
           } > review-context.env
-          touch codex-findings.md
+          touch first-pass-findings.md
 
       - name: Upload first-pass review handoff
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: codex-review-${{ github.run_id }}
+          name: first-pass-review-${{ github.run_id }}
           path: |
             pr.diff
             ticket.json
             conversations.json
-            codex-findings.md
+            first-pass-findings.md
             review-context.env
           if-no-files-found: error
           retention-days: 7
@@ -420,7 +409,7 @@ jobs:
       - name: Download first-pass review handoff
         uses: actions/download-artifact@v4
         with:
-          name: codex-review-${{ github.run_id }}
+          name: first-pass-review-${{ github.run_id }}
           path: .
 
       - name: Restore review context
@@ -591,7 +580,7 @@ jobs:
           # org identifier is committed here; both fall back to public defaults.
           DD_SITE: ${{ vars.DD_SITE }}
           DD_LLMOBS_ML_APP: ${{ vars.DD_LLMOBS_ML_APP }}
-          CODEX_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.codex_prompt_template }}
+          FIRST_PASS_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.first_pass_prompt_template }}
           ARM_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.arm_prompt_template }}
         run: |
           if [ -z "$DD_API_KEY" ]; then
@@ -601,14 +590,14 @@ jobs:
 
           now_ns=$(date +%s%N)
           review_start_ns="${REVIEW_START_NS:-$now_ns}"
-          codex_start_ns="${CODEX_START_NS:-$review_start_ns}"
-          codex_end_ns="${CODEX_END_NS:-$codex_start_ns}"
-          pi_start_ns="${PI_START_NS:-$codex_end_ns}"
+          first_pass_start_ns="${FIRST_PASS_START_NS:-$review_start_ns}"
+          first_pass_end_ns="${FIRST_PASS_END_NS:-$first_pass_start_ns}"
+          pi_start_ns="${PI_START_NS:-$first_pass_end_ns}"
           pi_end_ns="${PI_END_NS:-$pi_start_ns}"
 
           verdict="${VERDICT:-unknown}"
-          codex_prompt_name="${{ steps.resolve.outputs.codex_prompt_name }}"
-          codex_prompt_version="${{ steps.resolve.outputs.codex_prompt_version }}"
+          first_pass_prompt_name="${{ steps.resolve.outputs.first_pass_prompt_name }}"
+          first_pass_prompt_version="${{ steps.resolve.outputs.first_pass_prompt_version }}"
           # Travels from the first-pass job via review-context.env, since the system
           # prompt is applied there and this job never reads the file.
           first_pass_system_version="${FIRST_PASS_SYSTEM_VERSION:-unknown}"
@@ -625,10 +614,10 @@ jobs:
           arm_role="control"
           [ "$arm" != "$control_arm" ] && arm_role="experiment"
 
-          codex_status="ok"
-          [ "${CODEX_STATUS:-failure}" != "success" ] && codex_status="error"
-          codex_findings=$(cat codex-findings.md 2>/dev/null || true)
-          codex_findings_lines=$(wc -l < codex-findings.md 2>/dev/null || echo 0)
+          first_pass_status="ok"
+          [ "${FIRST_PASS_STATUS:-failure}" != "success" ] && first_pass_status="error"
+          first_pass_findings=$(cat first-pass-findings.md 2>/dev/null || true)
+          first_pass_findings_lines=$(wc -l < first-pass-findings.md 2>/dev/null || echo 0)
 
           pi_status="ok"
           [ "${{ steps.pi.outcome }}" != "success" ] && pi_status="error"
@@ -650,7 +639,7 @@ jobs:
               printf '%s' "$text"
             fi
           }
-          codex_findings_excerpt=$(truncate "$codex_findings")
+          first_pass_findings_excerpt=$(truncate "$first_pass_findings")
           summary_excerpt=$(truncate "$summary")
 
           # Prompt Tracking: each LLM span carries the registry template that produced it,
@@ -678,7 +667,7 @@ jobs:
                 )
               }'
           }
-          codex_prompt_obj=$(prompt_json "$codex_prompt_name" "$codex_prompt_version" "$CODEX_PROMPT_TEMPLATE")
+          first_pass_prompt_obj=$(prompt_json "$first_pass_prompt_name" "$first_pass_prompt_version" "$FIRST_PASS_PROMPT_TEMPLATE")
           arm_prompt_obj=$(prompt_json "$arm_prompt_name" "$arm_prompt_version" "$ARM_PROMPT_TEMPLATE")
 
           codex_model_tag="${CODEX_MODEL:-unspecified}"
@@ -700,29 +689,29 @@ jobs:
           # the runner, pinned in scripts/pi/models.json) on every pass — that is the
           # same rate table OpenRouter bills against, so cost.total is the amount the
           # pass is charged. Both stages run pi and so report identically; the first
-          # pass's counters travel from its own job in CODEX_USAGE_JSON, since its event
+          # pass's counters travel from its own job in FIRST_PASS_USAGE_JSON, since its event
           # stream stays on that runner.
           # Only usage objects are read, never message content.
           # Fall back to an empty object if the helper can't run at all, so a cost
           # problem can't cost us the quality metrics in the same payload.
           no_fields='{"model_name":"unspecified","model_provider":"unspecified","metrics":{}}'
-          codex_fields="${CODEX_USAGE_JSON:-}"
+          first_pass_fields="${FIRST_PASS_USAGE_JSON:-}"
           pi_fields=$(python3 registry/scripts/llm-usage.py pi "$pi_model_tag" "${PI_OUTPUT_FILE:-}") || pi_fields="$no_fields"
           usable='has("model_name") and has("model_provider") and has("metrics")'
-          echo "$codex_fields" | jq -e "$usable" >/dev/null 2>&1 || codex_fields="$no_fields"
+          echo "$first_pass_fields" | jq -e "$usable" >/dev/null 2>&1 || first_pass_fields="$no_fields"
           echo "$pi_fields" | jq -e "$usable" >/dev/null 2>&1 || pi_fields="$no_fields"
 
           run_id="$GITHUB_REPOSITORY-pr$PR-${{ github.run_id }}"
 
           trace_id=$(openssl rand -hex 16)
           root_span_id=$(openssl rand -hex 8)
-          codex_span_id=$(openssl rand -hex 8)
+          first_pass_span_id=$(openssl rand -hex 8)
           pi_span_id=$(openssl rand -hex 8)
 
           spans=$(jq -n \
             --arg trace_id "$trace_id" \
             --arg root_span_id "$root_span_id" \
-            --arg codex_span_id "$codex_span_id" \
+            --arg first_pass_span_id "$first_pass_span_id" \
             --arg pi_span_id "$pi_span_id" \
             --arg repo "$GITHUB_REPOSITORY" \
             --arg pr "$PR" \
@@ -731,18 +720,18 @@ jobs:
             --arg pi_model "$pi_model_tag" \
             --argjson review_start_ns "$review_start_ns" \
             --argjson root_duration "$((now_ns - review_start_ns))" \
-            --argjson codex_start_ns "$codex_start_ns" \
-            --argjson codex_duration "$((codex_end_ns - codex_start_ns))" \
+            --argjson first_pass_start_ns "$first_pass_start_ns" \
+            --argjson first_pass_duration "$((first_pass_end_ns - first_pass_start_ns))" \
             --argjson pi_start_ns "$pi_start_ns" \
             --argjson pi_duration "$((pi_end_ns - pi_start_ns))" \
-            --arg codex_status "$codex_status" \
+            --arg first_pass_status "$first_pass_status" \
             --arg pi_status "$pi_status" \
             --arg root_status "$root_status" \
-            --argjson codex_fields "$codex_fields" \
+            --argjson first_pass_fields "$first_pass_fields" \
             --argjson pi_fields "$pi_fields" \
-            --arg codex_findings_excerpt "$codex_findings_excerpt" \
+            --arg first_pass_findings_excerpt "$first_pass_findings_excerpt" \
             --arg summary_excerpt "$summary_excerpt" \
-            --argjson codex_prompt "$codex_prompt_obj" \
+            --argjson first_pass_prompt "$first_pass_prompt_obj" \
             --argjson arm_prompt "$arm_prompt_obj" \
             '[
               {
@@ -762,21 +751,21 @@ jobs:
               {
                 parent_id: $root_span_id,
                 trace_id: $trace_id,
-                span_id: $codex_span_id,
+                span_id: $first_pass_span_id,
                 name: "pi.first_pass",
-                start_ns: $codex_start_ns,
-                duration: $codex_duration,
-                status: $codex_status,
-                metrics: $codex_fields.metrics,
+                start_ns: $first_pass_start_ns,
+                duration: $first_pass_duration,
+                status: $first_pass_status,
+                metrics: $first_pass_fields.metrics,
                 meta: {
                   kind: "llm",
-                  model_name: $codex_fields.model_name,
-                  model_provider: $codex_fields.model_provider,
+                  model_name: $first_pass_fields.model_name,
+                  model_provider: $first_pass_fields.model_provider,
                   input: {
                     messages: [{role: "user", content: "Review pr:\($pr) against ticket.json/pr.diff"}],
-                    prompt: $codex_prompt
+                    prompt: $first_pass_prompt
                   },
-                  output: {messages: [{role: "assistant", content: $codex_findings_excerpt}]}
+                  output: {messages: [{role: "assistant", content: $first_pass_findings_excerpt}]}
                 }
               },
               {
@@ -793,7 +782,7 @@ jobs:
                   model_name: $pi_fields.model_name,
                   model_provider: $pi_fields.model_provider,
                   input: {
-                    messages: [{role: "user", content: $codex_findings_excerpt}],
+                    messages: [{role: "user", content: $first_pass_findings_excerpt}],
                     prompt: $arm_prompt
                   },
                   output: {messages: [{role: "assistant", content: $summary_excerpt}]}
@@ -816,10 +805,10 @@ jobs:
             --arg split_percent "$split_percent" \
             --arg codex_model "$codex_model_tag" \
             --arg pi_model "$pi_model_tag" \
-            --arg codex_prompt_name "$codex_prompt_name" \
-            --arg codex_prompt_version "$codex_prompt_version" \
+            --arg first_pass_prompt_name "$first_pass_prompt_name" \
+            --arg first_pass_prompt_version "$first_pass_prompt_version" \
             --arg first_pass_system_version "$first_pass_system_version" \
-            --argjson codex_findings_lines "$codex_findings_lines" \
+            --argjson first_pass_findings_lines "$first_pass_findings_lines" \
             --argjson spans "$spans" \
             '{
               data: {
@@ -841,9 +830,9 @@ jobs:
                     "gateway:openrouter",
                     "codex_model:\($codex_model)",
                     "pi_model:\($pi_model)",
-                    "codex_findings_lines:\($codex_findings_lines)",
-                    "codex_prompt_name:\($codex_prompt_name)",
-                    "codex_prompt_version:\($codex_prompt_version)",
+                    "first_pass_findings_lines:\($first_pass_findings_lines)",
+                    "first_pass_prompt_name:\($first_pass_prompt_name)",
+                    "first_pass_prompt_version:\($first_pass_prompt_version)",
                     "first_pass_system_version:\($first_pass_system_version)"
                   ],
                   spans: $spans

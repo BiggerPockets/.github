@@ -26,7 +26,7 @@
   "//": "Merge = fold a variant into another prompt file and remove the arm. Every",
   "//": "consuming repo resolves this one file, so a change here changes them all at once.",
   "version": 2,
-  "codex_prompt": "codex-first-pass",
+  "first_pass_prompt": "first-pass",
   "control_arm": "control",
   "experiment_split_percent": 50,
   "arms": {
