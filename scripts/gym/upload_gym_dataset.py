@@ -146,9 +146,14 @@ def create_dataset(site, api_key, app_key, project_id, name, description):
     payload = request_json(site, api_key, app_key, "POST", f"{API_PREFIX}/datasets", body)
     dataset_id = entity_id(payload)
     if not dataset_id:
+        # The dataset exists either way — a create response this function cannot read
+        # is not a reason to make the operator start over, so ask for it by name.
+        dataset_id = find_by_name(site, api_key, app_key, "datasets", name,
+                                  project_id=project_id)
+    if not dataset_id:
         raise DatadogError(
-            f"created dataset {name} but the response carried no id: "
-            f"{json.dumps(payload)[:300]}")
+            f"created dataset {name} but could not determine its id, from the "
+            f"response ({json.dumps(payload)[:200]}) or by looking it up by name")
 
     landed = dataset_project(site, api_key, app_key, dataset_id)
     if landed != project_id:
