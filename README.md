@@ -267,8 +267,9 @@ the resolver isn't deterministic, or a shared-rule edit doesn't bump versions.
 
 ### Model gym: regression set for the first-pass model
 
-Stage 1's model is a pinned choice (`scripts/pi/models.json`), and swapping it changes what
-reaches a human reviewer. Nothing in a review notices a model that quietly stops reporting a
+Stage 1's model is set by the `codex_model` workflow input — `vars.CODEX_MODEL`, falling
+back to `openai/gpt-5.6-luna` — so changing one organization variable changes what reaches a
+human reviewer across every repo at once. Nothing in a review notices a model that quietly stops reporting a
 class of defect: a finding that is never written leaves no trace, the run still passes, and
 Stage 2 verifies only what it was handed. The findings a *previous* first-pass model wrote
 are the only surviving record of what was catchable on those diffs, so they become the

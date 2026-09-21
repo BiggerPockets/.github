@@ -6,8 +6,9 @@ that span with the model that produced it (`codex_model`), the repo and PR it re
 and the verdict Stage 2 ultimately reached. That is enough to reconstruct, after the
 fact, exactly what a given first-pass model caught — which is what this script does.
 
-Why this exists: the first-pass model is a pinned choice (scripts/pi/models.json), and
-changing it changes what reaches a human reviewer. Nothing in the review itself notices
+Why this exists: the first-pass model is set by the workflow's `codex_model` input
+(`vars.CODEX_MODEL`, defaulting to openai/gpt-5.6-luna), so one organization variable
+changes what reaches a human reviewer across every repo at once. Nothing in the review itself notices
 a model that quietly stops reporting a class of defect, because a finding that is never
 written leaves no trace. The findings a *previous* model wrote are the only record of
 what was catchable on those diffs, so they become the regression set: run a candidate
