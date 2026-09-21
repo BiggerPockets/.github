@@ -275,14 +275,24 @@ Stage 2 verifies only what it was handed. The findings a *previous* first-pass m
 are the only surviving record of what was catchable on those diffs, so they become the
 regression set.
 
-`gym/sol-first-pass-findings.yaml` is that set for `openai/gpt-5.6-sol`: one record per pull
+`sol-first-pass-findings.yaml` is that set for `openai/gpt-5.6-sol`: one record per pull
 request, holding the PR to review and the findings Sol reported for it.
 
+**The dataset is not stored in this repository, and must not be.** This repository is
+public. The findings quote private source: roughly 226 distinct `file:line` anchors across
+`biggerpockets/biggerpockets`, `biggerpockets/pockets-app` and `biggerpockets/claude-skills`,
+each paired with a description of a specific defect in that file. That is a map of private
+code and its weak points. Keep the dataset in a private repository and point the workflow
+at it; `gym/` is gitignored here so it cannot be committed by accident.
+
 ```
-gym/sol-first-pass-findings.yaml     # the dataset (reviewable, diffable, org-independent)
 scripts/gym/export_sol_findings.py   # Datadog LLM Obs spans -> that YAML
 scripts/gym/upload_gym_dataset.py    # that YAML -> a Datadog LLM Obs experiments dataset
 ```
+
+The same constraint applies to anything a run produces. A replay's `findings.md`, the judge
+verdicts, and the job logs all quote the private code under review, and on a public
+repository those are world-readable for as long as they are retained.
 
 **Every record is pinned to the commit that was reviewed**, and that is what makes the
 file usable weeks later. A pull request is not a stable artifact: commits land on it after
@@ -342,7 +352,7 @@ pip install -r scripts/gym/requirements.txt
 # Needs an authenticated `gh` as well as the Datadog keys: the reviewed commit comes
 # from the GitHub Actions run, not from the span.
 DD_API_KEY=... DD_APP_KEY=... python3 scripts/gym/export_sol_findings.py \
-    --model openai/gpt-5.6-sol --since now-30d --out gym/sol-first-pass-findings.yaml
+    --model openai/gpt-5.6-sol --since now-30d --out ../private-gym/sol-first-pass-findings.yaml
 
 python3 scripts/gym/upload_gym_dataset.py --project 'code-review-gym' --dry-run
 DD_API_KEY=... DD_APP_KEY=... python3 scripts/gym/upload_gym_dataset.py \
