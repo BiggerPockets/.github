@@ -31,6 +31,10 @@ These endpoints are Datadog's `unstable` LLM Obs experiments API; the path prefi
 constant below because Datadog moves it when the API stabilizes, and a 404 on every
 call is the symptom.
 
+A project is looked up by name and created when absent. Pass `--project-id` when the
+project already exists and its UUID is known: it skips the lookup, so a name that the
+search does not return cannot lead to a second project with the same name.
+
 Usage:
   DD_API_KEY=... DD_APP_KEY=... scripts/gym/upload_gym_dataset.py \
       --project 'code-review-gym' --file gym/sol-first-pass-findings.yaml
@@ -208,6 +212,8 @@ def main(argv=None):
     parser.add_argument("--file", default="gym/sol-first-pass-findings.yaml")
     parser.add_argument("--project", required=True,
                         help="LLM Obs experiments project (created when absent)")
+    parser.add_argument("--project-id",
+                        help="the project's UUID, to skip resolving it by name")
     parser.add_argument("--dataset",
                         help="dataset name; defaults to dataset.name in the file")
     parser.add_argument("--dry-run", action="store_true",
@@ -238,7 +244,9 @@ def main(argv=None):
     site = os.environ.get("DD_SITE", "datadoghq.com")
 
     try:
-        project_id = find_by_name(site, api_key, app_key, "projects", args.project)
+        project_id = args.project_id
+        if not project_id:
+            project_id = find_by_name(site, api_key, app_key, "projects", args.project)
         if not project_id:
             project_id = create_project(site, api_key, app_key, args.project)
             print(f"Created project {args.project} ({project_id})")
