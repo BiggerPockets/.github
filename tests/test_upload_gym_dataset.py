@@ -224,6 +224,41 @@ class Batching(unittest.TestCase):
             upload.append_records = original
 
 
+class ProjectIdFlag(unittest.TestCase):
+    """A project UUID given on the command line must skip name resolution entirely.
+    Looking a name up and missing it creates a second project with that same name."""
+
+    def setUp(self):
+        self.calls = []
+        self.original = upload.request_json
+        self.addCleanup(setattr, upload, 'request_json', self.original)
+
+        def request_json(site, api_key, app_key, method, path, body=None):
+            self.calls.append(f'{method} {path}')
+            if method == 'GET' and '/datasets/' in path:
+                return {'data': {'attributes': {'project_id': 'given-uuid'}}}
+            if method == 'POST' and path.endswith('/datasets'):
+                return {'data': {'id': 'ds1'}}
+            return {'data': []}
+        upload.request_json = request_json
+
+    def run_upload(self, *extra):
+        import os
+        os.environ['DD_API_KEY'] = 'k'
+        os.environ['DD_APP_KEY'] = 'a'
+        self.addCleanup(os.environ.pop, 'DD_API_KEY', None)
+        self.addCleanup(os.environ.pop, 'DD_APP_KEY', None)
+        return upload.main(['--file', write(), '--project', 'gym', *extra])
+
+    def test_skips_the_project_lookup_and_uploads_into_the_given_project(self):
+        self.assertEqual(self.run_upload('--project-id', 'given-uuid'), 0)
+        self.assertFalse(any('/projects' in call for call in self.calls))
+
+    def test_resolves_the_project_by_name_when_no_uuid_is_given(self):
+        self.run_upload()
+        self.assertTrue(any('/projects' in call for call in self.calls))
+
+
 class DryRun(unittest.TestCase):
     def test_calls_datadog_for_nothing(self):
         def explode(*args, **kwargs):
