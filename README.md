@@ -353,6 +353,17 @@ deletes rows, so re-uploading the same file appends duplicates — refresh into 
 `--dataset` name unless you mean to extend an existing one. `--dry-run` needs no credentials
 and prints the first record exactly as it would be sent.
 
+Both keys are required, and the application key is the one usually missing: sending spans (what
+the review workflow does) needs only an API key, while reading spans and writing datasets need
+an application key too.
+
+The datasets API stores `input`, `expected_output` and `metadata`. It has no per-record tags
+field in this version — it accepts one and drops it, and a read-back shows `tags: []` — so the
+uploader folds the YAML's tag dimensions into `metadata` instead. `repo`, `pr` and `severity`
+are skipped there because they are already structured fields; `source_model` is the one that
+earns a per-record slot, since it is what tells rows apart the moment a second model's findings
+are appended to the same dataset.
+
 **Scoring a candidate.** An experiment reads `input`, checks out `head_sha`, runs the
 candidate first-pass model over the diff reconstructed above, and compares its output to
 `expected_output.findings`. The

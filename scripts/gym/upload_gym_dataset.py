@@ -110,21 +110,36 @@ def append_records(site, api_key, app_key, dataset_id, records):
                         f"{API_PREFIX}/datasets/{dataset_id}/records", body)
 
 
+# The YAML carries `key:value` tags, but this version of the datasets API has no tags
+# field on a record — it accepts the key and drops it, and a read-back shows `tags: []`.
+# Rather than send something that silently goes nowhere, the dimensions that are not
+# already structured elsewhere are folded into metadata, which does persist. `repo` and
+# `pr` are skipped because they are already first-class fields on `input`.
+TAGS_ALREADY_STRUCTURED = ("repo", "pr", "severity")
+
+
 def to_api_records(document):
     """Flatten the YAML rows into the shape the datasets API stores.
 
     The record `id` from the file is carried into metadata rather than sent as the
     Datadog record id: the API assigns its own, and losing the link back to the YAML row
-    would make a failing experiment result impossible to trace to a source PR."""
+    would make a failing experiment result impossible to trace to a source PR.
+
+    Tag dimensions are folded into metadata for the reason above. `source_model` is the
+    one that earns its place per-record rather than per-dataset: the moment a second
+    model's rows are appended to the same dataset, it is what tells them apart."""
     out = []
     for record in document.get("records") or []:
         metadata = dict(record.get("metadata") or {})
         metadata["record_id"] = record.get("id")
+        for tag in record.get("tags") or []:
+            key, _, value = tag.partition(":")
+            if key and value and key not in TAGS_ALREADY_STRUCTURED:
+                metadata.setdefault(key, value)
         out.append({
             "input": record.get("input"),
             "expected_output": record.get("expected_output"),
             "metadata": metadata,
-            "tags": record.get("tags") or [],
         })
     return out
 

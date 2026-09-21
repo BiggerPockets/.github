@@ -61,8 +61,33 @@ class ToApiRecords(unittest.TestCase):
     def test_carries_the_yaml_row_id_into_metadata(self):
         self.assertEqual(self.records[0]['metadata']['record_id'], 'repo-pr1')
 
-    def test_preserves_tags(self):
-        self.assertIn('repo:org/repo', self.records[0]['tags'])
+    def test_sends_no_tags_field(self):
+        # This API version drops it; a read-back shows tags: []. Sending it would make
+        # the record look tagged in the file and untagged in Datadog.
+        self.assertNotIn('tags', self.records[0])
+
+    def test_folds_unstructured_tag_dimensions_into_metadata(self):
+        document = upload.load(write())
+        document['records'][0]['tags'] = ['source_model:openai/gpt-5.6-sol',
+                                          'stage:first_pass']
+        record = upload.to_api_records(document)[0]
+        self.assertEqual(record['metadata']['source_model'], 'openai/gpt-5.6-sol')
+        self.assertEqual(record['metadata']['stage'], 'first_pass')
+
+    def test_skips_tag_dimensions_already_structured_elsewhere(self):
+        document = upload.load(write())
+        document['records'][0]['tags'] = ['repo:org/repo', 'pr:1', 'severity:blocking']
+        record = upload.to_api_records(document)[0]
+        for key in ('repo', 'pr'):
+            self.assertNotIn(key, record['metadata'])
+        # severity is already a real metadata field; folding must not overwrite it
+        self.assertEqual(record['metadata']['severity'], 'blocking')
+
+    def test_never_overwrites_an_existing_metadata_field(self):
+        document = upload.load(write())
+        document['records'][0]['tags'] = ['stage2_verdict:approve']
+        record = upload.to_api_records(document)[0]
+        self.assertEqual(record['metadata']['stage2_verdict'], 'request_changes')
 
     def test_every_record_has_the_same_keys(self):
         document = upload.load(write())
