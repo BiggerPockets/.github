@@ -1,23 +1,29 @@
 name: Weekly pi model freshness check
 
-# scripts/pi/models.json pins the OpenRouter list rates Stage 2 (pi) bills against
-# and reviews on. Prices move, uptime degrades, and better/cheaper models ship on
-# their own schedule, so this runs weekly and opens an issue when any of that has
-# drifted: a pinned rate no longer matches OpenRouter's live price, a pinned model
-# has dropped out of the catalog or its uptime has slipped below 95%, or a cheaper
-# reasoning-capable model with comparable context and healthy uptime has shown up.
-# It never edits models.json itself — swapping a review model is a judgment call
-# on review quality that no API can make, so this only surfaces what changed for a
-# human to act on.
+# scripts/pi/models.json pins the OpenRouter list rates each review stage bills
+# against and reviews on. Prices move, uptime degrades, and better/cheaper models
+# ship on their own schedule, so this runs weekly and opens an issue when any of
+# that has drifted: a pinned rate no longer matches OpenRouter's live price, a
+# pinned model has dropped out of the catalog or its uptime has slipped below 95%,
+# or a cheaper reasoning-capable model with comparable context and healthy uptime
+# has shown up. It never edits models.json itself — swapping a review model is a
+# judgment call on review quality that no API can make, so this only surfaces what
+# changed for a human to act on.
 #
-# "Cheaper" is judged on an *effective* $/1M rate, not the raw input price: pi's
-# review prompts are almost entirely re-sent (cached) context, so OpenRouter's
-# prompt-cache discount dominates real cost far more than the list input rate
-# does. The effective rate blends a model's input/cacheRead/output rates by the
-# actual token mix observed on pi's own review spans in Datadog LLM Observability
-# (DD_API_KEY/DD_APP_KEY below), refreshed on every run over a 90-day window so
-# the blend tracks usage as it drifts rather than going stale. Without those
-# secrets set, the check still runs — it just falls back to the raw input rate.
+# Both stages are checked, separately. They pin different models, run different
+# workloads, and have very different token mixes, so a single blended verdict would
+# describe neither: Stage 1 explores a repo over many turns, Stage 2 reads a diff
+# plus the Stage 1 handoff in far fewer. Each stage gets its own chart and its own
+# issue thread.
+#
+# "Cheaper" is judged on an *effective* $/1M rate, not the raw input price: review
+# prompts are almost entirely re-sent (cached) context, so OpenRouter's prompt-cache
+# discount dominates real cost far more than the list input rate does. The effective
+# rate blends a model's input/cacheRead/output rates by the actual token mix observed
+# on that stage's own review spans in Datadog LLM Observability (DD_API_KEY/DD_APP_KEY
+# below), refreshed on every run over a 90-day window so the blend tracks usage as it
+# drifts rather than going stale. Without those secrets set, the check still runs — it
+# just falls back to the raw input rate.
 
 on:
   schedule:
@@ -30,6 +36,13 @@ jobs:
     permissions:
       contents: write
       issues: write
+    strategy:
+      # Each stage commits its own chart to this repo. Running them in parallel
+      # would race two pushes against the same branch, so they go one at a time.
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        stage: [stage1, stage2]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,9 +55,11 @@ jobs:
         env:
           DD_API_KEY: ${{ secrets.DD_API_KEY }}
           DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
-        run: python3 scripts/pi/check_model_freshness.py scripts/pi/models.json > freshness.json
+        run: |
+          python3 scripts/pi/check_model_freshness.py \
+            --stage=${{ matrix.stage }} scripts/pi/models.json > freshness.json
 
-      - name: Commit the price/uptime chart when one was generated
+      - name: Commit the price/quality chart when one was generated
         id: chart
         run: |
           chart_path=$(jq -r '.chart_path // empty' freshness.json)
@@ -59,8 +74,14 @@ jobs:
           if git diff --cached --quiet; then
             echo "Chart unchanged."
           else
-            git commit -m "Update weekly pi model freshness chart"
-            git push
+            git commit -m "Update weekly ${{ matrix.stage }} model freshness chart"
+            # The other stage in this matrix may have pushed its own chart since
+            # this job checked out, so rebase onto it rather than failing.
+            for attempt in 1 2 3; do
+              git pull --rebase --autostash origin "${GITHUB_REF_NAME}" && git push && break
+              echo "Push attempt $attempt failed; retrying."
+              sleep 5
+            done
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "path=$chart_path" >> "$GITHUB_OUTPUT"
@@ -70,20 +91,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CHART_SHA: ${{ steps.chart.outputs.sha }}
           CHART_PATH: ${{ steps.chart.outputs.path }}
+          STAGE: ${{ matrix.stage }}
         run: |
           notable=$(jq -r '.notable' freshness.json)
           if [ "$notable" != "true" ]; then
-            echo "Nothing notable this week."
+            echo "Nothing notable this week for $STAGE."
             exit 0
           fi
 
           body=$(mktemp)
           {
-            echo "Weekly check of \`scripts/pi/models.json\` against OpenRouter's live catalog."
+            echo "Weekly check of the \`$STAGE\` models pinned in \`scripts/pi/models.json\` against OpenRouter's live catalog."
             echo
 
             if [ -n "$CHART_SHA" ]; then
-              echo "![Price vs. context](https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${CHART_SHA}/${CHART_PATH})"
+              echo "![Price vs. coding score](https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${CHART_SHA}/${CHART_PATH})"
               echo
             fi
 
@@ -129,7 +151,15 @@ jobs:
 
             token_mix_present=$(jq -r 'if .token_mix then "true" else "false" end' freshness.json)
             if [ "$token_mix_present" = "true" ]; then
-              jq -r '.token_mix | "_Effective $/1M blends each model'"'"'s input/cacheRead/output rates by pi'"'"'s own review token mix over the trailing \(.window | ltrimstr("now-")): \((.fresh_input_share*100)|round)% fresh input, \((.cache_read_share*100)|round)% cache read, \((.output_share*100)|round)% output, from \(.sample_count) sampled review spans._"' freshness.json
+              jq -r '.token_mix | "_Effective $/1M blends each model'"'"'s input/cacheRead/output rates by this stage'"'"'s own review token mix over the trailing \(.window | ltrimstr("now-")): \((.fresh_input_share*100)|round)% fresh input, \((.cache_read_share*100)|round)% cache read, \((.output_share*100)|round)% output, from \(.sample_count) sampled review spans._"' freshness.json
+              echo
+
+              context_present=$(jq -r 'if .token_mix.context then "true" else "false" end' freshness.json)
+              if [ "$context_present" = "true" ]; then
+                jq -r '.token_mix as $m | $m.context | "_Context sizing uses the working context — what the pass has to HOLD — not what it is billed for. Largest seen: \(.max_working_context_tokens) tokens over up to \(.max_turns) turns, from \(.sample_count) spans reporting a turn count. Peak billed input was \($m.max_input_tokens) tokens, which counts a multi-turn pass'"'"'s prefix once per turn; gating on that figure would mark almost every model inadequate._"' freshness.json
+              else
+                echo "_No model is marked inadequate on context this run: no sampled span reported a turn count, and without one there is no way to tell a long agentic session from a single huge prompt. Spans recorded from now on carry \`turn_count\`._"
+              fi
             else
               echo "_Effective \$/1M falls back to the raw input rate this run — Datadog credentials weren't available to compute the real token mix._"
             fi
@@ -138,9 +168,10 @@ jobs:
             echo "This is an automated nudge to look, not a recommendation — review quality still needs a human call before rolling any model in \`scripts/pi/models.json\`."
           } > "$body"
 
-          existing=$(gh issue list --search 'in:title "pi model freshness check" is:open' --json number --jq '.[0].number')
+          title="Weekly pi model freshness check ($STAGE) found something"
+          existing=$(gh issue list --search "in:title \"pi model freshness check ($STAGE)\" is:open" --json number --jq '.[0].number')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body-file "$body"
           else
-            gh issue create --title "Weekly pi model freshness check found something" --body-file "$body"
+            gh issue create --title "$title" --body-file "$body"
           fi
