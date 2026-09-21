@@ -217,6 +217,14 @@ prompts/
   arm/version machinery, so its SHA-256 prefix is tagged onto the span as
   `first_pass_system_version` — editing it changes review behavior as surely as a Roll does
   and has to be just as visible in Datadog.
+
+  Its bar for what counts as a reportable finding — report what the author would fix if
+  they knew, skip what rests on unstated assumptions or on speculation about code nobody
+  looked at — is adapted from the review rubric in
+  [`openai/codex`](https://github.com/openai/codex)
+  (`codex-rs/prompts/templates/review/rubric.md`, Apache-2.0). The criteria are adapted;
+  that rubric's output format is not, since Stage 1 owes Stage 2 a markdown report and
+  leaves the verdict to it.
 - **Templates + shared blocks.** Each prompt references the shared rule blocks via
   `{{@prompts/_shared/<name>.md}}`, so the Stage 1 and Stage-2 prompts can never drift out of
   sync. Prompts resolve `{{PR}}`, `{{PROMPT_NAME}}`, `{{PROMPT_VERSION}}` too.
