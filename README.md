@@ -442,6 +442,17 @@ Severity weighting comes from the dataset, not the judge, so it cannot drift bet
 Findings a candidate reports that the baseline missed are counted as `extra` and never
 penalised: the baseline is a previous model, not ground truth.
 
+**Concurrency is bounded by credit, not throughput.** OpenRouter reserves credit against every
+in-flight request rather than charging only what a request finally costs, so running many
+large-context replays at once returns `402 Payment Required: This request would exceed your
+available credits given your current in-flight requests`. A 402 loses that replay instead of
+queueing it. A full run at 8-way parallelism failed this way on well over half its jobs while a
+3-record run at the same setting passed cleanly, so the symptom only appears at scale. Tune
+`max_parallel` (default 3) and top up the balance before a wide run.
+
+That key is shared organization-wide, so this ceiling is shared with real reviews happening at
+the same time — a wide gym run can starve production PR reviews of credit, not just itself.
+
 Results land in the run summary and in the `gym-summary` artifact.
 
 **Member data.** The findings are model-written prose about source code, not member records.
