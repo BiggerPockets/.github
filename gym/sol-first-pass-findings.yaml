@@ -39,6 +39,7 @@ records:
     findings_lines: 8
     stage2_arm: thesis-first
     reviewed_at: '2026-09-09T17:18:08+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: 31c3ba0eed0fb7d94eac90e5e381a80d
     span_id: 56179a7279a85b0b
   tags:
@@ -68,6 +69,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-09T17:44:53+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: 989abd858f37c196e0440e6551c89dfa
     span_id: 0761d255deec57ae
   tags:
@@ -95,6 +97,7 @@ records:
     findings_lines: 2
     stage2_arm: control
     reviewed_at: '2026-09-09T18:46:41+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: 6fadbb5ed89e449a68a59a8391d0f719
     span_id: 9cf37cbe03a6d01c
   tags:
@@ -124,6 +127,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-09T19:41:46+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: f764a5a8823ed8d33237664e2cd3cce0
     span_id: 149be3dd79f978a3
   tags:
@@ -155,6 +159,7 @@ records:
     findings_lines: 6
     stage2_arm: control
     reviewed_at: '2026-09-09T20:19:24+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: 25c43bbf35c1c9e7a665ccd7f54336a3
     span_id: 847e2526611b8c95
   tags:
@@ -184,6 +189,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-10T14:20:22+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: 714a679b5bc884897d1ad2c6e49adb8e
     span_id: d4059a01d2102d29
   tags:
@@ -211,6 +217,7 @@ records:
     findings_lines: 2
     stage2_arm: thesis-first
     reviewed_at: '2026-09-09T22:18:01+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: 85ef781be9e75256b73ca8dc07498df6
     span_id: c9ff61165dd1acb2
   tags:
@@ -242,6 +249,7 @@ records:
     findings_lines: 6
     stage2_arm: control
     reviewed_at: '2026-09-09T22:13:07+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: 5702a782042b28fa6878078a1ba72535
     span_id: ea39952ae5900d86
   tags:
@@ -271,6 +279,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-16T21:54:56+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: dba821be3cd791c13f43788e314626f9
     span_id: 9c81f10e192f4d68
   tags:
@@ -300,6 +309,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-10T22:22:55+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: e7cff429303ce2634dddf82ea3cb17ae
     span_id: f3361f00d1f17e81
   tags:
@@ -331,6 +341,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-10T15:20:12+00:00'
+    codex_prompt_version: a4e4f6c28d36
     trace_id: a8affb1db47ef98afeef2457497065c4
     span_id: 0735e41f3be87166
   tags:
@@ -364,6 +375,7 @@ records:
     findings_lines: 8
     stage2_arm: control
     reviewed_at: '2026-09-10T18:59:03+00:00'
+    codex_prompt_version: 3183fb0fcc76
     trace_id: f70c65eb3c1591b6fc807b5889fb0c97
     span_id: f06da6345936e8f9
   tags:
@@ -391,6 +403,7 @@ records:
     findings_lines: 2
     stage2_arm: thesis-first
     reviewed_at: '2026-09-10T01:57:45+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: 9f5b442292a0efe22f4b7691bc28a513
     span_id: ef1dab01d04eadec
   tags:
@@ -422,6 +435,7 @@ records:
     findings_lines: 6
     stage2_arm: control
     reviewed_at: '2026-09-10T02:04:25+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: dc609646df77a2b0b9ce708c6b25d46e
     span_id: 41408017edd70ea7
   tags:
@@ -451,6 +465,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-10T14:31:15+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: b897fddb3fca090dc06abc6ae4c9828a
     span_id: 0e485e03f63c8c5b
   tags:
@@ -482,6 +497,7 @@ records:
     findings_lines: 6
     stage2_arm: control
     reviewed_at: '2026-09-10T09:45:39+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: fd34b9a9ef3d510d25ddeb1abf992bd2
     span_id: 062ee3bf06cf35a4
   tags:
@@ -517,6 +533,7 @@ records:
     findings_lines: 10
     stage2_arm: control
     reviewed_at: '2026-09-10T09:45:39+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: abea48e85fa26f63ce018380883df82c
     span_id: eb8fc12beea91a0f
   tags:
@@ -544,6 +561,7 @@ records:
     findings_lines: 2
     stage2_arm: thesis-first
     reviewed_at: '2026-09-10T10:31:17+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: 6f71ea116ad68b8976f5d90569565db1
     span_id: ef03f446f8edd263
   tags:
@@ -575,6 +593,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-10T17:36:07+00:00'
+    codex_prompt_version: a4e4f6c28d36
     trace_id: b42bcf40fa55fa41bc46e7ba6ba32725
     span_id: 18d798396a9a79f9
   tags:
@@ -604,6 +623,7 @@ records:
     findings_lines: 5
     stage2_arm: control
     reviewed_at: '2026-09-10T14:30:31+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: d5df29fa0f61cd1310efc97c44b79f16
     span_id: b5df07c58cf5bda7
   tags:
@@ -637,6 +657,7 @@ records:
     findings_lines: 8
     stage2_arm: thesis-first
     reviewed_at: '2026-09-10T19:21:07+00:00'
+    codex_prompt_version: 3183fb0fcc76
     trace_id: b878963f5b734cd415e6c12534cb9306
     span_id: 4d5d61efd35b1960
   tags:
@@ -666,6 +687,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-10T17:52:19+00:00'
+    codex_prompt_version: a4e4f6c28d36
     trace_id: dcc988d6b4a6f0cdb13287e8b117b7b0
     span_id: 6b8bc345097f62b9
   tags:
@@ -699,6 +721,7 @@ records:
     findings_lines: 8
     stage2_arm: thesis-first
     reviewed_at: '2026-09-10T20:50:22+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 0e1a6cecf9f51a1fa093fd085f7251ea
     span_id: 9f0762d0717f1563
   tags:
@@ -728,6 +751,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-14T13:40:51+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: dc0966d2bf9aca9900b6be1c2f1ed463
     span_id: 6ddd36eb571066b4
   tags:
@@ -757,6 +781,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-14T13:42:38+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: be587eb5bc93e1f7539bfb3674b436ae
     span_id: 231fc6410baf4068
   tags:
@@ -788,6 +813,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-14T15:31:53+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 258c8c6259349d71e71e236c91bd0edc
     span_id: cc2009319d50fadd
   tags:
@@ -817,6 +843,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-14T17:07:27+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 9e93659863115808f77105aa8d8d216f
     span_id: 85911d6da92303d4
   tags:
@@ -844,6 +871,7 @@ records:
     findings_lines: 2
     stage2_arm: control
     reviewed_at: '2026-09-14T21:43:33+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 409104b0897d334c168032d97dfd5081
     span_id: 446f1baa7248320a
   tags:
@@ -871,6 +899,7 @@ records:
     findings_lines: 2
     stage2_arm: control
     reviewed_at: '2026-09-14T18:25:34+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 0275c8452a0e18ba6e3401c7ba7266c3
     span_id: 8fb91f2c38ca3453
   tags:
@@ -902,6 +931,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-14T18:49:16+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 32d60f3996f4c2f192cd3bdaac2e3c22
     span_id: bd305beb409e85b5
   tags:
@@ -935,6 +965,7 @@ records:
     findings_lines: 8
     stage2_arm: control
     reviewed_at: '2026-09-15T19:43:43+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 9c250c8a8360c12464b8226b122e21e2
     span_id: eab83e48e2ba02a1
   tags:
@@ -966,6 +997,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-15T18:48:15+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 1607f526c5744df81eff35259794d4a1
     span_id: 20c93bfedc17de08
   tags:
@@ -999,6 +1031,7 @@ records:
     findings_lines: 8
     stage2_arm: thesis-first
     reviewed_at: '2026-09-17T15:51:30+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 569f969ab0a1d6147a67ddac30fa5cda
     span_id: 33f2c331c0730b74
   tags:
@@ -1028,6 +1061,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-14T21:37:28+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: a564e66907e19fab5410ba7a9b0853ee
     span_id: 8f3a86b1cd8f02a3
   tags:
@@ -1059,6 +1093,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-15T02:44:05+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 48710f53e8bc4e4ed6a5b86ff6f85682
     span_id: 6b44b5a2db671c60
   tags:
@@ -1090,6 +1125,7 @@ records:
     findings_lines: 6
     stage2_arm: control
     reviewed_at: '2026-09-15T16:02:27+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: b31729915fa29e061b385227544a441b
     span_id: ed1b11c47eecfc98
   tags:
@@ -1117,6 +1153,7 @@ records:
     findings_lines: 2
     stage2_arm: control
     reviewed_at: '2026-09-15T15:41:51+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: e7e1aa33094c247ce976b8da9385d817
     span_id: efb1a4805c14fcd9
   tags:
@@ -1148,6 +1185,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-15T15:49:54+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 53adacf960ff0791a62e78393b6c3cb8
     span_id: fb8f510a7b626454
   tags:
@@ -1175,6 +1213,7 @@ records:
     findings_lines: 2
     stage2_arm: thesis-first
     reviewed_at: '2026-09-16T18:38:58+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 1bd6622e7bb9bc0096c4cd93ed8b526d
     span_id: ac2340884f29c58f
   tags:
@@ -1206,6 +1245,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-15T20:29:09+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 818e03628f8cd7b136b3642c130c3053
     span_id: c507948ebd9f340d
   tags:
@@ -1235,6 +1275,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-15T19:46:44+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 615127bac61e3ffc362f240a469da611
     span_id: 5e1d65688701acfd
   tags:
@@ -1264,6 +1305,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-15T18:39:09+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 63223448f6a22fabe00bffefe4697ccf
     span_id: 330e133336a50064
   tags:
@@ -1293,6 +1335,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-15T19:24:48+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: a0c622408b4df65e67973994b8ce9931
     span_id: 92ac2c7c8426265f
   tags:
@@ -1322,6 +1365,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-15T20:16:29+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: bf741052d9c84cf79233f94870355732
     span_id: 9e5ef526044f02c2
   tags:
@@ -1351,6 +1395,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-17T15:54:40+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 5187bc5e72de8e1e6470475c5e9fe1cb
     span_id: 107b5e43d1059335
   tags:
@@ -1384,6 +1429,7 @@ records:
     findings_lines: 8
     stage2_arm: thesis-first
     reviewed_at: '2026-09-15T23:23:23+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 0d35650848cbb4bb1708bbfb26cb0ad6
     span_id: da312fd8d538cd15
   tags:
@@ -1413,6 +1459,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-15T23:32:01+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 5acc2e3debbccdad44536f86ea253b68
     span_id: 3fd47861c650a9bb
   tags:
@@ -1444,6 +1491,7 @@ records:
     findings_lines: 6
     stage2_arm: control
     reviewed_at: '2026-09-16T17:51:00+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 566eacec4b336120203e8182be6a5035
     span_id: 4d899ae3ed97e9c7
   tags:
@@ -1475,6 +1523,7 @@ records:
     findings_lines: 6
     stage2_arm: control
     reviewed_at: '2026-09-16T22:00:12+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: afe2bd8104d08b91cb37f7882edf4ba1
     span_id: 59520540f24d2aa6
   tags:
@@ -1506,6 +1555,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-16T19:21:55+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 7057394f771237d1f8c65dd9b9e8ffc9
     span_id: 604198fa708d879a
   tags:
@@ -1539,6 +1589,7 @@ records:
     findings_lines: 8
     stage2_arm: control
     reviewed_at: '2026-09-17T13:16:34+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 2f43b9ed3759b873f39b240168cda529
     span_id: 384a61aca56cde71
   tags:
@@ -1568,6 +1619,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-16T18:57:37+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 17028c469ff887d52a8f0fb59ef6b1b0
     span_id: 713ac8eb5cb9cca6
   tags:
@@ -1601,6 +1653,7 @@ records:
     findings_lines: 8
     stage2_arm: control
     reviewed_at: '2026-09-16T18:09:50+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 35ad0379c647c5a55f6e448e92b4a491
     span_id: b2b715c0a6f3169d
   tags:
@@ -1634,6 +1687,7 @@ records:
     findings_lines: 8
     stage2_arm: control
     reviewed_at: '2026-09-16T18:16:15+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 325e4a3e39957e99749fdc55b62f4efa
     span_id: 614a913d8a0a10b3
   tags:
@@ -1663,6 +1717,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-16T18:52:11+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: e34c8d61a7506021d887f53263254d2a
     span_id: c540b3a0b90caec2
   tags:
@@ -1692,6 +1747,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-16T21:31:11+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: b27e8920778ef1f788599896ac125dfb
     span_id: af5cf896b40b6938
   tags:
@@ -1725,6 +1781,7 @@ records:
     findings_lines: 8
     stage2_arm: control
     reviewed_at: '2026-09-16T21:27:52+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: dc18894b3e66f351622374d46f6ef6ef
     span_id: 5af8fb1b92644ef3
   tags:
@@ -1754,6 +1811,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-16T21:50:52+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: d0e21de5cfafd051e711ac580eef20cb
     span_id: a13de74060bdaeba
   tags:
@@ -1785,6 +1843,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-16T23:53:59+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 7c7e42c998f121525d1584b3cb4d89a7
     span_id: 1b4aca0824f08c4e
   tags:
@@ -1816,6 +1875,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-16T22:26:41+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 6af09453a785ee8955ad5ffb6d1573a0
     span_id: 026ea700c13c12ec
   tags:
@@ -1847,6 +1907,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-17T00:02:43+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: bc9c28ab896037ed9eda8c9f814065c4
     span_id: aec5578bb5fad0a2
   tags:
@@ -1876,6 +1937,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-17T03:38:04+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 0f1ed6e37bf18fc638055310d7ee55b1
     span_id: 158719a818f76ee5
   tags:
@@ -1905,6 +1967,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-17T16:00:28+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: df9e1e99ec301dce0bcefd9fbc0e9a44
     span_id: d83688f44cc306ce
   tags:
@@ -1936,6 +1999,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-17T16:46:21+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: a10991e8c1e4348208a873a7214b7f8e
     span_id: ac53dca9b73af692
   tags:
@@ -1965,6 +2029,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-17T17:05:03+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: a1c62067ac92d08ad78255d7be5b045c
     span_id: 709eabb191241653
   tags:
@@ -1994,6 +2059,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-17T17:10:53+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: d42e621f290f9492283e6acfcde5e62a
     span_id: e10a8192eb25f6d1
   tags:
@@ -2021,6 +2087,7 @@ records:
     findings_lines: 2
     stage2_arm: control
     reviewed_at: '2026-09-18T03:15:20+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: f73ba4a4e40c6801a45820206569de49
     span_id: eb96ee59c73c8ca2
   tags:
@@ -2052,6 +2119,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-17T16:46:25+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 71b01ddba488382b0daed17e0520ce68
     span_id: 289a30c4fe1e719f
   tags:
@@ -2087,6 +2155,7 @@ records:
     findings_lines: 10
     stage2_arm: thesis-first
     reviewed_at: '2026-09-09T19:07:58+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: 38ee4e1e9692cb801d899acc42520b87
     span_id: 0abdec2d54439181
   tags:
@@ -2116,6 +2185,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-09T19:13:39+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: d3e1d7e31d53abfd91a65713bf618715
     span_id: 6124db19233d25c1
   tags:
@@ -2147,6 +2217,7 @@ records:
     findings_lines: 6
     stage2_arm: control
     reviewed_at: '2026-09-09T19:32:00+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: 82cfa879a3016b35eaaaef079ef29512
     span_id: 51193925aea3403e
   tags:
@@ -2180,6 +2251,7 @@ records:
     findings_lines: 8
     stage2_arm: thesis-first
     reviewed_at: '2026-09-09T20:04:52+00:00'
+    codex_prompt_version: 301569d42943
     trace_id: ef3138711c21d424553881fd80657341
     span_id: a2426cdab75d2e62
   tags:
@@ -2211,6 +2283,7 @@ records:
     findings_lines: 6
     stage2_arm: control
     reviewed_at: '2026-09-14T17:19:58+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: b32685ee966b2cfeea53fe86f635d57b
     span_id: 08588037a40729ae
   tags:
@@ -2244,6 +2317,7 @@ records:
     findings_lines: 8
     stage2_arm: control
     reviewed_at: '2026-09-14T16:03:07+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 2efbfa29555807058af555b6bf4a8b4f
     span_id: 5da59f5d4d4ece48
   tags:
@@ -2275,6 +2349,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-14T18:57:13+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 0a2654bd9d858f32e003905193a8abd3
     span_id: eb0180df4785452d
   tags:
@@ -2308,6 +2383,7 @@ records:
     findings_lines: 8
     stage2_arm: thesis-first
     reviewed_at: '2026-09-14T19:59:42+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 03e2278425160b41ff167d84217c0ec8
     span_id: 3848a75f9ef58489
   tags:
@@ -2337,6 +2413,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-14T22:51:39+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 1a11b137bf51751f38b049f7847d6aef
     span_id: 3cc4517226fa1f90
   tags:
@@ -2368,6 +2445,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-15T15:10:13+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: ed3822cfaf70cfaeb1c06b82647c1ce1
     span_id: af9ec6ac81917321
   tags:
@@ -2403,6 +2481,7 @@ records:
     findings_lines: 10
     stage2_arm: control
     reviewed_at: '2026-09-15T15:18:06+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 81109da35b2ea4a4bcec1e40f8476efb
     span_id: 0e92e1fc7665d8ab
   tags:
@@ -2436,6 +2515,7 @@ records:
     findings_lines: 8
     stage2_arm: thesis-first
     reviewed_at: '2026-09-15T17:15:07+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: c16d815af29acdcb12142361dd1d348e
     span_id: 8320bb5931e23ba8
   tags:
@@ -2465,6 +2545,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-17T13:31:42+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 2853e666bc42084d9444c80ae45f7ed5
     span_id: 5493b969842a7b53
   tags:
@@ -2492,6 +2573,7 @@ records:
     findings_lines: 2
     stage2_arm: thesis-first
     reviewed_at: '2026-09-15T22:16:20+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 0ad783cfe3787ae7f6ec87671659ab84
     span_id: 036be3d0776c88c1
   tags:
@@ -2523,6 +2605,7 @@ records:
     findings_lines: 6
     stage2_arm: control
     reviewed_at: '2026-09-15T23:47:05+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 82470a1f1984db85a17cadd062a7f4bc
     span_id: 5ca5bda59b4059bb
   tags:
@@ -2556,6 +2639,7 @@ records:
     findings_lines: 8
     stage2_arm: thesis-first
     reviewed_at: '2026-09-16T18:39:03+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 7cdbbf06c5355222214e07d7969f18dd
     span_id: 20ab0f322cb0fdd6
   tags:
@@ -2587,6 +2671,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-16T18:13:42+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 2235fe8e06e91484b6dc69b66f1f6d4d
     span_id: e96b71a49f604f07
   tags:
@@ -2618,6 +2703,7 @@ records:
     findings_lines: 6
     stage2_arm: control
     reviewed_at: '2026-09-16T17:50:01+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 43d9cc46554b662ca0bc69080717529f
     span_id: d21f0ff3d5da838f
   tags:
@@ -2651,6 +2737,7 @@ records:
     findings_lines: 8
     stage2_arm: control
     reviewed_at: '2026-09-16T18:51:44+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 14ddaf041889ef7ee893ab5c030c2ac3
     span_id: 0016177a4d3c82d1
   tags:
@@ -2684,6 +2771,7 @@ records:
     findings_lines: 8
     stage2_arm: thesis-first
     reviewed_at: '2026-09-16T20:07:53+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: c6c85878a01dabd3211be911deb25fac
     span_id: cf2071b7f06dd0e6
   tags:
@@ -2719,6 +2807,7 @@ records:
     findings_lines: 10
     stage2_arm: control
     reviewed_at: '2026-09-16T21:42:31+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 333f624f8266eae81a61ea549fc70815
     span_id: b0fcfeb6e40ec18b
   tags:
@@ -2754,6 +2843,7 @@ records:
     findings_lines: 10
     stage2_arm: thesis-first
     reviewed_at: '2026-09-16T21:42:44+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: f645289a5a302f9d7d4a6cc5b5493b15
     span_id: 2c443fc1d4bc7cd7
   tags:
@@ -2783,6 +2873,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-16T21:46:32+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 149f74212d5b64fb2ab487c5cc3d03b3
     span_id: 8be1a7150a2ead3a
   tags:
@@ -2814,6 +2905,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-16T22:09:41+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: b022a745b06d3fa71735829403aed495
     span_id: 3886f541afc81f3f
   tags:
@@ -2843,6 +2935,7 @@ records:
     findings_lines: 4
     stage2_arm: control
     reviewed_at: '2026-09-16T22:22:37+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: c83a2aa106f9d168b71de1a5cd845763
     span_id: e149b1d61fb1a586
   tags:
@@ -2874,6 +2967,7 @@ records:
     findings_lines: 6
     stage2_arm: control
     reviewed_at: '2026-09-17T14:21:20+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 77bd9bd7910c67b025c7fdb5e87d1d6c
     span_id: ce73f0c284f36725
   tags:
@@ -2905,6 +2999,7 @@ records:
     findings_lines: 6
     stage2_arm: control
     reviewed_at: '2026-09-16T23:40:47+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: aa5f15a79c86fcb406db7f6dcb4eb556
     span_id: f700fc885ecdeb5a
   tags:
@@ -2936,6 +3031,7 @@ records:
     findings_lines: 6
     stage2_arm: thesis-first
     reviewed_at: '2026-09-16T23:47:20+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: 8c6126a162fd31bf5f9d35427c3dd8bc
     span_id: 587a1bb92fee57fc
   tags:
@@ -2965,6 +3061,7 @@ records:
     findings_lines: 4
     stage2_arm: thesis-first
     reviewed_at: '2026-09-17T16:22:39+00:00'
+    codex_prompt_version: 44f066e07f6b
     trace_id: f4d832f083799f386c87a253edf2e80d
     span_id: 55e42ebe033a29d3
   tags:

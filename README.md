@@ -377,6 +377,44 @@ Every record has the same shape, deliberately — an experiment iterates all of 
 evaluator, and a single row with a different shape breaks the run or, worse, silently scores
 wrong. Keep new records structurally identical to their neighbours.
 
+#### Running a gym experiment
+
+`.github/workflows/gym-experiment.yml` (Actions → **Gym experiment** → Run workflow) replays
+the recorded reviews against candidate models and reports how much of what the recorded model
+found each candidate still finds.
+
+**Run two arms.** The default `arms` input is the candidate *and* the model the dataset was
+recorded from, and that is not padding. A review is not deterministic: the baseline model does
+not reproduce its own recorded findings at 100%, and how far short it falls is the noise floor
+for the whole measurement. A candidate at 65% means nothing until you know the baseline scores
+70% (a small real gap) or 95% (a large one). The summary refuses to draw a conclusion when only
+one arm ran.
+
+Each record becomes one matrix job per arm, so a replay invokes `openai/codex-action` exactly
+the way the production first pass does — same prompt, endpoint and read-only sandbox — differing
+only in checking out the recorded commit. Start with `limit: 3`, read the findings yourself to
+confirm the judge is calling matches sensibly, then spend the full run.
+
+Three things the harness controls for, each of which would otherwise quietly bias the result:
+
+- **The commit**, as described above.
+- **The conversation.** BiggiePockets posts its review back onto the pull request, so today's
+  discussion usually contains the findings being tested for. Every comment is filtered to
+  `created_at < reviewed_at`, so a candidate cannot read the answer off the page.
+- **The prompt version.** The findings in a record were produced by a specific first-pass
+  prompt. Of the 97 records, 73 were recorded under the prompt as it stands today and 24 under
+  earlier versions; replaying those 24 would measure the prompt edit and the model swap together
+  and report the sum as a model difference. The run is therefore scoped by default to records
+  the current prompt produced (`match_prompt_version`).
+
+Scoring is per-finding recall judged by a third model — the question is *did it report this
+defect*, not *did it phrase it the same way*, so string comparison is the wrong instrument.
+Severity weighting comes from the dataset, not the judge, so it cannot drift between runs.
+Findings a candidate reports that the baseline missed are counted as `extra` and never
+penalised: the baseline is a previous model, not ground truth.
+
+Results land in the run summary and in the `gym-summary` artifact.
+
 **Member data.** The findings are model-written prose about source code, not member records.
 Datadog's sensitive data scanner masks matches in the stored span before this ever reads them,
 and the exporter scrubs email addresses again so the committed file doesn't depend on that

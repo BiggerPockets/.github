@@ -1,0 +1,255 @@
+name: Gym experiment (first-pass model recall)
+
+# Replays recorded first-pass reviews against one or more candidate models and reports how
+# much of what the recorded model found each candidate still finds.
+#
+# Why this exists: Stage 1's model is set by an organization variable (vars.CODEX_MODEL),
+# so changing it changes what reaches a human reviewer across every repo at once — and
+# nothing in a review notices a model that quietly stops reporting a class of defect. A
+# finding that is never written leaves no trace, the run still passes, and Stage 2 verifies
+# only what it was handed. gym/sol-first-pass-findings.yaml holds what a previous model did
+# report, pinned to the commit it reviewed; this workflow re-asks those questions.
+#
+# RUN TWO ARMS. A review is not deterministic: the baseline model does not reproduce its own
+# recorded findings at 100%, and how far short it falls is this measurement's noise floor. A
+# candidate scoring 65% is meaningless until you know whether the baseline scores 70% or
+# 95%. The default arms are therefore the candidate AND the model the dataset was recorded
+# from, and the summary refuses to draw a conclusion from a single arm.
+#
+# Fidelity: each replay job reproduces the production Stage-1 job as closely as possible —
+# same prompt from prompts/, same openai/codex-action, same OpenRouter endpoint, same
+# read-only sandbox — differing only in checking out the recorded commit rather than the
+# pull request's current head. One replay per job, because a GitHub Action cannot be called
+# in a loop and looping via the CLI would measure a different harness than the one in use.
+#
+# The conversation handed to each replay is truncated to the moment of the original review.
+# BiggiePockets posts its review back onto the pull request, so today's discussion usually
+# contains the findings being tested for; without that cutoff a candidate could read the
+# answer off the page. See scripts/gym/replay_context.py.
+#
+# Cost: roughly $0.02 per replay on a cheap model and $0.17 on an expensive one, plus a
+# judge call per replay. The full dataset across two arms is ~194 jobs, near GitHub's 256
+# matrix cap. Start with limit=3.
+
+on:
+  workflow_dispatch:
+    inputs:
+      arms:
+        description: 'Comma-separated OpenRouter slugs. Include the baseline as a control.'
+        required: true
+        default: 'openai/gpt-5.6-luna,openai/gpt-5.6-sol'
+      control_arm:
+        description: 'Arm label to treat as the control (short form, e.g. gpt-5-6-sol)'
+        required: false
+        default: 'gpt-5-6-sol'
+      limit:
+        description: 'Replay only the first N records. Leave empty for the whole dataset.'
+        required: false
+        default: '3'
+      severity:
+        description: 'Restrict to these severities (e.g. blocker,blocking). Empty = all.'
+        required: false
+        default: ''
+      judge_model:
+        description: 'Model that scores the replays. Keep it off both arms.'
+        required: false
+        default: 'anthropic/claude-haiku-4.5'
+      match_prompt_version:
+        description: 'Only replay records recorded under the current first-pass prompt.'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r scripts/gym/requirements.txt
+
+      # The findings in a record were produced by a specific first-pass prompt. Replaying a
+      # record whose prompt has since changed measures the prompt edit and the model swap
+      # at once and reports the sum as a model difference, so by default the run is scoped
+      # to records the CURRENT prompt actually produced. Set match_prompt_version=false to
+      # replay everything and accept that confound.
+      - name: Resolve the current first-pass prompt version
+        id: prompt
+        env:
+          REGISTRY_DIR: .
+          PR: '0'
+        run: scripts/resolve-prompts.sh
+
+      - id: plan
+        run: |
+          python3 scripts/gym/plan_matrix.py \
+            --arms '${{ inputs.arms }}' \
+            ${{ inputs.limit && format('--limit {0}', inputs.limit) || '' }} \
+            ${{ inputs.severity && format('--severity {0}', inputs.severity) || '' }} \
+            ${{ inputs.match_prompt_version != 'false' && format('--prompt-version {0}', steps.prompt.outputs.codex_prompt_version) || '' }} \
+            --out matrix.json
+          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
+
+  replay:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Each job clones a target repository and makes a model call. This bounds concurrent
+      # load on both OpenRouter and the GitHub API; raise it if a full run is too slow.
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: ${{ matrix.arm }} · ${{ matrix.record }}
+    env:
+      CODEX_RESPONSES_ENDPOINT: 'https://openrouter.ai/api/v1/responses'
+    steps:
+      - name: Checkout registry (prompts + scripts)
+        uses: actions/checkout@v4
+        with:
+          path: registry
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r registry/scripts/gym/requirements.txt
+
+      # The ticket key lives on the pull request title, not on the span, so it is read here
+      # and passed through. A record with no key replays as a diff-only review, which is
+      # what production does for those pull requests too.
+      - name: Resolve ticket key
+        id: ticket
+        env:
+          GH_TOKEN: ${{ secrets.BIGGIEPOCKETS_PAT }}
+        run: |
+          title=$(gh api "/repos/${{ matrix.repo }}/pulls/${{ matrix.pr }}" --jq .title || echo '')
+          key=$(printf '%s' "$title" | grep -oiE 'BIG-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "Ticket: ${key:-none}"
+
+      # Rebuild the exact context the recorded review saw: the repo at the reviewed commit,
+      # the merge-base diff, the ticket, and the conversation as of that moment.
+      - name: Rebuild replay context
+        env:
+          GH_TOKEN: ${{ secrets.BIGGIEPOCKETS_PAT }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          python3 registry/scripts/gym/replay_context.py \
+            --record '${{ matrix.record }}' \
+            --dataset registry/gym/sol-first-pass-findings.yaml \
+            --workdir "$GITHUB_WORKSPACE/replay" \
+            --checkout "$GITHUB_WORKSPACE/replay/repo" \
+            --ticket-key '${{ steps.ticket.outputs.key }}'
+
+      # resolve-prompts.sh requires PR and substitutes {{PR}} into the prompt text, so it
+      # is given the record's own pull request rather than this workflow's run. Without
+      # that the replayed prompt would not be the prompt the recorded review ran.
+      - name: Resolve review prompts
+        id: resolve
+        env:
+          REGISTRY_DIR: registry
+          PR: ${{ matrix.pr }}
+          GITHUB_REPOSITORY: ${{ matrix.repo }}
+        run: registry/scripts/resolve-prompts.sh
+
+      # The same action, endpoint and sandbox the production first pass uses. Its working
+      # directory is the replay checkout, so ticket.json and pr.diff resolve as they do in
+      # a real review.
+      - name: Replay first-pass review
+        id: replay
+        continue-on-error: true
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+          responses-api-endpoint: ${{ env.CODEX_RESPONSES_ENDPOINT }}
+          model: ${{ matrix.model }}
+          sandbox: read-only
+          working-directory: replay/repo
+          output-file: ${{ github.workspace }}/replay/findings.md
+          prompt: ${{ steps.resolve.outputs.codex_prompt }}
+
+      - name: Record a failed replay
+        if: steps.replay.outcome == 'failure'
+        run: |
+          echo "::warning::replay failed for ${{ matrix.record }} on ${{ matrix.arm }}"
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          echo '${{ matrix.record }} ${{ matrix.arm }}' > "$GITHUB_WORKSPACE/out/FAILED"
+
+      # Judged only when the replay itself succeeded: scoring a crashed checkout as a model
+      # miss would blame the model for the harness.
+      - name: Judge the replay
+        if: steps.replay.outcome == 'success'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          python3 - <<'PY' > "$GITHUB_WORKSPACE/replay/expected.md"
+          import yaml
+          doc = yaml.safe_load(open('registry/gym/sol-first-pass-findings.yaml'))
+          rec = next(r for r in doc['records'] if r['id'] == '${{ matrix.record }}')
+          print(rec['expected_output']['findings'])
+          PY
+          python3 registry/scripts/gym/judge_findings.py \
+            --expected "$GITHUB_WORKSPACE/replay/expected.md" \
+            --actual "$GITHUB_WORKSPACE/replay/findings.md" \
+            --record '${{ matrix.record }}' \
+            --arm '${{ matrix.arm }}' \
+            --severity '${{ matrix.severity }}' \
+            --model '${{ inputs.judge_model }}' \
+            --out "$GITHUB_WORKSPACE/out/${{ matrix.arm }}--${{ matrix.record }}.json"
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gym-${{ matrix.arm }}--${{ matrix.record }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            out/
+            replay/findings.md
+
+  report:
+    needs: replay
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r scripts/gym/requirements.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: gym-*
+          path: results
+          merge-multiple: false
+
+      - name: Collect failures
+        run: |
+          find results -name FAILED -exec cat {} \; > failures.txt || true
+          echo "Failed replays: $(wc -l < failures.txt)"
+
+      - name: Summarize
+        run: |
+          python3 scripts/gym/summarize_run.py \
+            --results-dir results \
+            --control-arm '${{ inputs.control_arm }}' \
+            --failures failures.txt \
+            --out summary.md --json summary.json
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gym-summary
+          retention-days: 90
+          path: |
+            summary.md
+            summary.json
