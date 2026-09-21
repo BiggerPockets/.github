@@ -685,12 +685,18 @@ jobs:
           # at face value for one it doesn't carry.
           #
           # Both numbers come from what the tools recorded. pi records a usage object
-          # (tokens and a cost.total computed from the model's OpenRouter list rates on
-          # the runner, pinned in scripts/pi/models.json) on every pass — that is the
-          # same rate table OpenRouter bills against, so cost.total is the amount the
-          # pass is charged. Both stages run pi and so report identically; the first
-          # pass's counters travel from its own job in FIRST_PASS_USAGE_JSON, since its event
-          # stream stays on that runner.
+          # (tokens, a turn count, and a cost.total computed from the model's OpenRouter
+          # list rates on the runner, pinned in scripts/pi/models.json) on every pass —
+          # that is the same rate table OpenRouter bills against, so cost.total is the
+          # amount the pass is charged. Both stages run pi and so report identically; the
+          # first pass's counters travel from its own job in FIRST_PASS_USAGE_JSON, since
+          # its event stream stays on that runner.
+          #
+          # turn_count rides along in metrics. It is what makes the token counts
+          # interpretable: pi reports a running session total, so a multi-turn first pass
+          # counts its conversation prefix once per turn and its cumulative input is not a
+          # context-window requirement. scripts/pi/check_model_freshness.py divides the two
+          # apart using this count when it sizes context for the weekly chart.
           # Only usage objects are read, never message content.
           # Fall back to an empty object if the helper can't run at all, so a cost
           # problem can't cost us the quality metrics in the same payload.

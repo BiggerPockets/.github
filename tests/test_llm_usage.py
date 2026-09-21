@@ -140,7 +140,8 @@ class CodexUsageTest(unittest.TestCase):
         ])
         counts, cost = llm_usage.codex_usage(directory)
         self.assertEqual(counts, {'input_tokens': 31751, 'output_tokens': 2367,
-                                  'cache_read_input_tokens': 14720})
+                                  'cache_read_input_tokens': 14720,
+                                  'turn_count': 2})
         self.assertIsNone(cost)
 
     def test_takes_the_most_recent_rollout_when_several_exist(self):
@@ -161,6 +162,22 @@ class CodexUsageTest(unittest.TestCase):
         self.assertEqual(llm_usage.codex_usage('/nonexistent/sessions'), ({}, None))
         self.assertEqual(llm_usage.codex_usage(''), ({}, None))
 
+    def test_counts_one_turn_per_token_count_event(self):
+        directory = write_rollout([token_count(input_tokens=n) for n in (5, 50, 500)])
+        counts, _ = llm_usage.codex_usage(directory)
+        self.assertEqual(counts['turn_count'], 3)
+
+    def test_counts_a_turn_whose_event_carries_no_totals(self):
+        # Codex emits a token_count per turn; one arriving without usable totals is
+        # still a turn that happened, and dropping it would understate the count.
+        directory = write_rollout([
+            token_count(input_tokens=10),
+            {'type': 'event_msg', 'payload': {'type': 'token_count', 'info': {}}},
+        ])
+        counts, _ = llm_usage.codex_usage(directory)
+        self.assertEqual(counts['turn_count'], 2)
+        self.assertEqual(counts['input_tokens'], 10)
+
 
 class PiUsageTest(unittest.TestCase):
     def test_reads_counts_and_computed_cost_from_the_last_finished_message(self):
@@ -173,7 +190,8 @@ class PiUsageTest(unittest.TestCase):
         counts, cost = llm_usage.pi_usage(path)
         self.assertEqual(counts, {'input_tokens': 17515, 'output_tokens': 17,
                                   'cache_read_input_tokens': 17024,
-                                  'cache_write_input_tokens': 0})
+                                  'cache_write_input_tokens': 0,
+                                  'turn_count': 1})
         self.assertEqual(cost, 0.000372255)
 
     def test_prefers_the_last_clean_message_over_a_failed_retry_after_it(self):
@@ -205,6 +223,26 @@ class PiUsageTest(unittest.TestCase):
             {'type': 'agent_end', 'messages': []},
         ]))
         self.assertEqual(llm_usage.pi_usage(path), ({}, None))
+
+    def test_does_not_double_count_turns_reported_twice(self):
+        # pi_stream emits each message as its own message_end AND again inside
+        # agent_end's transcript. Counting both would report twice the turns.
+        path = write('\n'.join(json.dumps(e) for e in pi_stream(
+            pi_message(usage={'input': 10, 'output': 1, 'cost': {'total': 0.1}}),
+            pi_message(usage={'input': 20, 'output': 2, 'cost': {'total': 0.2}}),
+        )))
+        counts, _ = llm_usage.pi_usage(path)
+        self.assertEqual(counts['turn_count'], 2)
+
+    def test_counts_turns_from_message_events_when_the_run_never_ended(self):
+        # A killed or timed-out pass has no agent_end, so the per-message events
+        # are all there is to count.
+        events = [{'type': 'session'}, {'type': 'turn_start'}]
+        events += [{'type': 'message_end', 'message': pi_message(
+            usage={'input': 10, 'output': 1, 'cost': {'total': 0.1}})} for _ in range(3)]
+        path = write('\n'.join(json.dumps(e) for e in events))
+        counts, _ = llm_usage.pi_usage(path)
+        self.assertEqual(counts['turn_count'], 3)
 
     def test_agent_end_alone_is_enough_when_no_message_end_events_exist(self):
         events = [{'type': 'session'},
