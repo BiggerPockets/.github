@@ -429,13 +429,22 @@ request, holding the PR to review and the findings Sol reported for it.
 public. The findings quote private source: roughly 226 distinct `file:line` anchors across
 `biggerpockets/biggerpockets`, `biggerpockets/pockets-app` and `biggerpockets/claude-skills`,
 each paired with a description of a specific defect in that file. That is a map of private
-code and its weak points. Keep the dataset in a private repository and point the workflow
-at it; `gym/` is gitignored here so it cannot be committed by accident.
+code and its weak points. It lives instead in the private
+[`BiggerPockets/pi-gym-data`](https://github.com/BiggerPockets/pi-gym-data) repo, which
+`gym-experiment.yml` checks out at run time; `gym/` is also gitignored here so a local export
+cannot be committed by accident before it's pushed there.
 
 ```
-scripts/gym/export_sol_findings.py   # Datadog LLM Obs spans -> that YAML
-scripts/gym/upload_gym_dataset.py    # that YAML -> a Datadog LLM Obs experiments dataset
+scripts/gym/export_sol_findings.py       # Datadog LLM Obs spans -> that YAML
+scripts/gym/download_dataset_records.py  # Datadog LLM Obs dataset -> that YAML, once spans have expired
+scripts/gym/upload_gym_dataset.py        # that YAML -> a Datadog LLM Obs experiments dataset (for scoring)
 ```
+
+Refreshing or widening the set is: export, then push the file to `pi-gym-data` (`git add`,
+commit, push — it's an ordinary private git repo) so the workflow's checkout picks it up, and
+separately upload it to Datadog so an experiment there stays in sync. The two destinations are
+independent: `pi-gym-data` is what this workflow reads, the Datadog dataset is a scoring/analysis
+mirror of the same file.
 
 The same constraint applies to anything a run produces. A replay's `findings.md`, the judge
 verdicts, and the job logs all quote the private code under review, and on a public
@@ -551,7 +560,7 @@ them. The gym needs its own copies:
 
 ```sh
 gh secret set OPENROUTER_API_KEY --repo BiggerPockets/.github   # runs the replays
-gh secret set GYM_REPO_TOKEN     --repo BiggerPockets/.github   # reads the target repos
+gh secret set GYM_REPO_TOKEN     --repo BiggerPockets/.github   # reads the target repos + the dataset repo
 gh secret set JIRA_EMAIL         --repo BiggerPockets/.github   # ticket context
 gh secret set JIRA_API_TOKEN     --repo BiggerPockets/.github
 ```
@@ -563,6 +572,13 @@ on the repositories in the dataset is sufficient, and a leak of it cannot change
 JIRA token cannot be narrowed the same way; if that matters, run the gym from a private caller
 instead (this workflow can be converted to `workflow_call` without making this repo private —
 only a thin caller file moves).
+
+**The dataset itself lives in [`BiggerPockets/pi-gym-data`](https://github.com/BiggerPockets/pi-gym-data),**
+a private repo the workflow checks out (path `gym-data/`) with `GYM_REPO_TOKEN` before planning
+or replaying anything — the same token used to read the PR repos the dataset points at, so its
+fine-grained PAT needs `pi-gym-data` added to its repository access list alongside them. The
+`dataset` workflow input is a path *within* that repo (default `gym/sol-first-pass-findings.yaml`);
+add a new dataset there without editing this repo at all.
 
 The JIRA pair is not optional in practice. Without it every replay degrades to a diff-only
 review, while the recorded findings were written with the ticket in hand — many of them turn on

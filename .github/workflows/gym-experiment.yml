@@ -42,6 +42,10 @@ on:
         description: 'Arm label to treat as the control (short form, e.g. gpt-5-6-sol)'
         required: false
         default: 'gpt-5-6-sol'
+      dataset:
+        description: 'Path within BiggerPockets/pi-gym-data to the dataset file'
+        required: false
+        default: 'gym/sol-first-pass-findings.yaml'
       limit:
         description: 'Replay only the first N records. Leave empty for the whole dataset.'
         required: false
@@ -87,7 +91,8 @@ jobs:
       # The gym therefore needs its own copies, and because they live in a PUBLIC repository
       # the GitHub token is deliberately NOT the review service account's BIGGIEPOCKETS_PAT.
       # GYM_REPO_TOKEN only ever reads: a fine-grained PAT with read-only Contents and Pull
-      # requests on the repositories in the dataset is enough, and a leak of it cannot write.
+      # requests on the repositories the dataset's records point at, PLUS read-only Contents
+      # on BiggerPockets/pi-gym-data (checked out below), and a leak of it cannot write.
       #
       # Checked up front because the alternative is every replay job failing minutes later on
       # an opaque git credential error, which is how the first run was spent.
@@ -128,9 +133,22 @@ jobs:
           PR: '0'
         run: scripts/resolve-prompts.sh
 
+      # The dataset itself is private-repo-derived content (see README.md's "Model gym"
+      # section) and must never land in this PUBLIC repository — it lives in
+      # BiggerPockets/pi-gym-data instead, checked out here read-only with the same
+      # GYM_REPO_TOKEN used to read the pull requests it points at.
+      - name: Checkout gym dataset (BiggerPockets/pi-gym-data)
+        uses: actions/checkout@v4
+        with:
+          repository: BiggerPockets/pi-gym-data
+          token: ${{ secrets.GYM_REPO_TOKEN }}
+          persist-credentials: false
+          path: gym-data
+
       - id: plan
         run: |
           python3 scripts/gym/plan_matrix.py \
+            --dataset 'gym-data/${{ inputs.dataset }}' \
             --arms '${{ inputs.arms }}' \
             ${{ inputs.limit && format('--limit {0}', inputs.limit) || '' }} \
             ${{ inputs.severity && format('--severity {0}', inputs.severity) || '' }} \
@@ -164,6 +182,14 @@ jobs:
         with:
           path: registry
 
+      - name: Checkout gym dataset (BiggerPockets/pi-gym-data)
+        uses: actions/checkout@v4
+        with:
+          repository: BiggerPockets/pi-gym-data
+          token: ${{ secrets.GYM_REPO_TOKEN }}
+          persist-credentials: false
+          path: gym-data
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -192,7 +218,7 @@ jobs:
         run: |
           python3 registry/scripts/gym/replay_context.py \
             --record '${{ matrix.record }}' \
-            --dataset registry/gym/sol-first-pass-findings.yaml \
+            --dataset 'gym-data/${{ inputs.dataset }}' \
             --workdir "$GITHUB_WORKSPACE/replay" \
             --checkout "$GITHUB_WORKSPACE/replay/repo" \
             --ticket-key '${{ steps.ticket.outputs.key }}'
@@ -241,7 +267,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/out"
           python3 - <<'PY' > "$GITHUB_WORKSPACE/replay/expected.md"
           import yaml
-          doc = yaml.safe_load(open('registry/gym/sol-first-pass-findings.yaml'))
+          doc = yaml.safe_load(open('gym-data/${{ inputs.dataset }}'))
           rec = next(r for r in doc['records'] if r['id'] == '${{ matrix.record }}')
           print(rec['expected_output']['findings'])
           PY
