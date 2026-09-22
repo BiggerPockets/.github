@@ -18,6 +18,12 @@ name: BiggiePockets Code Review (reusable)
 # variables say where that lands: DD_SITE and DD_LLMOBS_ML_APP. No Datadog endpoint
 # or org identifier is committed here. See README.md.
 #
+# Provider attribution: OpenRouter serves one model slug from several providers, and
+# which one took a call is what usually explains a slow or timed-out review. Stage 2
+# asks OpenRouter which provider it would route to, then pins the pass to that one and
+# tags the Datadog span with it, so a slow or timed-out review names a provider instead
+# of the gateway. See README.md.
+#
 # Prompt versioning: every review-stage prompt lives in this repo's prompts/
 # registry (BiggerPockets/.github) as a versioned template, plus one shared rule
 # block per concern under prompts/_shared/ injected via {{@path}}.
@@ -433,6 +439,54 @@ jobs:
           npm install -g "@earendil-works/pi-coding-agent@0.84.3"
           echo "$(npm config get prefix)/bin" >> "$GITHUB_PATH"
 
+      # Pin Stage 2 to one OpenRouter serving provider, and record which one.
+      #
+      # OpenRouter spreads a model slug across several serving providers and picks one
+      # per call, so a slow or timed-out review cannot be attributed afterwards: pi logs
+      # provider="openrouter" (the gateway) and drops the serving provider OpenRouter
+      # puts in the response body. Asking for the routing decision up front and then
+      # pinning to it makes the answer certain rather than observed, and it is on disk
+      # before pi starts, so the 900s timeout kill cannot take it with it.
+      #
+      # The probe is a 1-token completion on the model the pass will use. It costs a
+      # fraction of a cent and its `provider` field is OpenRouter's own routing choice.
+      # require_parameters keeps it to providers that accept the request as sent; a
+      # provider chosen for a 1-token probe can still be a poor fit for a pass carrying
+      # a diff and the Stage 1 handoff, which is what the `unpinned` case below covers.
+      #
+      # allow_fallbacks is false on purpose. With fallbacks on, OpenRouter silently
+      # reroutes exactly when a provider degrades -- the slow review this exists to
+      # explain -- and the tag would name a provider that did not serve the call. The
+      # cost is that a provider going down fails the pass instead of rerouting it.
+      #
+      # continue-on-error: a probe that fails leaves PINNED_PROVIDER empty, and the next
+      # step then configures pi exactly as it would have without this feature. The pass
+      # runs unpinned and carries no attribution. Telemetry must not cost us a review.
+      - name: Pin the OpenRouter provider
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          probe=$(curl -fsS --max-time 60 https://openrouter.ai/api/v1/chat/completions \
+            -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg model "$PI_MODEL" \
+                  '{model: $model,
+                    max_tokens: 1,
+                    messages: [{role: "user", content: "."}],
+                    provider: {require_parameters: true}}')" ) || probe=""
+
+          # OpenRouter names the serving provider on every response. Anything else in
+          # the body is the model's reply to the probe and is deliberately not read.
+          provider=$(printf '%s' "$probe" | jq -r '.provider // empty' 2>/dev/null || true)
+
+          if [ -n "$provider" ]; then
+            echo "PINNED_PROVIDER=$provider" >> "$GITHUB_ENV"
+            echo "Stage 2 pinned to OpenRouter provider: $provider"
+          else
+            echo "::warning::Could not resolve an OpenRouter serving provider for '$PI_MODEL'; Stage 2 will run unpinned and this review will carry no provider attribution."
+          fi
+
       # pi resolves its models from a config dir (PI_CODING_AGENT_DIR). Point it at a
       # writable scratch dir seeded with the pinned OpenRouter provider from
       # scripts/pi/models.json: the pinned models + rates are what make a FRESH runner
@@ -447,8 +501,21 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/pi-config"
           # `stages` is ours, not pi's — strip it so pi only sees fields it defines.
-          jq '{providers: {openrouter: (.providers.openrouter
-                | {baseUrl, apiKey, api, models: [.models[] | del(.stages)]})}}' \
+          #
+          # compat.openRouterRouting is pi's OpenRouter provider-selection field: pi
+          # sends it as the request's `provider` object, which is what confines the pass
+          # to the provider the previous step resolved. It is added to the copy pi reads
+          # and to this run only. scripts/pi/models.json is unchanged, and an empty
+          # PINNED_PROVIDER (the probe failed) produces the config as it was before.
+          jq --arg prov "${PINNED_PROVIDER:-}" \
+            '{providers: {openrouter: (.providers.openrouter
+                | {baseUrl, apiKey, api,
+                   models: [.models[]
+                     | del(.stages)
+                     | if $prov == "" then .
+                       else .compat = ((.compat // {})
+                         + {openRouterRouting: {only: [$prov], allow_fallbacks: false}})
+                       end]})}}' \
             registry/scripts/pi/models.json > "$RUNNER_TEMP/pi-config/models.json"
           echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-config" >> "$GITHUB_ENV"
 
@@ -516,7 +583,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: review-failure-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/review-diagnostics/diagnostics.json
+          path: |
+            ${{ runner.temp }}/review-diagnostics/diagnostics.json
           retention-days: 7
           if-no-files-found: warn
 
@@ -714,6 +782,13 @@ jobs:
           first_pass_span_id=$(openssl rand -hex 8)
           pi_span_id=$(openssl rand -hex 8)
 
+          # The OpenRouter provider every Stage 2 call was confined to. Provider names
+          # carry spaces ("Together AI"), and a space would split one tag into two, so
+          # anything outside a tag-safe set becomes an underscore. "unpinned" is a run
+          # whose probe failed: it is a real, findable state, not missing data.
+          stage2_provider=$(printf '%s' "${PINNED_PROVIDER:-unpinned}" \
+            | tr -c '[:alnum:]_.:/-' '_')
+
           spans=$(jq -n \
             --arg trace_id "$trace_id" \
             --arg root_span_id "$root_span_id" \
@@ -815,13 +890,16 @@ jobs:
             --arg first_pass_prompt_version "$first_pass_prompt_version" \
             --arg first_pass_system_version "$first_pass_system_version" \
             --argjson first_pass_findings_lines "$first_pass_findings_lines" \
+            --arg stage2_provider "$stage2_provider" \
             --argjson spans "$spans" \
             '{
               data: {
                 type: "span",
                 attributes: {
                   ml_app: $ml_app,
-                  tags: [
+                  # Parenthesized: an object value in jq is a term, so the `+` that
+                  # appends the provider tags needs to be inside brackets.
+                  tags: ([
                     "repo:\($repo)",
                     "pr:\($pr)",
                     "run_id:\($run_id)",
@@ -840,7 +918,11 @@ jobs:
                     "first_pass_prompt_name:\($first_pass_prompt_name)",
                     "first_pass_prompt_version:\($first_pass_prompt_version)",
                     "first_pass_system_version:\($first_pass_system_version)"
-                  ],
+                  ]
+                  # The OpenRouter endpoint that served Stage 2. Grouping duration and
+                  # status by this tag is what turns "this review was slow" into "this
+                  # provider is slow", across runs.
+                  + ["stage2_provider:\($stage2_provider)"]),
                   spans: $spans
                 }
               }
@@ -856,4 +938,5 @@ jobs:
             echo "::warning::Datadog LLM Obs submission failed (HTTP $http_code): $(cat /tmp/dd_response.json 2>/dev/null)"
           else
             echo "Reported ${arm} arm to Datadog LLM Obs (trace ${trace_id}, prompt ${arm_prompt_name}@${arm_prompt_version}, run_id ${run_id})"
+            echo "Stage 2 provider: ${stage2_provider}"
           fi

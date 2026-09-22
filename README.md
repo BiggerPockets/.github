@@ -171,6 +171,51 @@ Cost tracking is best-effort and never fails a review. With no `DATADOG_API_KEY`
 whole reporting step is skipped, and a missing event stream, an absent rollout, or
 malformed usage data degrades to fewer metrics on the span.
 
+#### Provider attribution (which OpenRouter endpoint served a call)
+
+OpenRouter is a gateway. A single model slug is served by several providers, and which
+one took a call is the biggest single influence on how long that call ran — so a review
+that crawls, or one the 900-second timeout kills outright, is usually a statement about
+a provider rather than about the model. pi does not record that: it logs
+`provider="openrouter"` (the gateway), the model slug and the response model, and drops
+the serving provider OpenRouter names in every response body.
+
+Stage 2 makes that answer certain rather than observed. Before pi starts, the workflow
+sends OpenRouter a 1-token completion on the model the pass will use and reads the
+`provider` field off the reply — OpenRouter's own routing decision for that model, at
+that moment. It then pins the pass to that provider and tags the Datadog span with it:
+
+- **`stage2_provider:<name>`** on the review's span. Grouping span duration and status by
+  this tag is what turns "this review was slow" into "this provider is slow", across
+  runs. Spaces become underscores (`Together AI` → `Together_AI`) so a provider name
+  stays one tag.
+
+The pin is pi's own OpenRouter routing support. Each model in the config pi reads gets
+`compat.openRouterRouting: {"only": ["<provider>"], "allow_fallbacks": false}`, which pi
+sends as the request's `provider` object. `scripts/pi/models.json` is not edited: the
+workflow already rewrites that file with `jq` when it seeds pi's config directory, and
+the routing is added to that copy for one run.
+
+**`allow_fallbacks` is false deliberately.** Left on, OpenRouter silently reroutes to a
+backup provider — and it does so exactly when the first one is degraded, which is the
+slow review this feature exists to explain. The tag would then name a provider that did
+not serve the call, which is the guessing this replaces. The price is that a pinned
+provider going down fails the pass instead of quietly rerouting it. Prefer a failed
+review you can explain over a slow one you cannot.
+
+The probe is a 1-token request and the pass is a diff plus the Stage 1 handoff plus tool
+definitions, so the two do not always have the same set of eligible providers —
+OpenRouter filters on context length and on which parameters a provider accepts.
+`require_parameters` narrows that gap rather than closing it. A pin the pass cannot use
+surfaces as a routing error from OpenRouter, not as a silent fallback.
+
+Like cost tracking, this is best-effort and never fails a review: a probe that does not
+return a provider leaves the pass unpinned, running exactly as it did before this
+existed, and tags it `stage2_provider:unpinned` — a findable state rather than missing
+data — with a workflow warning explaining the review carries no attribution.
+
+Stage 1 is not pinned. It is the same two steps if its attribution is ever wanted.
+
 #### 4. Set workflow permissions
 
 With the move off `claude-code-action`, the review no longer needs OIDC (`id-token`),
