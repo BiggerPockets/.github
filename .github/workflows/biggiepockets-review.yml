@@ -900,11 +900,14 @@ jobs:
                 duration: $synthesis_duration,
                 status: $synthesis_status,
                 # Per-call latency and generation time from the endpoint that served
-                # this pass, alongside pi's own token counters. This is the pair that
-                # turns "the review was slow" into "this endpoint was slow": the
-                # duration above is wall clock for the whole pass, these are the calls
-                # inside it. billed_cost is what OpenRouter actually charged, which a
-                # cost computed from list rates cannot see.
+                # this pass, alongside the token counters pi itself records. This is
+                # the pair that turns "the review was slow" into "this endpoint was
+                # slow": the duration above is wall clock for the whole pass, these
+                # are the calls inside it. billed_cost is what OpenRouter actually
+                # charged, which a cost computed from list rates cannot see.
+                #
+                # Keep apostrophes out of this jq program: it is single-quoted, so one
+                # closes the string and hands the rest of the payload to bash.
                 metrics: ($synthesis_fields.metrics + $attribution_metrics),
                 meta: {
                   kind: "llm",
