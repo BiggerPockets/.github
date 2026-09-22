@@ -284,14 +284,20 @@ class Dedupe(unittest.TestCase):
 
 class BuildQuery(unittest.TestCase):
     def test_requires_a_verdict_by_default(self):
-        query = export.build_query('openai/gpt-5.6-sol', 'codex.review',
+        query = export.build_query('openai/gpt-5.6-sol', 'pi.first_pass',
                                    'biggiepockets-review', 'request_changes')
         self.assertIn('verdict:request_changes', query)
-        self.assertIn('-codex_findings_lines:0', query)
+        self.assertIn('-first_pass_findings_lines:0', query)
         self.assertIn('@status:ok', query)
 
+    def test_matches_the_model_under_either_tag_name(self):
+        query = export.build_query('openai/gpt-5.6-sol', 'pi.first_pass', 'app', 'any')
+        self.assertIn('(first_pass_model:openai/gpt-5.6-sol '
+                      'OR codex_model:openai/gpt-5.6-sol)', query)
+        self.assertIn('-codex_findings_lines:0', query)
+
     def test_any_verdict_drops_the_verdict_filter(self):
-        query = export.build_query('m', 'codex.review', 'app', 'any')
+        query = export.build_query('m', 'pi.first_pass', 'app', 'any')
         self.assertNotIn('verdict:', query)
 
 

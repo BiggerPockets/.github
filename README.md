@@ -28,11 +28,10 @@ downloads that immutable handoff. If Stage 2 is rate-limited, use **Re-run faile
 the workflow run. GitHub reruns only the Stage 2 job, reusing the completed first pass
 instead of paying for it again.
 
-The first-pass job is named `codex` and takes a `codex_model` input. Both names are
-contracts consuming repos bind to — the required status check their branch protection
-matches on, and the `workflow_call` API their caller passes — so they are fixed
-independently of what runs the stage. The Datadog span names the harness:
-`pi.first_pass`.
+The jobs are named for what the stage does, not for what runs it: `first_pass` and
+`synthesis`, taking a `first_pass_model` and a `synthesis_model` input. Both stages run on
+pi, against whichever models those inputs name. The Datadog spans still name the harness:
+`pi.first_pass` and `pi.synthesize`.
 
 The review logic lives centrally in this repo. Each consuming repo only adds a thin
 **caller** workflow that owns the triggers and gating and delegates to this one.
@@ -91,11 +90,11 @@ jobs:
       # Set it to put this repo on a different model — the slug must be one of the models
       # pinned in `scripts/pi/models.json`. Reading it from a repository variable lets the
       # repo be moved between pinned models without a pull request.
-      pi_model: ${{ vars.PI_MODEL || 'deepseek/deepseek-v4.1-flash' }}
+      synthesis_model: ${{ vars.SYNTHESIS_MODEL || 'deepseek/deepseek-v4.1-flash' }}
       # OpenRouter slug for the Stage 1 first pass. Omit it to review on the org default,
       # gpt-5.6-luna. Set it to put this repo on a stronger model; the slug must be one of
       # the models pinned in `scripts/pi/models.json` with `stage1` in its `stages` list.
-      codex_model: ${{ vars.CODEX_MODEL || 'openai/gpt-5.6-luna' }}
+      first_pass_model: ${{ vars.FIRST_PASS_MODEL || 'openai/gpt-5.6-luna' }}
     secrets: inherit
 ```
 
@@ -111,9 +110,10 @@ secrets if you prefer to scope them.
 It also reports per-review traces to the `biggiepockets-review` app in Datadog LLM
 Observability via `secrets.DATADOG_API_KEY`: verdict, timing, prompt template and version
 (tracked as prompts, see below), the model each
-stage ran (`CODEX_MODEL`/`PI_MODEL` env vars in the workflow — both are OpenRouter
-model slugs and must be set; each comes from its input, `codex_model` and `pi_model`,
-so a repo's models are visible in its own traces), and the actual findings text from the
+stage ran (`FIRST_PASS_MODEL`/`SYNTHESIS_MODEL` env vars in the workflow — both are
+OpenRouter model slugs and must be set; each comes from its input, `first_pass_model` and
+`synthesis_model`, so a repo's models are visible in its own traces), and the actual
+findings text from the
 first pass and the summary Stage 2 wrote,
 so review quality is inspectable, not just counted. This secret is optional — reviews still
 run and post normally without it, but no metrics are reported.
@@ -414,8 +414,8 @@ the resolver isn't deterministic, or a shared-rule edit doesn't bump versions.
 
 ### Model gym: regression set for the first-pass model
 
-Stage 1's model is set by the `codex_model` workflow input — `vars.CODEX_MODEL`, falling
-back to `openai/gpt-5.6-luna` — so changing one organization variable changes what reaches a
+Stage 1's model is set by the `first_pass_model` workflow input — `vars.FIRST_PASS_MODEL`,
+falling back to `openai/gpt-5.6-luna` — so changing one organization variable changes what reaches a
 human reviewer across every repo at once. Nothing in a review notices a model that quietly stops reporting a
 class of defect: a finding that is never written leaves no trace, the run still passes, and
 Stage 2 verifies only what it was handed. The findings a *previous* first-pass model wrote
@@ -472,10 +472,11 @@ span or the run captures its state at review time, so a finding that turns on ac
 criteria can go stale even with the diff pinned correctly. Treat a candidate's "miss" on
 a ticket-intent finding as a prompt to check the ticket, not as an automatic regression.
 
-**What's in it, and what isn't.** Records are drawn from the `codex.review` span, which
-carries the first pass's findings text plus the repo, PR, model and Stage-2 verdict as tags.
-Included are passes that finished (`@status:ok`), wrote findings
-(`codex_findings_lines > 0`), and whose review Stage 2 verified into `request_changes` —
+**What's in it, and what isn't.** Records are drawn from the Stage 1 first-pass span —
+`pi.first_pass`, or `codex.review` for the rows exported before that stage moved to pi —
+which carries the first pass's findings text plus the repo, PR, model and Stage-2 verdict as
+tags. Included are passes that finished (`@status:ok`), wrote findings
+(`first_pass_findings_lines > 0`), and whose review Stage 2 verified into `request_changes` —
 that verdict is the closest available ground truth short of re-adjudicating every finding by
 hand, and it is the set whose loss would actually cost something. Passes Stage 2 approved are
 excluded by default (`--verdict any` includes them), because an approval usually means Stage 2

@@ -3,7 +3,7 @@ name: Gym experiment (first-pass model recall)
 # Replays recorded first-pass reviews against one or more candidate models and reports how
 # much of what the recorded model found each candidate still finds.
 #
-# Why this exists: Stage 1's model is set by an organization variable (vars.CODEX_MODEL),
+# Why this exists: Stage 1's model is set by an organization variable (vars.FIRST_PASS_MODEL),
 # so changing it changes what reaches a human reviewer across every repo at once — and
 # nothing in a review notices a model that quietly stops reporting a class of defect. A
 # finding that is never written leaves no trace, the run still passes, and Stage 2 verifies
