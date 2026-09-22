@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Export first-pass review findings from Datadog LLM Observability into a gym dataset.
 
-Stage 1 writes its findings into the `codex.review` span, and the review workflow tags
-that span with the model that produced it (`codex_model`), the repo and PR it reviewed,
-and the verdict Stage 2 ultimately reached. That is enough to reconstruct, after the
-fact, exactly what a given first-pass model caught — which is what this script does.
+Stage 1 writes its findings into the `pi.first_pass` span, and the review workflow tags
+that span with the model that produced it (`first_pass_model`), the repo and PR it
+reviewed, and the verdict Stage 2 ultimately reached. That is enough to reconstruct,
+after the fact, exactly what a given first-pass model caught — which is what this script
+does. Spans from before the stage moved to pi are named `codex.review` and carry a
+`codex_model` tag; pass `--span-name codex.review` to reach them, and the tag filters
+below match either name.
 
-Why this exists: the first-pass model is set by the workflow's `codex_model` input
-(`vars.CODEX_MODEL`, defaulting to openai/gpt-5.6-luna), so one organization variable
+Why this exists: the first-pass model is set by the workflow's `first_pass_model` input
+(`vars.FIRST_PASS_MODEL`, defaulting to openai/gpt-5.6-luna), so one organization variable
 changes what reaches a human reviewer across every repo at once. Nothing in the review itself notices
 a model that quietly stops reporting a class of defect, because a finding that is never
 written leaves no trace. The findings a *previous* model wrote are the only record of
@@ -16,7 +19,7 @@ first-pass model over the same pull requests and check it still reports them.
 
 What it selects, and why that is narrower than "every finding":
 
-- `@status:ok` and `codex_findings_lines > 0` — the pass actually finished and wrote
+- `@status:ok` and `first_pass_findings_lines > 0` — the pass actually finished and wrote
   findings. Errored passes carry no findings text and would be empty rows.
 - `verdict:request_changes` by default — Stage 2 independently verified the diff and
   decided changes were required. That verdict is the closest thing to ground truth
@@ -121,7 +124,7 @@ def redact(text):
 
 def tag_map(tags):
     """Datadog returns tags as a flat "key:value" list. Values can themselves contain
-    colons (`codex_model:openai/gpt-5.6-sol`), so split only on the first one, and keep
+    colons (`first_pass_model:openai/gpt-5.6-sol`), so split only on the first one, and keep
     the first occurrence when a key repeats."""
     out = {}
     for tag in tags or []:
@@ -333,8 +336,12 @@ def dedupe(records):
 
 
 def build_query(model, span_name, ml_app, verdict):
-    query = (f"@ml_app:{ml_app} @name:{span_name} codex_model:{model} "
-             f"-codex_findings_lines:0 @status:ok")
+    """The model and line-count tags are each matched under both their current and their
+    former name, because an export window can straddle the rename. Excluding a tag that a
+    span does not carry is a no-op, so the pair of negations is safe on either naming."""
+    query = (f"@ml_app:{ml_app} @name:{span_name} "
+             f"(first_pass_model:{model} OR codex_model:{model}) "
+             f"-first_pass_findings_lines:0 -codex_findings_lines:0 @status:ok")
     if verdict != "any":
         query += f" verdict:{verdict}"
     return query
@@ -345,7 +352,9 @@ def main(argv=None):
     parser.add_argument("--model", default="openai/gpt-5.6-sol",
                         help="first-pass model slug to export findings for")
     parser.add_argument("--ml-app", default="biggiepockets-review")
-    parser.add_argument("--span-name", default="codex.review")
+    parser.add_argument("--span-name", default="pi.first_pass",
+                        help="Stage 1 span to export; use codex.review for spans "
+                             "written before the stage moved to pi")
     parser.add_argument("--verdict", default="request_changes",
                         help="Stage-2 verdict to require, or 'any'")
     parser.add_argument("--since", default="now-30d")
