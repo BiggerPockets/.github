@@ -17,10 +17,10 @@ name: Gym experiment (first-pass model recall)
 # from, and the summary refuses to draw a conclusion from a single arm.
 #
 # Fidelity: each replay job reproduces the production Stage-1 job as closely as possible —
-# same prompt from prompts/, same openai/codex-action, same OpenRouter endpoint, same
-# read-only sandbox — differing only in checking out the recorded commit rather than the
-# pull request's current head. One replay per job, because a GitHub Action cannot be called
-# in a loop and looping via the CLI would measure a different harness than the one in use.
+# same pi invocation, same system prompt, same tool allowlist, same OpenRouter routing —
+# differing only in checking out the recorded commit rather than the pull request's
+# current head. One replay per job, because a GitHub Action cannot be called in a loop and
+# looping via the CLI would measure a different harness than the one in use.
 #
 # The conversation handed to each replay is truncated to the moment of the original review.
 # BiggiePockets posts its review back onto the pull request, so today's discussion usually
@@ -174,8 +174,6 @@ jobs:
       max-parallel: ${{ fromJSON(inputs.max_parallel || '3') }}
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     name: ${{ matrix.arm }} · ${{ matrix.record }}
-    env:
-      CODEX_RESPONSES_ENDPOINT: 'https://openrouter.ai/api/v1/responses'
     steps:
       - name: Checkout registry (prompts + scripts)
         uses: actions/checkout@v4
@@ -234,21 +232,83 @@ jobs:
           GITHUB_REPOSITORY: ${{ matrix.repo }}
         run: registry/scripts/resolve-prompts.sh
 
-      # The same action, endpoint and sandbox the production first pass uses. Its working
-      # directory is the replay checkout, so ticket.json and pr.diff resolve as they do in
-      # a real review.
+      # Same harness the production first pass runs on: pi, not a GitHub Action wrapper.
+      # This matters beyond fidelity — a model outside the OpenAI family (e.g. deepseek)
+      # doesn't speak OpenRouter's /v1/responses shape that a Codex-flavored action
+      # expects, and the previous codex-action-based replay step crashed the runner
+      # outright on such models (no logs, no artifact) rather than failing cleanly.
+      - name: Install pi
+        run: |
+          npm install -g "@earendil-works/pi-coding-agent@0.84.3"
+          echo "$(npm config get prefix)/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve OpenRouter routing
+        continue-on-error: true
+        run: |
+          routing=$(python3 registry/scripts/pi/openrouter.py routing "${{ matrix.model }}") || routing=""
+          [ -n "$routing" ] || routing='{}'
+          echo "OPENROUTER_ROUTING=$routing" >> "$GITHUB_ENV"
+
+      # Filters scripts/pi/models.json to models allowed for stage1, same as production's
+      # first-pass job, and fails early (by name) if matrix.model isn't pinned there.
+      - name: Configure pi
+        run: |
+          mkdir -p "$RUNNER_TEMP/pi-config"
+          routing="${OPENROUTER_ROUTING:-}"
+          [ -n "$routing" ] || routing='{}'
+          jq --argjson routing "$routing" --arg model "${{ matrix.model }}" \
+            '{providers: {openrouter: (.providers.openrouter
+                | {baseUrl, apiKey, api,
+                   models: [.models[]
+                     | del(.stages)
+                     | if .id == $model and ($routing | length) > 0
+                       then .compat = ((.compat // {}) + {openRouterRouting: $routing})
+                       else . end]})}}' \
+            registry/scripts/pi/models.json > "$RUNNER_TEMP/pi-config/models.json"
+          echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-config" >> "$GITHUB_ENV"
+
+          if ! jq -e --arg m "${{ matrix.model }}" \
+            '.providers.openrouter.models[]
+               | select(.id == $m) | select((.stages // ["stage1"]) | index("stage1"))' \
+            registry/scripts/pi/models.json > /dev/null; then
+            known=$(jq -r '.providers.openrouter.models[]
+                             | select((.stages // ["stage1"]) | index("stage1")) | .id' \
+                    registry/scripts/pi/models.json | paste -sd, -)
+            echo "::error::'${{ matrix.model }}' is not pinned for stage1 in scripts/pi/models.json (have: $known)." >&2
+            exit 1
+          fi
+
+      # Same pi invocation and system prompt as production's first-pass job. Working
+      # directory is the replay checkout, so ticket.json and pr.diff resolve as they do
+      # in a real review.
       - name: Replay first-pass review
         id: replay
         continue-on-error: true
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ secrets.OPENROUTER_API_KEY }}
-          responses-api-endpoint: ${{ env.CODEX_RESPONSES_ENDPOINT }}
-          model: ${{ matrix.model }}
-          sandbox: read-only
-          working-directory: replay/repo
-          output-file: ${{ github.workspace }}/replay/findings.md
-          prompt: ${{ steps.resolve.outputs.first_pass_prompt }}
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          FIRST_PASS_PROMPT: ${{ steps.resolve.outputs.first_pass_prompt }}
+        working-directory: replay/repo
+        run: |
+          printf '%s' "$FIRST_PASS_PROMPT" > first-pass-prompt.txt
+          system_prompt=$(cat "$GITHUB_WORKSPACE/registry/prompts/first-pass-system.md")
+          timeout 900 pi --mode json \
+            --model "${{ matrix.model }}" \
+            --system-prompt "$system_prompt" \
+            --thinking medium \
+            --tools read,grep,glob,bash \
+            --no-context-files --no-skills --no-extensions \
+            --no-themes --no-prompt-templates \
+            @first-pass-prompt.txt \
+            > first-pass-output.jsonl 2> first-pass-error.log || pi_exit=$?
+          pi_exit="${pi_exit:-0}"
+
+          python3 "$GITHUB_WORKSPACE/registry/scripts/pi/final-message.py" \
+            first-pass-output.jsonl > "$GITHUB_WORKSPACE/replay/findings.md"
+          if [ ! -s "$GITHUB_WORKSPACE/replay/findings.md" ]; then
+            echo "::error::replay produced no findings (pi exit $pi_exit)" >&2
+            tail -60 first-pass-error.log >&2 || true
+            exit 1
+          fi
 
       - name: Record a failed replay
         if: steps.replay.outcome == 'failure'

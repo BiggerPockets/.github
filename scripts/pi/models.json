@@ -65,7 +65,7 @@
         {
           "id": "deepseek/deepseek-v4.1-flash",
           "name": "DeepSeek V4.1 Flash",
-          "stages": ["stage2"],
+          "stages": ["stage1", "stage2"],
           "reasoning": true,
           "cost": {
             "input": 0.15,
