@@ -26,8 +26,13 @@ jobs:
         with:
           python-version: '3.12'
 
+      # The suite imports the scripts it covers, so it needs what they import: the gym
+      # export's YAML and the freshness chart's matplotlib. Both requirement files, so a
+      # dependency added for a script is picked up here without a second edit.
       - name: Install dependencies
-        run: pip install -r scripts/gym/requirements.txt
+        run: |
+          pip install -r scripts/gym/requirements.txt
+          pip install -r scripts/pi/requirements.txt
 
       - name: Run the suite
         run: python -m unittest discover tests
