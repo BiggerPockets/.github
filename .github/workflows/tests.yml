@@ -1,0 +1,33 @@
+name: Tests
+
+# The Python suite under tests/ covers the scripts the review workflow calls (usage
+# parsing, model freshness, the gym export, prompt resolution) and parses the shell in
+# every workflow's `run:` blocks.
+#
+# It runs here because the reusable review workflow is `workflow_call`: this repo never
+# executes it, so nothing in this repo's own CI exercises the file that every consuming
+# repo runs. A defect in it surfaces in a private repo's logs, if anyone reads them.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r scripts/gym/requirements.txt
+
+      - name: Run the suite
+        run: python -m unittest discover tests
