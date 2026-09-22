@@ -42,4 +42,9 @@ it to the minimum: read-only, and only the repositories the job actually needs.
 
 - Keep the README accurate for a first-time reader. Describe the current design plainly
   rather than contrasting it with an earlier one.
-- Tests live in `tests/`, run with `python -m unittest discover tests`.
+- Tests live in `tests/`, run with `python -m unittest discover tests`. `tests.yml` runs
+  them on every pull request.
+- A workflow's `run:` block is shell that nothing parses until it executes, and a step
+  under `continue-on-error` reports success when it dies on a syntax error. The suite
+  parses every `run:` block with `bash -n`, so run it after editing a workflow. Inside a
+  single-quoted jq program, an apostrophe in a comment ends the program.
