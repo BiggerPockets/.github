@@ -171,6 +171,68 @@ Cost tracking is best-effort and never fails a review. With no `DATADOG_API_KEY`
 whole reporting step is skipped, and a missing event stream, an absent rollout, or
 malformed usage data degrades to fewer metrics on the span.
 
+#### Endpoint routing and attribution
+
+OpenRouter is a gateway. One model slug is served by many endpoints — as of writing,
+`deepseek-v4.1-flash` by 23 of them, spanning more than a factor of three in price and
+far more than that in speed — and OpenRouter picks one per call. That single fact sits
+behind three separate problems: a review crawls or is killed by the 900-second timeout
+because a slow endpoint took the call, spend drifts because an expensive one did, and
+neither can be investigated afterwards because nothing downstream records which it was.
+
+Both stages address this in two steps, using `scripts/pi/openrouter.py`.
+
+**Before a pass runs**, the workflow asks OpenRouter which endpoints are currently
+serving the model and builds a routing preference from that live field: fastest first,
+under a price ceiling. The preference reaches OpenRouter as pi's own
+`compat.openRouterRouting`, which pi sends as the request's `provider` object. It is
+written into the copy of the config that pi reads, for one run and for the one model
+that pass uses; `scripts/pi/models.json` is not edited.
+
+*The ceiling is derived, not written down.* A ceiling pinned in this repository fails
+silently in both directions: set above the field it excludes nothing, and set below it
+`max_price` is a hard filter, so the review has nowhere to run at all. Instead the
+ceiling is set at the cheapest point that still admits six endpoints. That is expressed
+as room to reroute because room is what a ceiling trades away — roughly, it is as tight
+as today's field allows while never leaving fallbacks stranded. On the current
+`deepseek-v4.1-flash` field it lands at $0.20/$0.60 per million tokens, excluding every
+endpoint in the expensive tail up to $0.375/$1.50 while keeping seven candidates.
+
+*Sorting on speed is only safe because of the ceiling.* An endpoint sets both its own
+price and its own serving rate, so "fastest" is a position it can simply buy. The two
+settings are sound together and neither is sound alone.
+
+*Fallbacks stay on.* A degrading endpoint is the common cause of a slow review, and
+moving off it mid-run is the entire point of ranking endpoints in the first place.
+
+**After a pass exits**, the workflow reports which endpoints actually served it. pi
+records `responseId` on every completed assistant turn, and on OpenRouter that is the
+generation id, so the ids are already in `pi-output.jsonl` with no change to pi. Each
+resolves through `GET /api/v1/generation` to the serving endpoint and its real latency,
+generation time and billed cost. The review's Datadog span then carries:
+
+- **`stage2_provider:<name>`** — the endpoint that served the most calls. Grouping span
+  duration and status by this tag is what turns "this review was slow" into "this
+  endpoint is slow", across runs. Spaces become underscores (`Together AI` →
+  `Together_AI`) so a name stays one tag.
+- **`stage2_endpoint:<name>`** — one per endpoint the run touched. A run spanning
+  several is itself the signal that one degraded partway through.
+- **`openrouter.latency_ms_max` / `openrouter.generation_ms_total`** — per-call timings
+  from inside the pass, next to the span duration, which is wall clock for the whole of
+  it.
+- **`openrouter.billed_cost`** — what OpenRouter actually charged, which a cost computed
+  from list rates cannot see.
+
+Measuring this rather than asserting it up front is what lets routing keep its
+fallbacks, and it is why the report survives the timeout: every turn that finished wrote
+its id before the kill, and those are the turns that describe the stall. Only ids and
+per-call statistics are read, never prompt or completion text.
+
+Like cost tracking, both halves are best-effort and never fail a review. If the endpoint
+catalog cannot be reached the pass runs on OpenRouter's default routing, exactly as it
+did before this existed; if the lookups do not resolve, the span is tagged
+`stage2_provider:unattributed` — a findable state rather than missing data.
+
 #### 4. Set workflow permissions
 
 With the move off `claude-code-action`, the review no longer needs OIDC (`id-token`),
