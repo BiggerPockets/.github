@@ -151,6 +151,12 @@ that file in the same commit. Each stage reads its own event stream and hands th
 to the reporting job. Only usage objects are read — never message content, transcripts,
 prompts, or diffs.
 
+Each span also carries a **`turn_count`**. pi reports tokens as a running session total,
+so a multi-turn pass counts its conversation prefix once per turn: a first pass showing
+1.15M input tokens is a ~29-turn session over an ~80k working context, not an 1.15M-token
+prompt. Without the turn count those two are indistinguishable, and sizing a context
+window off the cumulative figure would demand roughly fourteen times what the pass needs.
+
 Two **organization-level variables** (`vars`, not secrets — **Settings → Secrets and
 variables → Actions → Variables** at the org level) configure where the trace lands.
 Both are optional, and nothing here is committed to the repository:
@@ -191,6 +197,58 @@ Once installed, trigger a review either way:
 - **On demand** — run the `BiggiePockets Code Review` workflow via **Actions →
   workflow_dispatch** and pass the PR number. (Available once the caller file is on the
   repo's default branch.)
+
+### Weekly model freshness check
+
+`.github/workflows/model-freshness-check.yml` runs every Monday and checks the models
+pinned in `scripts/pi/models.json` against OpenRouter's live catalog. It never edits that
+file — choosing a review model is a judgment call on review quality that no API can make —
+it opens (or comments on) an issue when something is worth a look:
+
+- a pinned rate no longer matches OpenRouter's list price, which means the cost we report
+  to Datadog is wrong until someone updates the pin;
+- a pinned model has dropped out of the catalog, or its uptime has slipped below 95%;
+- a cheaper reasoning-capable model with comparable context and healthy uptime has shipped,
+  **and** reviews no worse than the weakest pinned model.
+
+**Each stage is checked separately** (`--stage=stage1|stage2`), because they pin different
+models and run very different workloads, and each gets its own chart and its own issue
+thread. The chart plots effective $/1M against the model's coding score from llm-stats.com's
+leaderboard (`index_code`), so price is read against the capability that matters for a code
+review rather than against raw context length.
+
+The shortlist is ranked **strongest first, not cheapest first**. Every candidate has already
+passed the "cheaper than what's pinned" filter, so ranking on price again just re-answers
+"what is cheapest" — which fills all five slots with the bottom of the catalog and buries the
+model actually worth switching to. Two models are left off entirely: one that reviews worse
+than the weakest pinned model (a downgrade, not a candidate), and one the leaderboard doesn't
+cover (no capability number to weigh its price against). A *pinned* model with no score is
+still charted, in a separate "no score" column — what is already running has to be shown
+either way. If the leaderboard is unreachable the check falls back to price ranking, since a
+degraded shortlist beats an empty one.
+
+Two things make those numbers mean what they say:
+
+- **Effective $/1M, not the list input rate.** Review prompts are almost entirely re-sent
+  context, so the prompt-cache discount dominates real cost. The effective rate blends each
+  model's input/cacheRead/output rates by the stage's own token mix, measured from its spans
+  in Datadog LLM Observability over a trailing 90 days. Reading that mix correctly depends on
+  which harness recorded the span: pi reports fresh input and cache reads as **disjoint**
+  counts that add, while Codex reports input as the **whole** figure with cache reads already
+  inside it. Adding the two on a Codex span double-counts the cache and inflates the apparent
+  fresh-input share by an order of magnitude, which makes cache-hostile models look cheap.
+- **Working context, not billed input.** A model is flagged as having inadequate context
+  against what the pass has to *hold*, which is not what it is billed for. Tokens are
+  reported as a running session total, so a multi-turn pass counts its prefix once per turn.
+  The turn-aware estimate uses the accumulated fresh input plus output for a multi-turn pass,
+  and the whole input for a single-turn one (a cache read is a billing discount, not a
+  smaller prompt). Gating on the cumulative figure instead would rule out every candidate,
+  including the model currently running the stage. Spans with no `turn_count` are left out of
+  the estimate rather than guessed at, so no model is flagged on context until enough spans
+  carry one.
+
+Without `DD_API_KEY`/`DD_APP_KEY` the check still runs; it falls back to the raw input rate
+and draws no context threshold.
 
 ### Prompt registry and the prompt A/B test
 
