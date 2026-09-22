@@ -28,6 +28,15 @@
   "//": "usage and what Datadog attributes spend from. Adding a model means adding its id",
   "//": "AND its published rates together; rolling one means updating both.",
   "//": "",
+  "//": "`compat.openRouterRouting` is sent verbatim as OpenRouter's `provider` field. It",
+  "//": "exists because this model is served by more than twenty endpoints, and OpenRouter",
+  "//": "defaults to load balancing across all of them prioritizing price, which is how Stage",
+  "//": "2 ends up on whichever silicon is cheapest rather than whichever is quickest. `only`",
+  "//": "holds it to the endpoints whose published rates are at or below the ones pinned",
+  "//": "below, so the cost telemetry and the weekly rate-drift check stay true; `sort` then",
+  "//": "takes the fastest of those on OpenRouter's live throughput numbers, which its public",
+  "//": "API does not expose to us. Widening `only` means re-pinning the rates to match.",
+  "//": "",
   "//": "The apiKey interpolation reads OPENROUTER_API_KEY from the workflow environment",
   "//": "— no interactive login or OAuth is involved. api/api identify the OpenAI-compatible",
   "//": "endpoint pi uses.",
@@ -66,6 +75,12 @@
           "name": "DeepSeek V4.1 Flash",
           "stages": ["stage2"],
           "reasoning": true,
+          "compat": {
+            "openRouterRouting": {
+              "only": ["morph", "deepinfra/fp8", "deepseek"],
+              "sort": "throughput"
+            }
+          },
           "cost": {
             "input": 0.15,
             "output": 0.6,
