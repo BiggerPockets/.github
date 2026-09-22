@@ -171,50 +171,67 @@ Cost tracking is best-effort and never fails a review. With no `DATADOG_API_KEY`
 whole reporting step is skipped, and a missing event stream, an absent rollout, or
 malformed usage data degrades to fewer metrics on the span.
 
-#### Provider attribution (which OpenRouter endpoint served a call)
+#### Endpoint routing and attribution
 
-OpenRouter is a gateway. A single model slug is served by several providers, and which
-one took a call is the biggest single influence on how long that call ran — so a review
-that crawls, or one the 900-second timeout kills outright, is usually a statement about
-a provider rather than about the model. pi does not record that: it logs
-`provider="openrouter"` (the gateway), the model slug and the response model, and drops
-the serving provider OpenRouter names in every response body.
+OpenRouter is a gateway. One model slug is served by many endpoints — as of writing,
+`deepseek-v4.1-flash` by 23 of them, spanning more than a factor of three in price and
+far more than that in speed — and OpenRouter picks one per call. That single fact sits
+behind three separate problems: a review crawls or is killed by the 900-second timeout
+because a slow endpoint took the call, spend drifts because an expensive one did, and
+neither can be investigated afterwards because nothing downstream records which it was.
 
-Stage 2 makes that answer certain rather than observed. Before pi starts, the workflow
-sends OpenRouter a 1-token completion on the model the pass will use and reads the
-`provider` field off the reply — OpenRouter's own routing decision for that model, at
-that moment. It then pins the pass to that provider and tags the Datadog span with it:
+Both stages address this in two steps, using `scripts/pi/openrouter.py`.
 
-- **`stage2_provider:<name>`** on the review's span. Grouping span duration and status by
-  this tag is what turns "this review was slow" into "this provider is slow", across
-  runs. Spaces become underscores (`Together AI` → `Together_AI`) so a provider name
-  stays one tag.
+**Before a pass runs**, the workflow asks OpenRouter which endpoints are currently
+serving the model and builds a routing preference from that live field: fastest first,
+under a price ceiling. The preference reaches OpenRouter as pi's own
+`compat.openRouterRouting`, which pi sends as the request's `provider` object. It is
+written into the copy of the config that pi reads, for one run and for the one model
+that pass uses; `scripts/pi/models.json` is not edited.
 
-The pin is pi's own OpenRouter routing support. Each model in the config pi reads gets
-`compat.openRouterRouting: {"only": ["<provider>"], "allow_fallbacks": false}`, which pi
-sends as the request's `provider` object. `scripts/pi/models.json` is not edited: the
-workflow already rewrites that file with `jq` when it seeds pi's config directory, and
-the routing is added to that copy for one run.
+*The ceiling is derived, not written down.* A ceiling pinned in this repository fails
+silently in both directions: set above the field it excludes nothing, and set below it
+`max_price` is a hard filter, so the review has nowhere to run at all. Instead the
+ceiling is set at the cheapest point that still admits six endpoints. That is expressed
+as room to reroute because room is what a ceiling trades away — roughly, it is as tight
+as today's field allows while never leaving fallbacks stranded. On the current
+`deepseek-v4.1-flash` field it lands at $0.20/$0.60 per million tokens, excluding every
+endpoint in the expensive tail up to $0.375/$1.50 while keeping seven candidates.
 
-**`allow_fallbacks` is false deliberately.** Left on, OpenRouter silently reroutes to a
-backup provider — and it does so exactly when the first one is degraded, which is the
-slow review this feature exists to explain. The tag would then name a provider that did
-not serve the call, which is the guessing this replaces. The price is that a pinned
-provider going down fails the pass instead of quietly rerouting it. Prefer a failed
-review you can explain over a slow one you cannot.
+*Sorting on speed is only safe because of the ceiling.* An endpoint sets both its own
+price and its own serving rate, so "fastest" is a position it can simply buy. The two
+settings are sound together and neither is sound alone.
 
-The probe is a 1-token request and the pass is a diff plus the Stage 1 handoff plus tool
-definitions, so the two do not always have the same set of eligible providers —
-OpenRouter filters on context length and on which parameters a provider accepts.
-`require_parameters` narrows that gap rather than closing it. A pin the pass cannot use
-surfaces as a routing error from OpenRouter, not as a silent fallback.
+*Fallbacks stay on.* A degrading endpoint is the common cause of a slow review, and
+moving off it mid-run is the entire point of ranking endpoints in the first place.
 
-Like cost tracking, this is best-effort and never fails a review: a probe that does not
-return a provider leaves the pass unpinned, running exactly as it did before this
-existed, and tags it `stage2_provider:unpinned` — a findable state rather than missing
-data — with a workflow warning explaining the review carries no attribution.
+**After a pass exits**, the workflow reports which endpoints actually served it. pi
+records `responseId` on every completed assistant turn, and on OpenRouter that is the
+generation id, so the ids are already in `pi-output.jsonl` with no change to pi. Each
+resolves through `GET /api/v1/generation` to the serving endpoint and its real latency,
+generation time and billed cost. The review's Datadog span then carries:
 
-Stage 1 is not pinned. It is the same two steps if its attribution is ever wanted.
+- **`stage2_provider:<name>`** — the endpoint that served the most calls. Grouping span
+  duration and status by this tag is what turns "this review was slow" into "this
+  endpoint is slow", across runs. Spaces become underscores (`Together AI` →
+  `Together_AI`) so a name stays one tag.
+- **`stage2_endpoint:<name>`** — one per endpoint the run touched. A run spanning
+  several is itself the signal that one degraded partway through.
+- **`openrouter.latency_ms_max` / `openrouter.generation_ms_total`** — per-call timings
+  from inside the pass, next to the span duration, which is wall clock for the whole of
+  it.
+- **`openrouter.billed_cost`** — what OpenRouter actually charged, which a cost computed
+  from list rates cannot see.
+
+Measuring this rather than asserting it up front is what lets routing keep its
+fallbacks, and it is why the report survives the timeout: every turn that finished wrote
+its id before the kill, and those are the turns that describe the stall. Only ids and
+per-call statistics are read, never prompt or completion text.
+
+Like cost tracking, both halves are best-effort and never fail a review. If the endpoint
+catalog cannot be reached the pass runs on OpenRouter's default routing, exactly as it
+did before this existed; if the lookups do not resolve, the span is tagged
+`stage2_provider:unattributed` — a findable state rather than missing data.
 
 #### 4. Set workflow permissions
 
