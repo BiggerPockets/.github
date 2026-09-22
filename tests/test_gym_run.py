@@ -100,6 +100,53 @@ class PlanMatrix(unittest.TestCase):
         self.assertEqual(include[0]['severity'], 'blocker')
 
 
+class CallJudge(unittest.TestCase):
+    def sent_body(self):
+        """The request body call_judge would POST, without making the call."""
+        captured = {}
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"choices": [{"message": {"content": "{}"}}]}'
+
+        def urlopen(request, timeout=None):
+            captured['body'] = json.loads(request.data)
+            return Response()
+
+        original = judge.urllib.request.urlopen
+        judge.urllib.request.urlopen = urlopen
+        try:
+            judge.call_judge('anthropic/claude-haiku-4.5', 'baseline', 'candidate', 'key')
+        finally:
+            judge.urllib.request.urlopen = original
+        return captured['body']
+
+    def test_routes_to_the_cheapest_endpoint_that_is_fast_enough(self):
+        provider = self.sent_body()['provider']
+        # Price stays the sort key: an endpoint must not be able to win the route by
+        # charging more for speed.
+        self.assertEqual(provider['sort'], 'price')
+        self.assertIn('preferred_min_throughput', provider)
+
+    def test_uses_the_same_routing_policy_as_the_review_workflow(self):
+        # The review stages read this from `routing` in models.json and the judge holds
+        # its own copy; a floor tuned in one place has to move in the other.
+        pinned = json.loads((ROOT / 'scripts/pi/models.json').read_text())
+        self.assertEqual(judge.ROUTING,
+                         pinned['providers']['openrouter']['routing'])
+
+    def test_keeps_the_judge_model_slug_plain(self):
+        # The slug is recorded on every verdict and compared across runs, so the
+        # routing preference must not end up in it.
+        self.assertEqual(self.sent_body()['model'], 'anthropic/claude-haiku-4.5')
+
+
 class ParseVerdict(unittest.TestCase):
     PAYLOAD = ('{"baseline_findings": [{"summary": "s", "matched": true, '
                '"candidate_text": "t", "reason": "r"}], "extra_findings": []}')

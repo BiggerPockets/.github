@@ -255,8 +255,16 @@ jobs:
       - name: Configure pi
         run: |
           mkdir -p "$RUNNER_TEMP/pi-config"
-          jq '{providers: {openrouter: (.providers.openrouter
-                | {baseUrl, apiKey, api, models: [.models[] | del(.stages)]})}}' \
+          # `routing` is ours too, and is moved onto every model as pi's
+          # `openRouterRouting` — the object pi sends as-is in the OpenRouter request's
+          # `provider` field. Applying it here rather than per entry means a model cannot
+          # be added that quietly routes under a different policy. See models.json for
+          # what the policy is and why.
+          jq '.providers.openrouter as $p
+              | {providers: {openrouter: {baseUrl: $p.baseUrl, apiKey: $p.apiKey,
+                   api: $p.api,
+                   models: [$p.models[] | del(.stages)
+                              | .openRouterRouting = $p.routing]}}}' \
             registry/scripts/pi/models.json > "$RUNNER_TEMP/pi-config/models.json"
           echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-config" >> "$GITHUB_ENV"
 
@@ -447,8 +455,16 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/pi-config"
           # `stages` is ours, not pi's — strip it so pi only sees fields it defines.
-          jq '{providers: {openrouter: (.providers.openrouter
-                | {baseUrl, apiKey, api, models: [.models[] | del(.stages)]})}}' \
+          # `routing` is ours too, and is moved onto every model as pi's
+          # `openRouterRouting` — the object pi sends as-is in the OpenRouter request's
+          # `provider` field. Applying it here rather than per entry means a model cannot
+          # be added that quietly routes under a different policy. See models.json for
+          # what the policy is and why.
+          jq '.providers.openrouter as $p
+              | {providers: {openrouter: {baseUrl: $p.baseUrl, apiKey: $p.apiKey,
+                   api: $p.api,
+                   models: [$p.models[] | del(.stages)
+                              | .openRouterRouting = $p.routing]}}}' \
             registry/scripts/pi/models.json > "$RUNNER_TEMP/pi-config/models.json"
           echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-config" >> "$GITHUB_ENV"
 

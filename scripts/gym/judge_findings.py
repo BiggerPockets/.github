@@ -47,6 +47,15 @@ import urllib.request
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_JUDGE = "anthropic/claude-haiku-4.5"
+# OpenRouter provider routing: the cheapest endpoint serving the model that is also fast
+# enough. A judging run is hundreds of sequential calls, so a slow endpoint costs real
+# wall-clock; sorting by throughput instead would let an endpoint win the route by
+# charging more for speed, which nothing downstream would notice. The floor is a
+# preference rather than a filter, so it cannot leave a run with nowhere to go.
+#
+# This mirrors `routing` in scripts/pi/models.json, which is where the review workflow
+# reads the same policy from. tests/test_gym_run.py fails if the two drift apart.
+ROUTING = {"sort": "price", "preferred_min_throughput": {"p90": 30}}
 # Severity weights for the headline number. A missed blocker is the failure this whole
 # exercise exists to detect; a missed nitpick is noise.
 WEIGHTS = {"blocker": 3.0, "blocking": 2.0, "non-blocking": 1.0}
@@ -75,6 +84,7 @@ Return ONLY JSON:
 def call_judge(model, expected, actual, api_key, timeout=180):
     body = json.dumps({
         "model": model,
+        "provider": ROUTING,
         "temperature": 0,
         "messages": [
             {"role": "system", "content": SYSTEM},

@@ -17,6 +17,18 @@ against models pinned in `scripts/pi/models.json`, each entry listing the stages
 to run it. One harness means one allowlist, one set of published rates behind the cost
 telemetry, and the same early failure on an unpinned slug for either stage.
 
+That file also pins how OpenRouter picks among the endpoints serving a model, under
+`routing`: sort by price, with a preferred throughput floor. OpenRouter serves one model
+from many endpoints at very different prices — `deepseek-v4.1-flash` from 24 of them,
+spanning a 2.5x range — so the endpoint a review lands on is worth deciding rather than
+defaulting. Price stays the sort key so that an endpoint cannot win the route by charging
+more for speed; the floor then steers away from endpoints slow enough to threaten the
+900-second cap a stage runs under. The floor is a preference rather than a filter:
+OpenRouter deprioritizes endpoints that miss it instead of excluding them, so the worst
+case is a slow review rather than one with nowhere to run. The workflow moves `routing`
+onto every model when it seeds pi's config, so a model cannot be pinned that routes under
+some other policy.
+
 The **BiggiePockets** service account then submits the resulting `approve` /
 `request_changes` review on the PR. If the PR has no `BIG-XXXXX` key in its title (or the
 ticket can't be fetched), the review degrades gracefully to a diff-based review instead of
