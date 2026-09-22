@@ -171,11 +171,25 @@ done
 # mod 100 give the bucket. Deterministic by construction: a re-review of the same PR
 # resolves the same arm, and the bucket is emitted so any assignment can be re-derived
 # from telemetry without rerunning this script.
-ASSIGN_KEY="${GITHUB_REPOSITORY:-unknown}:$PR"
-BUCKET=$(( 16#$(printf '%s' "$ASSIGN_KEY" | sha256sum | cut -c1-8) % 100 ))
-ASSIGNED_ARM="$CONTROL_ARM"
-if [ -n "$EXPERIMENT_ARM" ] && [ "$BUCKET" -lt "$SPLIT_PERCENT" ]; then
-  ASSIGNED_ARM="$EXPERIMENT_ARM"
+#
+# FORCE_ARM skips the hash entirely and pins the assignment to a named arm. The gym's
+# synthesis replay sets it to the control arm: a replay is comparing MODELS against a
+# recorded baseline, and letting the hash land a record on the experiment prompt would
+# measure a prompt difference on top of the model difference it's meant to isolate.
+BUCKET=""
+if [ -n "${FORCE_ARM:-}" ]; then
+  ASSIGNED_ARM="$FORCE_ARM"
+  if ! printf '%s\n' "${ARMS[@]}" | grep -qx -- "$ASSIGNED_ARM"; then
+    echo "::error::FORCE_ARM '$ASSIGNED_ARM' is not a declared arm in prompts/registry.json" >&2
+    exit 1
+  fi
+else
+  ASSIGN_KEY="${GITHUB_REPOSITORY:-unknown}:$PR"
+  BUCKET=$(( 16#$(printf '%s' "$ASSIGN_KEY" | sha256sum | cut -c1-8) % 100 ))
+  ASSIGNED_ARM="$CONTROL_ARM"
+  if [ -n "$EXPERIMENT_ARM" ] && [ "$BUCKET" -lt "$SPLIT_PERCENT" ]; then
+    ASSIGNED_ARM="$EXPERIMENT_ARM"
+  fi
 fi
 
 write_output "control_arm" "$CONTROL_ARM"

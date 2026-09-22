@@ -1,0 +1,304 @@
+name: Gym experiment (Stage-2 synthesis agreement)
+
+# Replays recorded Stage-2 decisions against one or more candidate models, given the
+# EXACT Stage-1 findings the recorded decision was handed, and reports how often the
+# candidate reaches the same approve/request_changes verdict.
+#
+# Sibling to gym-experiment.yml, which measures Stage 1's recall. This measures Stage 2
+# in isolation: replaying against the recorded first-pass findings (not a fresh Stage-1
+# replay) means a Stage-2 model swap is scored on its own, without a simultaneous Stage-1
+# change confounding the result. Compose the two runs to evaluate swapping both stages —
+# e.g. deepseek as Stage 1 (gym-experiment.yml, against sol-first-pass-findings.yaml) and
+# luna as Stage 2 (this workflow, against a synthesis dataset exported while deepseek was
+# Stage 2) — read as two independent regression checks, not one end-to-end score.
+#
+# RUN TWO ARMS. Re-running the baseline model against its own recorded decisions does not
+# agree with itself 100%: reviews are not deterministic. See summarize_synthesis_run.py.
+#
+# Fidelity: each replay reproduces the production Stage-2 job as closely as possible —
+# same pi invocation, same tool allowlist, same control-arm prompt (FORCE_ARM pins it,
+# so a candidate isn't scored against a different prompt than the baseline saw) — only
+# the model and the checked-out commit differ from the live review.
+#
+# Cost: one pi call per replay plus a judge call on records where the baseline requested
+# changes. Start with limit=3.
+
+on:
+  workflow_dispatch:
+    inputs:
+      arms:
+        description: 'Comma-separated OpenRouter slugs. Include the baseline as a control.'
+        required: true
+        default: 'openai/gpt-5.6-luna,deepseek/deepseek-v4.1-flash'
+      control_arm:
+        description: 'Arm label to treat as the control (short form, e.g. deepseek-v4-1-flash)'
+        required: false
+        default: 'deepseek-v4-1-flash'
+      dataset:
+        description: 'Path to the synthesis gym dataset'
+        required: false
+        default: 'gym/deepseek-synthesis-findings.yaml'
+      limit:
+        description: 'Replay only the first N records. Leave empty for the whole dataset.'
+        required: false
+        default: '3'
+      judge_model:
+        description: 'Model that scores concern coverage. Keep it off both arms.'
+        required: false
+        default: 'anthropic/claude-haiku-4.5'
+      max_parallel:
+        description: 'Concurrent replays. OpenRouter reserves credit per in-flight request.'
+        required: false
+        default: '3'
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r scripts/gym/requirements.txt
+
+      # Same reasoning as gym-experiment.yml: this repo is public, so its own secrets
+      # cover the gym rather than inheriting from a caller.
+      - name: Check required secrets
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GYM_REPO_TOKEN: ${{ secrets.GYM_REPO_TOKEN }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          missing=()
+          for name in OPENROUTER_API_KEY GYM_REPO_TOKEN JIRA_EMAIL JIRA_API_TOKEN; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing secrets on BiggerPockets/.github: ${missing[*]}"
+            for name in "${missing[@]}"; do
+              echo "  gh secret set $name --repo BiggerPockets/.github"
+            done
+            exit 1
+          fi
+          echo "All required secrets are present."
+
+      - id: plan
+        run: |
+          python3 scripts/gym/plan_synthesis_matrix.py \
+            --dataset '${{ inputs.dataset }}' \
+            --arms '${{ inputs.arms }}' \
+            ${{ inputs.limit && format('--limit {0}', inputs.limit) || '' }} \
+            --out matrix.json
+          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
+
+  replay:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(inputs.max_parallel || '3') }}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: ${{ matrix.arm }} · ${{ matrix.record }}
+    steps:
+      - name: Checkout registry (prompts + scripts)
+        uses: actions/checkout@v4
+        with:
+          path: registry
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r registry/scripts/gym/requirements.txt
+
+      - name: Resolve ticket key
+        id: ticket
+        env:
+          GH_TOKEN: ${{ secrets.GYM_REPO_TOKEN }}
+        run: |
+          title=$(gh api "/repos/${{ matrix.repo }}/pulls/${{ matrix.pr }}" --jq .title || echo '')
+          key=$(printf '%s' "$title" | grep -oiE 'BIG-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "Ticket: ${key:-none}"
+
+      # Rebuild the diff, ticket and conversation exactly as for a Stage-1 replay, but
+      # write first-pass-findings.md from the RECORDED text rather than a fresh replay —
+      # see replay_synthesis_context.py for why that distinction is the whole point.
+      - name: Rebuild replay context
+        env:
+          GH_TOKEN: ${{ secrets.GYM_REPO_TOKEN }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          python3 registry/scripts/gym/replay_synthesis_context.py \
+            --record '${{ matrix.record }}' \
+            --dataset registry/${{ inputs.dataset }} \
+            --workdir "$GITHUB_WORKSPACE/replay" \
+            --checkout "$GITHUB_WORKSPACE/replay/repo" \
+            --ticket-key '${{ steps.ticket.outputs.key }}'
+
+      # FORCE_ARM pins every replay to the control prompt (prompts/registry.json), so
+      # only matrix.model varies from one replay to the next — see resolve-prompts.sh.
+      - name: Resolve synthesis prompt (control arm)
+        id: resolve
+        env:
+          REGISTRY_DIR: registry
+          PR: ${{ matrix.pr }}
+          GITHUB_REPOSITORY: ${{ matrix.repo }}
+          FORCE_ARM: control
+        run: registry/scripts/resolve-prompts.sh
+
+      - name: Install pi
+        run: |
+          npm install -g "@earendil-works/pi-coding-agent@0.84.3"
+          echo "$(npm config get prefix)/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve OpenRouter routing
+        continue-on-error: true
+        run: |
+          routing=$(python3 registry/scripts/pi/openrouter.py routing "${{ matrix.model }}") || routing=""
+          [ -n "$routing" ] || routing='{}'
+          echo "OPENROUTER_ROUTING=$routing" >> "$GITHUB_ENV"
+
+      # Same pi config shape as production's synthesis job: filter scripts/pi/models.json
+      # to models allowed for stage2, and fail early (by name) if matrix.model isn't one
+      # of them — an arm added to the workflow input without a matching models.json entry
+      # would otherwise fail every one of its replays with an opaque pi error instead of
+      # this one clear message.
+      - name: Configure pi
+        run: |
+          mkdir -p "$RUNNER_TEMP/pi-config"
+          routing="${OPENROUTER_ROUTING:-}"
+          [ -n "$routing" ] || routing='{}'
+          jq --argjson routing "$routing" --arg model "${{ matrix.model }}" \
+            '{providers: {openrouter: (.providers.openrouter
+                | {baseUrl, apiKey, api,
+                   models: [.models[]
+                     | del(.stages)
+                     | if .id == $model and ($routing | length) > 0
+                       then .compat = ((.compat // {}) + {openRouterRouting: $routing})
+                       else . end]})}}' \
+            registry/scripts/pi/models.json > "$RUNNER_TEMP/pi-config/models.json"
+          echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-config" >> "$GITHUB_ENV"
+
+          if ! jq -e --arg m "${{ matrix.model }}" \
+            '.providers.openrouter.models[]
+               | select(.id == $m) | select((.stages // ["stage2"]) | index("stage2"))' \
+            registry/scripts/pi/models.json > /dev/null; then
+            known=$(jq -r '.providers.openrouter.models[]
+                             | select((.stages // ["stage2"]) | index("stage2")) | .id' \
+                    registry/scripts/pi/models.json | paste -sd, -)
+            echo "::error::'${{ matrix.model }}' is not pinned for stage2 in scripts/pi/models.json (have: $known)." >&2
+            exit 1
+          fi
+
+      # Same pass production's synthesis job runs: same tool allowlist, same contract
+      # that the prompt writes verdict.json ({verdict, summary}) as the deliverable.
+      - name: Replay synthesis
+        id: replay
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ARM_PROMPT: ${{ steps.resolve.outputs.arm_prompt }}
+        working-directory: replay/repo
+        run: |
+          printf '%s' "$ARM_PROMPT" > arm-prompt.txt
+          timeout 900 pi --mode json \
+            --model "${{ matrix.model }}" \
+            --tools read,grep,glob,bash,write \
+            --no-context-files --no-skills --no-extensions \
+            --no-themes --no-prompt-templates \
+            @arm-prompt.txt \
+            > synthesis-output.jsonl 2> synthesis-error.log || pi_exit=$?
+          pi_exit="${pi_exit:-0}"
+          if [ ! -f verdict.json ]; then
+            echo "::error::pi produced no verdict.json (pi exit $pi_exit)" >&2
+            tail -60 synthesis-error.log >&2 || true
+            exit 1
+          fi
+
+      - name: Record a failed replay
+        if: steps.replay.outcome == 'failure'
+        run: |
+          echo "::warning::replay failed for ${{ matrix.record }} on ${{ matrix.arm }}"
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          echo '${{ matrix.record }} ${{ matrix.arm }}' > "$GITHUB_WORKSPACE/out/FAILED"
+
+      - name: Judge the replay
+        if: steps.replay.outcome == 'success'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          actual_verdict=$(jq -r '.verdict' replay/repo/verdict.json)
+          jq -r '.summary' replay/repo/verdict.json > "$GITHUB_WORKSPACE/replay/actual-summary.md"
+          python3 - <<'PY' > "$GITHUB_WORKSPACE/replay/expected-summary.md"
+          import yaml
+          doc = yaml.safe_load(open('registry/${{ inputs.dataset }}'))
+          rec = next(r for r in doc['records'] if r['id'] == '${{ matrix.record }}')
+          print(rec['expected_output']['summary'])
+          PY
+          python3 registry/scripts/gym/judge_synthesis.py \
+            --expected-verdict '${{ matrix.expected_verdict }}' \
+            --actual-verdict "$actual_verdict" \
+            --expected-summary "$GITHUB_WORKSPACE/replay/expected-summary.md" \
+            --actual-summary "$GITHUB_WORKSPACE/replay/actual-summary.md" \
+            --record '${{ matrix.record }}' \
+            --arm '${{ matrix.arm }}' \
+            --model '${{ inputs.judge_model }}' \
+            --out "$GITHUB_WORKSPACE/out/${{ matrix.arm }}--${{ matrix.record }}.json"
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gym-synth-${{ matrix.arm }}--${{ matrix.record }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            out/
+            replay/repo/verdict.json
+
+  report:
+    needs: replay
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r scripts/gym/requirements.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: gym-synth-*
+          path: results
+          merge-multiple: false
+
+      - name: Collect failures
+        run: |
+          find results -name FAILED -exec cat {} \; > failures.txt || true
+          echo "Failed replays: $(wc -l < failures.txt)"
+
+      - name: Summarize
+        run: |
+          python3 scripts/gym/summarize_synthesis_run.py \
+            --results-dir results \
+            --control-arm '${{ inputs.control_arm }}' \
+            --failures failures.txt \
+            --out summary.md --json summary.json
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gym-synthesis-summary
+          retention-days: 90
+          path: |
+            summary.md
+            summary.json

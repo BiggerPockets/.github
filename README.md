@@ -617,3 +617,52 @@ Results land in the run summary and in the `gym-summary` artifact.
 Datadog's sensitive data scanner masks matches in the stored span before this ever reads them,
 and the exporter scrubs email addresses again so the committed file doesn't depend on that
 scanner's configuration.
+
+### Model gym: Stage-2 synthesis agreement
+
+The Stage-1 gym above answers "does a candidate first-pass model still find what a previous
+one found". It says nothing about Stage 2, which reads those findings and makes the actual
+approve / request-changes call. A second dataset and workflow cover that half of the pipeline:
+
+```
+scripts/gym/export_synthesis_findings.py    # Datadog LLM Obs spans -> gym/deepseek-synthesis-findings.yaml
+scripts/gym/replay_synthesis_context.py     # one record -> pr.diff/ticket.json/conversations.json/first-pass-findings.md
+scripts/gym/plan_synthesis_matrix.py        # dataset -> GitHub Actions job matrix
+scripts/gym/judge_synthesis.py              # one replay's verdict.json -> agreement + concern coverage
+scripts/gym/summarize_synthesis_run.py      # per-record verdicts -> per-arm comparison
+```
+
+Each record holds a pull request's exact Stage-1 findings (read straight off the `pi.synthesize`
+span's own recorded input — no join against the `pi.first_pass` span is needed) and the decision
+a previous Stage-2 model reached from them: `{verdict, summary}`. A replay is handed that same
+findings text, not a freshly generated one, so a Stage-2 experiment measures the synthesis model
+on its own — a Stage-1 change on the same PR can't confound the result. Export from Datadog and
+upload it the same way as the first-pass dataset, pointed at the `pi.synthesize` span instead:
+
+```sh
+DD_API_KEY=... DD_APP_KEY=... python3 scripts/gym/export_synthesis_findings.py \
+    --model deepseek/deepseek-v4.1-flash --since now-30d \
+    --out ../private-gym/deepseek-synthesis-findings.yaml
+```
+
+`.github/workflows/gym-synthesis-experiment.yml` (Actions → **Gym experiment (Stage-2 synthesis
+agreement)** → Run workflow) replays it. It needs the same four secrets as the Stage-1 workflow,
+runs `pi` the way production's synthesis job does (same tool allowlist, same `verdict.json`
+contract), and pins every replay to the control arm's prompt via `resolve-prompts.sh`'s
+`FORCE_ARM` — otherwise the A/B prompt split could hand two candidates different prompts and the
+comparison would conflate a prompt difference with a model difference.
+
+Scoring is two numbers, not one. **Verdict agreement** — did the candidate reach the same
+approve/request_changes decision as the baseline — is a plain string comparison, not a judge
+call, because there's nothing to interpret. **Concern coverage** — on records where the baseline
+requested changes and the candidate agreed, did its summary raise the same blocking concerns —
+is judged the same way Stage 1's recall is, because two summaries can share a verdict while one
+names the real defect and the other invents an unrelated one. Run two arms for the same reason as
+Stage 1: the baseline doesn't agree with its own recorded decisions 100% of the time either, and
+`summarize_synthesis_run.py` refuses to draw a conclusion from a single arm.
+
+To evaluate swapping *both* stages — say, deepseek as Stage 1 and luna as Stage 2 — run the two
+workflows independently (deepseek against `sol-first-pass-findings.yaml` here, luna against
+`deepseek-synthesis-findings.yaml` in the synthesis workflow) and read the two results together.
+Chaining a live Stage-1 replay into a live Stage-2 replay would measure both changes at once and
+leave no way to tell which stage a regression came from.
