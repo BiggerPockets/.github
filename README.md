@@ -593,10 +593,10 @@ for the whole measurement. A candidate at 65% means nothing until you know the b
 70% (a small real gap) or 95% (a large one). The summary refuses to draw a conclusion when only
 one arm ran.
 
-Each record becomes one matrix job per arm, so a replay invokes `openai/codex-action` exactly
-the way the production first pass does — same prompt, endpoint and read-only sandbox — differing
-only in checking out the recorded commit. Start with `limit: 3`, read the findings yourself to
-confirm the judge is calling matches sensibly, then spend the full run.
+Each record becomes one matrix job per arm, so a replay invokes `pi` exactly the way the
+production first pass does — same system prompt, same tool allowlist, same OpenRouter routing —
+differing only in checking out the recorded commit. Start with `limit: 3`, read the findings
+yourself to confirm the judge is calling matches sensibly, then spend the full run.
 
 Three things the harness controls for, each of which would otherwise quietly bias the result:
 
