@@ -38,22 +38,24 @@ Synthesize a single review decision for pull request #{{PR}}.
 9. Check whether the diff does per-element work inside a web request that belongs in a
    background job, and whether a job it adds reports progress and is safe to retry:
    {{@prompts/_shared/blocking-request-rules.md}}
-10. Check how the diff parses structured values, per these rules:
+10. Check any ActiveJob::Continuable step the diff adds or changes, per these rules:
+   {{@prompts/_shared/continuation-cursor-rule.md}}
+11. Check how the diff parses structured values, per these rules:
    {{@prompts/_shared/parsing-rules.md}}
-11. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
+12. Check that in-app navigational links use React Router's Link rather than a raw `<a>`
    tag, per these rules:
    {{@prompts/_shared/navigation-rules.md}}
-12. Check whether the diff renames, moves, or deletes a name that is persisted outside
+13. Check whether the diff renames, moves, or deletes a name that is persisted outside
    the codebase and read back after deploy, per these rules:
    {{@prompts/_shared/rename-compatibility-rules.md}}
-13. Judge the value of the specs the diff adds or changes, per these rules, and report a
+14. Judge the value of the specs the diff adds or changes, per these rules, and report a
    useless spec with a file/line reference and the assertion that would make it fail:
    {{@prompts/_shared/spec-value-rules.md}}
-14. Validate which of Codex's findings are real (discard false positives), add any genuine
+15. Validate which of Codex's findings are real (discard false positives), add any genuine
    issues Codex missed, and (when a ticket is available) judge genuine misses of the ticket's
    intent or clear scope creep — but give credit when the author went beyond the literal
    acceptance criteria in a sound way rather than flagging it as non-compliant.
-15. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
+16. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
    genuine, blocking issue (such as a bug, regression, privacy violation, half-finished task,
    placeholder, or deferred work); otherwise "approve". A useless spec is reported, never
    blocking. A change that exceeds the AC without breaking the ticket's intent is a reason
