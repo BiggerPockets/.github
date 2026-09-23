@@ -301,6 +301,7 @@ jobs:
             @first-pass-prompt.txt \
             > first-pass-output.jsonl 2> first-pass-error.log || pi_exit=$?
           pi_exit="${pi_exit:-0}"
+          echo "$pi_exit" > "$GITHUB_WORKSPACE/replay/pi_exit"
 
           python3 "$GITHUB_WORKSPACE/registry/scripts/pi/final-message.py" \
             first-pass-output.jsonl > "$GITHUB_WORKSPACE/replay/findings.md"
@@ -309,6 +310,32 @@ jobs:
             tail -60 first-pass-error.log >&2 || true
             exit 1
           fi
+
+      # Which OpenRouter endpoint(s) actually served this replay, and how long each call
+      # took — measured after the fact from pi's own recorded generation ids, not
+      # asserted from the routing preference sent beforehand. Runs even when the replay
+      # timed out: every turn that finished before the 900s kill already wrote its id, so
+      # a killed run's partial attribution is exactly what explains the kill. This is the
+      # same lookup production's Stage 2 job uses (see biggiepockets-review.yml), added
+      # here because the gym's replay had no equivalent — routing.py was reporting what
+      # it ASKED OpenRouter for, never what OpenRouter actually did with it.
+      - name: Attribute the run to OpenRouter endpoints
+        if: always()
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          attribution=$(python3 registry/scripts/pi/openrouter.py attribute \
+            "$GITHUB_WORKSPACE/replay/repo/first-pass-output.jsonl" \
+            --api-key "$OPENROUTER_API_KEY") || attribution=""
+          [ -n "$attribution" ] || attribution='{"primary":"","providers":[],"metrics":{}}'
+          pi_exit=$(cat "$GITHUB_WORKSPACE/replay/pi_exit" 2>/dev/null || echo "unknown")
+          jq -n --argjson attribution "$attribution" --arg record '${{ matrix.record }}' \
+            --arg arm '${{ matrix.arm }}' --arg pi_exit "$pi_exit" \
+            '{record: $record, arm: $arm, pi_exit: $pi_exit, timed_out: ($pi_exit == "124")} + $attribution' \
+            > "$GITHUB_WORKSPACE/out/${{ matrix.arm }}--${{ matrix.record }}-attribution.json"
+          echo "Served by: $(printf '%s' "$attribution" | jq -c '.calls_by_provider // {}') (pi exit $pi_exit)"
 
       - name: Record a failed replay
         if: steps.replay.outcome == 'failure'
