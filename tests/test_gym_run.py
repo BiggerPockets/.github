@@ -100,6 +100,36 @@ class PlanMatrix(unittest.TestCase):
         self.assertEqual(include[0]['severity'], 'blocker')
 
 
+class PlanMatrixRecordIdsFilter(unittest.TestCase):
+    """--record-ids re-runs specific records (e.g. ones that timed out) without paying
+    for the whole dataset — exercised via main() since the filtering happens there,
+    before plan() ever sees the document."""
+
+    def write_dataset(self, ids):
+        path = Path(tempfile.mkdtemp()) / 'd.yaml'
+        import yaml
+        yaml.safe_dump({'records': [record(i) for i in ids]}, path.open('w'))
+        return str(path)
+
+    def test_keeps_only_the_named_records(self):
+        dataset = self.write_dataset(['a', 'b', 'c'])
+        out = Path(tempfile.mkdtemp()) / 'matrix.json'
+        rc = plan_matrix.main(['--dataset', dataset, '--arms', 'x/one',
+                               '--record-ids', 'a,c', '--out', str(out)])
+        self.assertEqual(rc, 0)
+        matrix = json.loads(out.read_text())
+        self.assertEqual([j['record'] for j in matrix['include']], ['a', 'c'])
+
+    def test_warns_but_does_not_fail_on_an_unknown_id(self):
+        dataset = self.write_dataset(['a'])
+        out = Path(tempfile.mkdtemp()) / 'matrix.json'
+        rc = plan_matrix.main(['--dataset', dataset, '--arms', 'x/one',
+                               '--record-ids', 'a,nonexistent', '--out', str(out)])
+        self.assertEqual(rc, 0)
+        matrix = json.loads(out.read_text())
+        self.assertEqual([j['record'] for j in matrix['include']], ['a'])
+
+
 class ParseVerdict(unittest.TestCase):
     PAYLOAD = ('{"baseline_findings": [{"summary": "s", "matched": true, '
                '"candidate_text": "t", "reason": "r"}], "extra_findings": []}')

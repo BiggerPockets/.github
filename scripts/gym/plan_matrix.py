@@ -93,6 +93,10 @@ def main(argv=None):
     parser.add_argument("--arms", required=True,
                         help="comma-separated OpenRouter model slugs")
     parser.add_argument("--limit", type=int, help="first N records (smoke tests)")
+    parser.add_argument("--record-ids",
+                        help="comma-separated record ids to replay, instead of the whole "
+                             "dataset — for re-running specific records (e.g. ones that "
+                             "failed or timed out last time) without paying for the rest")
     parser.add_argument("--severity", help="comma-separated severities to include")
     parser.add_argument("--prompt-version",
                         help="only replay records recorded under this first-pass prompt "
@@ -102,6 +106,15 @@ def main(argv=None):
 
     with open(args.dataset) as stream:
         document = yaml.safe_load(stream)
+
+    if args.record_ids:
+        wanted = {r.strip() for r in args.record_ids.split(",") if r.strip()}
+        document = dict(document, records=[
+            r for r in (document.get("records") or []) if r.get("id") in wanted])
+        missing = wanted - {r.get("id") for r in document["records"]}
+        if missing:
+            print(f"--record-ids named {len(missing)} id(s) not found in the dataset: "
+                  f"{', '.join(sorted(missing))}", file=sys.stderr)
 
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
     severities = ([s.strip() for s in args.severity.split(",")]
