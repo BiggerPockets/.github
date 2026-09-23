@@ -54,6 +54,10 @@ on:
         description: 'Restrict to these severities (e.g. blocker,blocking). Empty = all.'
         required: false
         default: ''
+      record_ids:
+        description: 'Comma-separated record ids to replay instead of the whole dataset (e.g. to re-run ones that timed out). Empty = all.'
+        required: false
+        default: ''
       judge_model:
         description: 'Model that scores the replays. Keep it off both arms.'
         required: false
@@ -152,6 +156,7 @@ jobs:
             --arms '${{ inputs.arms }}' \
             ${{ inputs.limit && format('--limit {0}', inputs.limit) || '' }} \
             ${{ inputs.severity && format('--severity {0}', inputs.severity) || '' }} \
+            ${{ inputs.record_ids && format('--record-ids {0}', inputs.record_ids) || '' }} \
             ${{ inputs.match_prompt_version != 'false' && format('--prompt-version {0}', steps.prompt.outputs.first_pass_prompt_version) || '' }} \
             --out matrix.json
           echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
