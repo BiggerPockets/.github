@@ -90,6 +90,12 @@ on:
         default: openai/gpt-5.6-luna
         type: string
 
+# A re-request starts a second run for the same PR; cancel the older one so it can't
+# post a verdict on a superseded commit. github.repository is the caller's repo here.
+concurrency:
+  group: biggiepockets-review-${{ github.repository }}-${{ inputs.pr }}
+  cancel-in-progress: true
+
 jobs:
   # The two stages intentionally run in separate jobs. GitHub can only re-run a
   # failed job (not an individual step), so this boundary lets a rate-limited Stage 2
