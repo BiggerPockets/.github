@@ -90,6 +90,31 @@ on:
         default: openai/gpt-5.6-luna
         type: string
 
+# A caller re-requests BiggiePockets by removing and re-adding the reviewer, which is
+# the only way to re-fire review_requested; that starts a second run of this workflow
+# for the same PR while the first is still going. Without this, the older run can
+# finish after the newer one and post its verdict on a commit the PR has since moved
+# past. Group on the calling repo (github.repository resolves to the CALLER's repo
+# inside a called workflow, not this one) plus the PR number, so only runs reviewing
+# the same PR collide; a different PR, or a different reviewer's workflow entirely,
+# is unaffected because the caller only invokes this workflow when BiggiePockets was
+# the requested reviewer (or on workflow_dispatch) in the first place.
+#
+# Deliberately keyed without github.workflow: that context resolves to the CALLER's
+# workflow name here too, so using it would group this workflow's runs together with
+# any unrelated caller workflow that happens to share a name.
+#
+# Safe to cancel mid-run: the only externally visible action is the single
+# `gh pr review --approve`/`--request-changes` call in the synthesis job's "Submit
+# review as BiggiePockets" step, which posts one finished review in one API call
+# rather than opening a pending review first. A cancellation before that step leaves
+# no trace on the PR; a cancellation during it either completes normally or fails
+# outright (gh reports a non-zero exit), same as any other transient failure of that
+# step. There is no partial/pending review state to clean up.
+concurrency:
+  group: biggiepockets-review-${{ github.repository }}-${{ inputs.pr }}
+  cancel-in-progress: true
+
 jobs:
   # The two stages intentionally run in separate jobs. GitHub can only re-run a
   # failed job (not an individual step), so this boundary lets a rate-limited Stage 2
