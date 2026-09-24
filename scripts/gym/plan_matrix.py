@@ -23,7 +23,7 @@ are skipped with a warning: replaying one would review whatever the pull request
 today, which is the failure the pinning exists to prevent.
 
 Usage:
-  plan_matrix.py --model openai/gpt-5.6-luna --limit 3
+  plan_matrix.py --model openai/gpt-5.6-luna --judge-model anthropic/claude-haiku-4.5 --limit 3
 Prints {"include": [...]} for `fromJSON` in a matrix strategy.
 """
 import argparse
@@ -94,6 +94,9 @@ def main(argv=None):
     parser.add_argument("--dataset", default="gym/sol-first-pass-findings.yaml")
     parser.add_argument("--model", required=True,
                         help="the one OpenRouter model slug to evaluate")
+    parser.add_argument("--judge-model", required=True,
+                        help="the model that scores the replays; must not be --model, "
+                             "since a model grading its own review is not a measurement")
     parser.add_argument("--limit", type=int, help="first N records (smoke tests)")
     parser.add_argument("--record-ids",
                         help="comma-separated record ids to replay, instead of the whole "
@@ -122,6 +125,9 @@ def main(argv=None):
     if not model or "," in model:
         print(f"--model takes exactly one model slug, got {args.model!r}. "
               f"Evaluate another model in its own run.", file=sys.stderr)
+        return 1
+    if args.judge_model.strip() == model:
+        print(f"--judge-model must differ from --model ({model})", file=sys.stderr)
         return 1
     severities = ([s.strip() for s in args.severity.split(",")]
                   if args.severity else None)

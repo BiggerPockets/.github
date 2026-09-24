@@ -446,9 +446,10 @@ separately upload it to Datadog so an experiment there stays in sync. The two de
 independent: `pi-gym-data` is what this workflow reads, the Datadog dataset is a scoring/analysis
 mirror of the same file.
 
-The same constraint applies to anything a run produces. A replay's `findings.md`, the judge
-verdicts, and the job logs all quote the private code under review, and on a public
-repository those are world-readable for as long as they are retained.
+The same constraint applies to anything a run produces. A replay's review, the judge's
+verdict and pi's error output all quote the private code under review, so a gym run sends
+them to Datadog and keeps them out of this repository's job logs and artifacts, which are
+world-readable.
 
 **Every record is pinned to the commit that was reviewed**, and that is what makes the
 file usable weeks later. A pull request is not a stable artifact: commits land on it after
@@ -511,9 +512,9 @@ pip install -r scripts/gym/requirements.txt
 DD_API_KEY=... DD_APP_KEY=... python3 scripts/gym/export_sol_findings.py \
     --model openai/gpt-5.6-sol --since now-30d --out ../private-gym/sol-first-pass-findings.yaml
 
-python3 scripts/gym/upload_gym_dataset.py --project 'code-review-gym' --dry-run
+python3 scripts/gym/upload_gym_dataset.py --project 'biggiepockets-review-gym' --dry-run
 DD_API_KEY=... DD_APP_KEY=... python3 scripts/gym/upload_gym_dataset.py \
-    --project 'code-review-gym'
+    --project 'biggiepockets-review-gym'
 ```
 
 `DD_SITE` selects the Datadog site, as elsewhere in this repo. Uploading is additive and never
@@ -632,7 +633,29 @@ queueing it. A full run at 8-way parallelism failed this way on well over half i
 That key is shared organization-wide, so this ceiling is shared with real reviews happening at
 the same time — a wide gym run can starve production PR reviews of credit, not just itself.
 
-Results land in the run summary and in the `gym-summary` artifact.
+**Results go to Datadog.** Each run is one LLM Observability experiment, named
+`first-pass-recall`, in the `biggiepockets-review-gym` project (the `datadog_project`
+input), against the dataset the dataset file names in its `dataset.name`. Each replayed
+record is one span in it: the model's review as output, the recorded findings as
+expected output, the judge's per-finding verdict and the OpenRouter attribution as metadata,
+and `recall`, `weighted_recall`, `matched_count`, `missed_count`, `baseline_count`,
+`extra_count`, `empty_output` and `timed_out` as evaluation metrics. A replay that failed is
+posted as an errored span with no recall metrics. The experiment is tagged with the model,
+the judge and the prompt version, and every run of the pipeline shares the experiment name,
+so runs can be listed together over time.
+
+The replays read the dataset from `pi-gym-data`; the experiment points at the Datadog copy.
+Before any replay, the plan job checks that every planned record exists in the Datadog
+dataset and stops if one does not — re-upload with `upload_gym_dataset.py` after changing
+the file. The Datadog writes use this repository's `DD_API_KEY`/`DD_APP_KEY`.
+
+GitHub keeps only counts: the run summary, the `gym-summary` artifact, and a per-replay
+artifact holding `score.json` (the judge's counts), `attribution.json` (the OpenRouter
+endpoints that served the replay) and, for a replay that failed, a `FAILED` marker.
+
+Each workflow step is one call to a script in `scripts/gym/steps/`, which takes its inputs
+from the step's `env:`. The Python they call is in `scripts/gym/`; the Datadog client the
+gym scripts share is `scripts/gym/datadog_api.py`.
 
 **Member data.** The findings are model-written prose about source code, not member records.
 Datadog's sensitive data scanner masks matches in the stored span before this ever reads them,

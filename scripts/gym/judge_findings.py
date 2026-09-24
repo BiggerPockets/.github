@@ -34,8 +34,10 @@ its own review invites a thumb on the scale.
 Usage:
   judge_findings.py --expected expected.md --actual findings.md --record <id> \
       --label <evaluated-model-label> [--severity blocking] [--model anthropic/claude-haiku-4.5]
-Prints a JSON verdict. Exits 0 even when the candidate scores nothing — a zero is a
-result, not a failure — and nonzero only when the judge itself could not be reached.
+Writes the JSON verdict to --out and prints only the counts: the verdict quotes the code
+under review, and a job log on a public repository is world-readable. Exits 0 even when the
+candidate scores nothing — a zero is a result, not a failure — and nonzero only when the
+judge itself could not be reached.
 """
 import argparse
 import json
@@ -140,7 +142,7 @@ def main(argv=None):
                         help="label of the model that wrote the candidate report")
     parser.add_argument("--severity", default="blocking", choices=sorted(WEIGHTS))
     parser.add_argument("--model", default=os.environ.get("JUDGE_MODEL", DEFAULT_JUDGE))
-    parser.add_argument("--out", help="write the verdict here as well as to stdout")
+    parser.add_argument("--out", required=True, help="write the verdict here")
     args = parser.parse_args(argv)
 
     api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -179,11 +181,11 @@ def main(argv=None):
                   "judge_model": args.model, "verdict": verdict,
                   "score": score(verdict, args.severity)}
 
-    output = json.dumps(result, indent=2)
-    if args.out:
-        with open(args.out, "w") as stream:
-            stream.write(output + "\n")
-    print(output)
+    with open(args.out, "w") as stream:
+        stream.write(json.dumps(result, indent=2) + "\n")
+    s = result["score"]
+    print(f"{args.record}: matched {s['matched_count']}/{s['baseline_count']}, "
+          f"extra {s['extra_count']}")
     return 0
 
 

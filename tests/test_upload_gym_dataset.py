@@ -1,11 +1,14 @@
 import importlib.util
-import io
 from pathlib import Path
+import sys
 import tempfile
 import unittest
-import urllib.error
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/gym/upload_gym_dataset.py'
+GYM = Path(__file__).resolve().parents[1] / 'scripts/gym'
+sys.path.insert(0, str(GYM))
+import datadog_api  # noqa: E402
+
+SCRIPT = GYM / 'upload_gym_dataset.py'
 spec = importlib.util.spec_from_file_location('upload_gym_dataset', SCRIPT)
 upload = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(upload)
@@ -87,36 +90,6 @@ class ToApiRecords(unittest.TestCase):
         document = upload.load(write())
         del document['records'][0]['tags']
         self.assertEqual(upload.to_api_records(document)[0]['tags'], [])
-
-
-class FindProject(unittest.TestCase):
-    def setUp(self):
-        self.calls = []
-        self.original = upload.request_json
-        self.addCleanup(setattr, upload, 'request_json', self.original)
-
-    def stub(self, payload):
-        def request_json(site, api_key, app_key, method, path, body=None):
-            self.calls.append((method, path, body))
-            return payload
-        upload.request_json = request_json
-
-    def test_returns_the_id_of_an_exact_name_match(self):
-        self.stub({'data': [{'id': 'abc', 'attributes': {'name': 'gym'}}]})
-        self.assertEqual(upload.find_project('datadoghq.com', 'k', 'a', 'gym'), 'abc')
-
-    def test_ignores_a_near_miss_from_a_contains_filter(self):
-        self.stub({'data': [{'id': 'abc', 'attributes': {'name': 'gym-staging'}}]})
-        self.assertIsNone(upload.find_project('datadoghq.com', 'k', 'a', 'gym'))
-
-    def test_returns_none_when_nothing_matches(self):
-        self.stub({'data': []})
-        self.assertIsNone(upload.find_project('datadoghq.com', 'k', 'a', 'gym'))
-
-    def test_url_encodes_the_name(self):
-        self.stub({'data': []})
-        upload.find_project('datadoghq.com', 'k', 'a', 'a b')
-        self.assertIn('a%20b', self.calls[0][1])
 
 
 class ProjectDatasets(unittest.TestCase):
@@ -321,7 +294,12 @@ class ProjectIdFlag(unittest.TestCase):
                 return {'data': [{'id': 'ds1', 'attributes': {
                     'name': 'sol-first-pass-findings'}}]}
             return {'data': []}
+        # The project lookup goes through the shared client, the rest through the
+        # upload script's own import of it; both see the same stub.
+        self.original_shared = datadog_api.request_json
+        self.addCleanup(setattr, datadog_api, 'request_json', self.original_shared)
         upload.request_json = request_json
+        datadog_api.request_json = request_json
 
     def run_upload(self, *extra):
         import os
@@ -357,23 +335,6 @@ class DryRun(unittest.TestCase):
         self.assertEqual(
             upload.main(['--file', '/nonexistent.yaml', '--project', 'g', '--dry-run']),
             2)
-
-
-class RequestJson(unittest.TestCase):
-    def test_wraps_an_http_error_with_the_response_body(self):
-        def urlopen(request, timeout=0):
-            raise urllib.error.HTTPError(
-                'u', 404, 'Not Found', {}, io.BytesIO(b'{"errors":["no such path"]}'))
-
-        original = upload.urllib.request.urlopen
-        upload.urllib.request.urlopen = urlopen
-        try:
-            with self.assertRaises(upload.DatadogError) as caught:
-                upload.request_json('datadoghq.com', 'k', 'a', 'GET', '/x')
-        finally:
-            upload.urllib.request.urlopen = original
-        self.assertIn('404', str(caught.exception))
-        self.assertIn('no such path', str(caught.exception))
 
 
 if __name__ == '__main__':

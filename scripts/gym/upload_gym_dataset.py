@@ -36,30 +36,24 @@ Writes go through `batch_update`, which deduplicates on record id. Re-uploading 
 YAML therefore reconciles rather than doubling the dataset, and cuts a new version each
 time. `--dry-run` prints what would be sent and calls nothing.
 
-These are Datadog's LLM Obs experiments endpoints, split across an `unstable` and a `v2`
-prefix; both constants are below because Datadog moves them when the API stabilizes, and
-a 404 on every call is the symptom.
-
 A project is looked up by name and created when absent. Pass `--project-id` when the
 project already exists and its UUID is known: it skips the lookup, so a name that the
 search does not return cannot lead to a second project with the same name.
 
 Usage:
   DD_API_KEY=... DD_APP_KEY=... scripts/gym/upload_gym_dataset.py \
-      --project 'code-review-gym' --file gym/sol-first-pass-findings.yaml
+      --project 'biggiepockets-review-gym' --file gym/sol-first-pass-findings.yaml
 """
 import argparse
 import json
-import os
 import sys
 import time
-import urllib.error
-import urllib.request
 
 import yaml
 
-UNSTABLE = "/api/unstable/llm-obs/v1"
-V2 = "/api/v2/llm-obs/v1"
+from datadog_api import (UNSTABLE, V2, DatadogError, credentials, find_project,
+                         request_json)
+
 # Datadog rejects very large writes; rows here are a few KB each, so this stays well
 # under the limit while keeping the number of round trips small.
 BATCH_SIZE = 50
@@ -67,44 +61,6 @@ BATCH_SIZE = 50
 # placement check retries before it calls a dataset misplaced.
 MEMBERSHIP_RETRIES = 5
 MEMBERSHIP_BACKOFF = 1.0
-
-
-class DatadogError(RuntimeError):
-    pass
-
-
-def request_json(site, api_key, app_key, method, path, body=None):
-    url = f"https://api.{site}{path}"
-    data = json.dumps(body).encode() if body is not None else None
-    request = urllib.request.Request(
-        url, data=data, method=method,
-        headers={
-            "DD-API-KEY": api_key,
-            "DD-APPLICATION-KEY": app_key,
-            "Content-Type": "application/json",
-        })
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            raw = response.read()
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode(errors="replace")[:500]
-        raise DatadogError(f"{method} {path} -> {error.code}: {detail}") from error
-    except urllib.error.URLError as error:
-        raise DatadogError(f"{method} {path} failed: {error}") from error
-
-
-def find_project(site, api_key, app_key, name):
-    """The id of the project called `name`, or None.
-
-    Datadog's filter is a contains-match on some deployments, so the exact name is
-    re-checked here; picking a near-miss would silently write into the wrong project."""
-    path = f"{UNSTABLE}/projects?filter%5Bname%5D={urllib.request.quote(name)}"
-    payload = request_json(site, api_key, app_key, "GET", path)
-    for item in payload.get("data") or []:
-        if ((item.get("attributes") or {}).get("name")) == name:
-            return item.get("id")
-    return None
 
 
 def project_datasets(site, api_key, app_key, project_id):
@@ -247,12 +203,11 @@ def main(argv=None):
         print(json.dumps(records[0], indent=2, default=str, ensure_ascii=False))
         return 0
 
-    api_key = os.environ.get("DD_API_KEY")
-    app_key = os.environ.get("DD_APP_KEY")
-    if not api_key or not app_key:
-        print("DD_API_KEY and DD_APP_KEY must be set", file=sys.stderr)
+    try:
+        site, api_key, app_key = credentials()
+    except DatadogError as error:
+        print(error, file=sys.stderr)
         return 2
-    site = os.environ.get("DD_SITE", "datadoghq.com")
 
     try:
         project_id = args.project_id

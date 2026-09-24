@@ -36,7 +36,9 @@ commit that was reviewed, and the branch name may not resolve at all.
 
 Usage:
   scripts/gym/replay_context.py --record <id> --dataset gym/....yaml --workdir /path
-Writes <workdir>/{pr.diff,ticket.json,conversations.json} and prints a JSON summary.
+Writes pr.diff, ticket.json and conversations.json into the checkout, where the review
+reads them, and the record's recorded findings to <workdir>/expected.md for the judge.
+Prints a JSON summary.
 """
 import argparse
 import json
@@ -226,6 +228,8 @@ def main(argv=None):
                                     os.path.join(checkout, "ticket.json"))
     counts = build_conversations(repo, pr, record["metadata"]["reviewed_at"],
                                  os.path.join(checkout, "conversations.json"), token)
+    with open(os.path.join(args.workdir, "expected.md"), "w") as stream:
+        stream.write(record["expected_output"]["findings"])
 
     print(json.dumps({
         "record": args.record, "repo": repo, "pr": pr,

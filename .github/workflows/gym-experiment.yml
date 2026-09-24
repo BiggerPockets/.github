@@ -7,22 +7,20 @@ name: Gym experiment (first-pass model recall)
 # so changing it changes what reaches a human reviewer across every repo at once — and
 # nothing in a review notices a model that quietly stops reporting a class of defect. A
 # finding that is never written leaves no trace, the run still passes, and Stage 2 verifies
-# only what it was handed. gym/sol-first-pass-findings.yaml holds what a previous model did
-# report, pinned to the commit it reviewed; this workflow re-asks those questions.
+# only what it was handed. The gym dataset holds what a previous model did report, pinned
+# to the commit it reviewed; this workflow re-asks those questions.
 #
-# ONE MODEL PER RUN. The `model` input takes a single OpenRouter slug and the plan job
-# rejects a list. Evaluating a different model is a separate dispatch of this workflow.
+# ONE MODEL PER RUN. The `model` input takes a single OpenRouter slug and planning rejects
+# a list. Evaluating a different model is a separate dispatch of this workflow.
 #
-# Fidelity: each replay job reproduces the production Stage-1 job as closely as possible —
-# same pi invocation, same system prompt, same tool allowlist, same OpenRouter routing —
-# differing only in checking out the recorded commit rather than the pull request's
-# current head. One replay per job, because a GitHub Action cannot be called in a loop and
-# looping via the CLI would measure a different harness than the one in use.
+# Results go to Datadog LLM Observability as one experiment per run (see
+# scripts/gym/datadog_experiment.py). Each replay is a span holding the model's review, the
+# recorded findings and the judge's scores. Those quote the private code under review, and
+# this repository is public, so none of it is printed to a log or uploaded as an artifact
+# here. GitHub keeps only the counts.
 #
-# The conversation handed to each replay is truncated to the moment of the original review.
-# BiggiePockets posts its review back onto the pull request, so today's discussion usually
-# contains the findings being tested for; without that cutoff a candidate could read the
-# answer off the page. See scripts/gym/replay_context.py.
+# Each step's logic lives in scripts/gym/steps/, one script per step, taking its inputs
+# from the step's `env:`.
 #
 # Cost: roughly $0.02 per replay on a cheap model and $0.17 on an expensive one, plus a
 # judge call per replay. The full dataset is ~97 jobs. Start with limit=3.
@@ -34,7 +32,7 @@ on:
         description: 'The one OpenRouter model slug to evaluate (e.g. openai/gpt-5.6-luna).'
         required: true
       dataset:
-        description: 'Path within BiggerPockets/pi-gym-data to the dataset file'
+        description: 'Path within BiggerPockets/pi-gym-data to the dataset file. Its dataset.name names the Datadog dataset.'
         required: false
         default: 'gym/sol-first-pass-findings.yaml'
       limit:
@@ -57,6 +55,10 @@ on:
         description: 'Only replay records recorded under the current first-pass prompt.'
         required: false
         default: 'true'
+      datadog_project:
+        description: 'Datadog LLM Obs project the experiment is recorded in'
+        required: false
+        default: 'biggiepockets-review-gym'
       max_parallel:
         description: 'Concurrent replays. OpenRouter reserves credit per in-flight request, so too many return 402.'
         required: false
@@ -70,6 +72,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      experiment_id: ${{ steps.experiment.outputs.experiment_id }}
+      project_id: ${{ steps.experiment.outputs.project_id }}
+      dataset_id: ${{ steps.experiment.outputs.dataset_id }}
+    env:
+      DATASET_FILE: gym-data/${{ inputs.dataset }}
+      MODEL: ${{ inputs.model }}
+      JUDGE_MODEL: ${{ inputs.judge_model }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -77,50 +86,22 @@ jobs:
           python-version: '3.12'
       - run: pip install -r scripts/gym/requirements.txt
 
-      # This repo holds the review workflow but does not run reviews: biggiepockets-review.yml
-      # is `workflow_call`, so the credentials it names resolve from the CALLING repo via
-      # `secrets: inherit` and are not secrets of this repo. Organization secrets do not reach
-      # here either — this repo is public and those are scoped to private repositories, which
-      # is also why model-freshness-check.yml carries its own DD_API_KEY/DD_APP_KEY.
-      #
-      # The gym therefore needs its own copies, and because they live in a PUBLIC repository
-      # the GitHub token is deliberately NOT the review service account's BIGGIEPOCKETS_PAT.
-      # GYM_REPO_TOKEN only ever reads: a fine-grained PAT with read-only Contents and Pull
-      # requests on the repositories the dataset's records point at, PLUS read-only Contents
-      # on BiggerPockets/pi-gym-data (checked out below), and a leak of it cannot write.
-      #
-      # Checked up front because the alternative is every replay job failing minutes later on
-      # an opaque git credential error, which is how the first run was spent.
+      # These secrets live on this PUBLIC repository, so GYM_REPO_TOKEN is deliberately not
+      # the review service account's BIGGIEPOCKETS_PAT, which can write. It is a fine-grained
+      # PAT with read-only Contents and Pull requests on the repositories the dataset points
+      # at, plus read-only Contents on BiggerPockets/pi-gym-data. A leak of it cannot write.
       - name: Check required secrets
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GYM_REPO_TOKEN: ${{ secrets.GYM_REPO_TOKEN }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-        run: |
-          missing=()
-          for name in OPENROUTER_API_KEY GYM_REPO_TOKEN JIRA_EMAIL JIRA_API_TOKEN; do
-            [ -n "${!name}" ] || missing+=("$name")
-          done
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Missing secrets on BiggerPockets/.github: ${missing[*]}"
-            echo "The gym runs in this repo, so it needs its own copies of the review"
-            echo "credentials — they are not inherited here. Add them with:"
-            for name in "${missing[@]}"; do
-              echo "  gh secret set $name --repo BiggerPockets/.github"
-            done
-            echo "JIRA_EMAIL/JIRA_API_TOKEN are only needed to send ticket context; without"
-            echo "them every replay degrades to a diff-only review, which is NOT comparable"
-            echo "to the recorded findings and will understate recall."
-            exit 1
-          fi
-          echo "All required secrets are present."
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+        run: >-
+          scripts/gym/steps/check-secrets.sh
+          OPENROUTER_API_KEY GYM_REPO_TOKEN JIRA_EMAIL JIRA_API_TOKEN DD_API_KEY DD_APP_KEY
 
-      # The findings in a record were produced by a specific first-pass prompt. Replaying a
-      # record whose prompt has since changed measures the prompt edit and the model swap
-      # at once and reports the sum as a model difference, so by default the run is scoped
-      # to records the CURRENT prompt actually produced. Set match_prompt_version=false to
-      # replay everything and accept that confound.
       - name: Resolve the current first-pass prompt version
         id: prompt
         env:
@@ -128,10 +109,8 @@ jobs:
           PR: '0'
         run: scripts/resolve-prompts.sh
 
-      # The dataset itself is private-repo-derived content (see README.md's "Model gym"
-      # section) and must never land in this PUBLIC repository — it lives in
-      # BiggerPockets/pi-gym-data instead, checked out here read-only with the same
-      # GYM_REPO_TOKEN used to read the pull requests it points at.
+      # The dataset is private-repo-derived content and must never land in this public
+      # repository, so it is checked out read-only from BiggerPockets/pi-gym-data.
       - name: Checkout gym dataset (BiggerPockets/pi-gym-data)
         uses: actions/checkout@v4
         with:
@@ -140,40 +119,48 @@ jobs:
           persist-credentials: false
           path: gym-data
 
-      - id: plan
-        run: |
-          if [ '${{ inputs.judge_model }}' = '${{ inputs.model }}' ]; then
-            echo "::error::judge_model must differ from the model under evaluation." >&2
-            exit 1
-          fi
-          python3 scripts/gym/plan_matrix.py \
-            --dataset 'gym-data/${{ inputs.dataset }}' \
-            --model '${{ inputs.model }}' \
-            ${{ inputs.limit && format('--limit {0}', inputs.limit) || '' }} \
-            ${{ inputs.severity && format('--severity {0}', inputs.severity) || '' }} \
-            ${{ inputs.record_ids && format('--record-ids {0}', inputs.record_ids) || '' }} \
-            ${{ inputs.match_prompt_version != 'false' && format('--prompt-version {0}', steps.prompt.outputs.first_pass_prompt_version) || '' }} \
-            --out matrix.json
-          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
+      # A record's findings were produced by a specific first-pass prompt. Replaying it
+      # under a changed prompt measures the prompt edit and the model together and reports
+      # the sum as the model, so by default the run is scoped to records the current prompt
+      # produced.
+      - name: Plan the replays
+        id: plan
+        env:
+          LIMIT: ${{ inputs.limit }}
+          SEVERITY: ${{ inputs.severity }}
+          RECORD_IDS: ${{ inputs.record_ids }}
+          PROMPT_VERSION: ${{ inputs.match_prompt_version != 'false' && steps.prompt.outputs.first_pass_prompt_version || '' }}
+        run: scripts/gym/steps/plan.sh
+
+      - name: Create the Datadog experiment
+        id: experiment
+        env:
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+          DATADOG_PROJECT: ${{ inputs.datadog_project }}
+          PROMPT_VERSION: ${{ steps.prompt.outputs.first_pass_prompt_version }}
+        run: scripts/gym/steps/create-experiment.sh
 
   replay:
     needs: plan
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      # OpenRouter reserves credit against every in-flight request, not just what a request
-      # finally costs, so concurrency is bounded by the account's available balance rather
-      # than by throughput. Running 8 replays of a large-context model at once returned
-      # "402 Payment Required: This request would exceed your available credits given your
-      # current in-flight requests" on well over half the jobs, and a 402 loses the replay
-      # rather than queueing it.
-      #
-      # This key is shared organization-wide, so the ceiling is shared with real reviews
-      # running at the same time: a wide gym run can starve production PR reviews of credit.
-      # Keep this low unless the balance is known to be generous.
+      # OpenRouter reserves credit against every in-flight request, so concurrency is
+      # bounded by the account balance, not throughput: 8 large-context replays at once
+      # returned "402 Payment Required" on well over half the jobs, and a 402 loses the
+      # replay rather than queueing it. The key is shared organization-wide, so a wide run
+      # can also starve production reviews of credit.
       max-parallel: ${{ fromJSON(inputs.max_parallel || '3') }}
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     name: ${{ matrix.label }} · ${{ matrix.record }}
+    env:
+      RECORD: ${{ matrix.record }}
+      LABEL: ${{ matrix.label }}
+      MODEL: ${{ matrix.model }}
+      DATASET_FILE: gym-data/${{ inputs.dataset }}
+      REPLAY_DIR: ${{ github.workspace }}/replay
+      OUT_DIR: ${{ github.workspace }}/out
     steps:
       - name: Checkout registry (prompts + scripts)
         uses: actions/checkout@v4
@@ -193,37 +180,29 @@ jobs:
           python-version: '3.12'
       - run: pip install -r registry/scripts/gym/requirements.txt
 
-      # The ticket key lives on the pull request title, not on the span, so it is read here
-      # and passed through. A record with no key replays as a diff-only review, which is
-      # what production does for those pull requests too.
       - name: Resolve ticket key
         id: ticket
         env:
           GH_TOKEN: ${{ secrets.GYM_REPO_TOKEN }}
-        run: |
-          title=$(gh api "/repos/${{ matrix.repo }}/pulls/${{ matrix.pr }}" --jq .title || echo '')
-          key=$(printf '%s' "$title" | grep -oiE 'BIG-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
-          echo "key=$key" >> "$GITHUB_OUTPUT"
-          echo "Ticket: ${key:-none}"
+          REPO: ${{ matrix.repo }}
+          PR: ${{ matrix.pr }}
+        run: registry/scripts/gym/steps/resolve-ticket.sh
 
-      # Rebuild the exact context the recorded review saw: the repo at the reviewed commit,
-      # the merge-base diff, the ticket, and the conversation as of that moment.
+      # The repo at the reviewed commit, the merge-base diff, the ticket, and the
+      # conversation as of the review. See scripts/gym/replay_context.py.
       - name: Rebuild replay context
         env:
           GH_TOKEN: ${{ secrets.GYM_REPO_TOKEN }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-        run: |
-          python3 registry/scripts/gym/replay_context.py \
-            --record '${{ matrix.record }}' \
-            --dataset 'gym-data/${{ inputs.dataset }}' \
-            --workdir "$GITHUB_WORKSPACE/replay" \
-            --checkout "$GITHUB_WORKSPACE/replay/repo" \
-            --ticket-key '${{ steps.ticket.outputs.key }}'
+          TICKET_KEY: ${{ steps.ticket.outputs.key }}
+        run: >-
+          python3 registry/scripts/gym/replay_context.py
+          --record "$RECORD" --dataset "$DATASET_FILE" --workdir "$REPLAY_DIR"
+          --ticket-key "$TICKET_KEY"
 
-      # resolve-prompts.sh requires PR and substitutes {{PR}} into the prompt text, so it
-      # is given the record's own pull request rather than this workflow's run. Without
-      # that the replayed prompt would not be the prompt the recorded review ran.
+      # resolve-prompts.sh substitutes {{PR}} into the prompt, so it is given the record's
+      # own pull request; otherwise the replayed prompt is not the one the review ran.
       - name: Resolve review prompts
         id: resolve
         env:
@@ -232,156 +211,66 @@ jobs:
           GITHUB_REPOSITORY: ${{ matrix.repo }}
         run: registry/scripts/resolve-prompts.sh
 
-      # Same harness the production first pass runs on: pi, not a GitHub Action wrapper.
-      # This matters beyond fidelity — a model outside the OpenAI family (e.g. deepseek)
-      # doesn't speak OpenRouter's /v1/responses shape that a Codex-flavored action
-      # expects, and the previous codex-action-based replay step crashed the runner
-      # outright on such models (no logs, no artifact) rather than failing cleanly.
       - name: Install pi
-        run: |
-          npm install -g "@earendil-works/pi-coding-agent@0.84.3"
-          echo "$(npm config get prefix)/bin" >> "$GITHUB_PATH"
+        run: registry/scripts/gym/steps/install-pi.sh
 
-      - name: Resolve OpenRouter routing
-        continue-on-error: true
-        run: |
-          routing=$(python3 registry/scripts/pi/openrouter.py routing "${{ matrix.model }}") || routing=""
-          [ -n "$routing" ] || routing='{}'
-          echo "OPENROUTER_ROUTING=$routing" >> "$GITHUB_ENV"
-
-      # Filters scripts/pi/models.json to models allowed for stage1, same as production's
-      # first-pass job, and fails early (by name) if matrix.model isn't pinned there.
       - name: Configure pi
-        run: |
-          mkdir -p "$RUNNER_TEMP/pi-config"
-          routing="${OPENROUTER_ROUTING:-}"
-          [ -n "$routing" ] || routing='{}'
-          jq --argjson routing "$routing" --arg model "${{ matrix.model }}" \
-            '{providers: {openrouter: (.providers.openrouter
-                | {baseUrl, apiKey, api,
-                   models: [.models[]
-                     | del(.stages)
-                     | if .id == $model and ($routing | length) > 0
-                       then .compat = ((.compat // {}) + {openRouterRouting: $routing})
-                       else . end]})}}' \
-            registry/scripts/pi/models.json > "$RUNNER_TEMP/pi-config/models.json"
-          echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-config" >> "$GITHUB_ENV"
+        run: registry/scripts/gym/steps/configure-pi.sh
 
-          if ! jq -e --arg m "${{ matrix.model }}" \
-            '.providers.openrouter.models[]
-               | select(.id == $m) | select((.stages // ["stage1"]) | index("stage1"))' \
-            registry/scripts/pi/models.json > /dev/null; then
-            known=$(jq -r '.providers.openrouter.models[]
-                             | select((.stages // ["stage1"]) | index("stage1")) | .id' \
-                    registry/scripts/pi/models.json | paste -sd, -)
-            echo "::error::'${{ matrix.model }}' is not pinned for stage1 in scripts/pi/models.json (have: $known)." >&2
-            exit 1
-          fi
-
-      # Same pi invocation and system prompt as production's first-pass job. Working
-      # directory is the replay checkout, so ticket.json and pr.diff resolve as they do
-      # in a real review.
       - name: Replay first-pass review
         id: replay
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           FIRST_PASS_PROMPT: ${{ steps.resolve.outputs.first_pass_prompt }}
-        working-directory: replay/repo
-        run: |
-          printf '%s' "$FIRST_PASS_PROMPT" > first-pass-prompt.txt
-          system_prompt=$(cat "$GITHUB_WORKSPACE/registry/prompts/first-pass-system.md")
-          timeout 900 pi --mode json \
-            --model "${{ matrix.model }}" \
-            --system-prompt "$system_prompt" \
-            --thinking medium \
-            --tools read,grep,glob,bash \
-            --no-context-files --no-skills --no-extensions \
-            --no-themes --no-prompt-templates \
-            @first-pass-prompt.txt \
-            > first-pass-output.jsonl 2> first-pass-error.log || pi_exit=$?
-          pi_exit="${pi_exit:-0}"
-          echo "$pi_exit" > "$GITHUB_WORKSPACE/replay/pi_exit"
+        run: registry/scripts/gym/steps/replay.sh
 
-          python3 "$GITHUB_WORKSPACE/registry/scripts/pi/final-message.py" \
-            first-pass-output.jsonl > "$GITHUB_WORKSPACE/replay/findings.md"
-          if [ ! -s "$GITHUB_WORKSPACE/replay/findings.md" ]; then
-            echo "::error::replay produced no findings (pi exit $pi_exit)" >&2
-            tail -60 first-pass-error.log >&2 || true
-            exit 1
-          fi
+      - name: Mark the replay failed
+        if: steps.replay.outcome == 'failure'
+        run: mkdir -p "$OUT_DIR" && echo "$RECORD" > "$OUT_DIR/FAILED"
 
-      # Which OpenRouter endpoint(s) actually served this replay, and how long each call
-      # took — measured after the fact from pi's own recorded generation ids, not
-      # asserted from the routing preference sent beforehand. Runs even when the replay
-      # timed out: every turn that finished before the 900s kill already wrote its id, so
-      # a killed run's partial attribution is exactly what explains the kill. This is the
-      # same lookup production's Stage 2 job uses (see biggiepockets-review.yml), added
-      # here because the gym's replay had no equivalent — routing.py was reporting what
-      # it ASKED OpenRouter for, never what OpenRouter actually did with it.
-      - name: Attribute the run to OpenRouter endpoints
+      - name: Attribute the replay to OpenRouter endpoints
         if: always()
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/out"
-          attribution=$(python3 registry/scripts/pi/openrouter.py attribute \
-            "$GITHUB_WORKSPACE/replay/repo/first-pass-output.jsonl" \
-            --api-key "$OPENROUTER_API_KEY") || attribution=""
-          [ -n "$attribution" ] || attribution='{"primary":"","providers":[],"metrics":{}}'
-          pi_exit=$(cat "$GITHUB_WORKSPACE/replay/pi_exit" 2>/dev/null || echo "unknown")
-          jq -n --argjson attribution "$attribution" --arg record '${{ matrix.record }}' \
-            --arg label '${{ matrix.label }}' --arg pi_exit "$pi_exit" \
-            '{record: $record, label: $label, pi_exit: $pi_exit, timed_out: ($pi_exit == "124")} + $attribution' \
-            > "$GITHUB_WORKSPACE/out/${{ matrix.label }}--${{ matrix.record }}-attribution.json"
-          echo "Served by: $(printf '%s' "$attribution" | jq -c '.calls_by_provider // {}') (pi exit $pi_exit)"
+        run: registry/scripts/gym/steps/attribute.sh
 
-      - name: Record a failed replay
-        if: steps.replay.outcome == 'failure'
-        run: |
-          echo "::warning::replay failed for ${{ matrix.record }} on ${{ matrix.label }}"
-          mkdir -p "$GITHUB_WORKSPACE/out"
-          echo '${{ matrix.record }}' > "$GITHUB_WORKSPACE/out/FAILED"
-
-      # Judged only when the replay itself succeeded: scoring a crashed checkout as a model
-      # miss would blame the model for the harness.
+      # Judged only when the replay succeeded: scoring a crashed checkout as a model miss
+      # would blame the model for the harness.
       - name: Judge the replay
         if: steps.replay.outcome == 'success'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/out"
-          python3 - <<'PY' > "$GITHUB_WORKSPACE/replay/expected.md"
-          import yaml
-          doc = yaml.safe_load(open('gym-data/${{ inputs.dataset }}'))
-          rec = next(r for r in doc['records'] if r['id'] == '${{ matrix.record }}')
-          print(rec['expected_output']['findings'])
-          PY
-          python3 registry/scripts/gym/judge_findings.py \
-            --expected "$GITHUB_WORKSPACE/replay/expected.md" \
-            --actual "$GITHUB_WORKSPACE/replay/findings.md" \
-            --record '${{ matrix.record }}' \
-            --label '${{ matrix.label }}' \
-            --severity '${{ matrix.severity }}' \
-            --model '${{ inputs.judge_model }}' \
-            --out "$GITHUB_WORKSPACE/out/${{ matrix.label }}--${{ matrix.record }}.json"
+          JUDGE_MODEL: ${{ inputs.judge_model }}
+          SEVERITY: ${{ matrix.severity }}
+        run: registry/scripts/gym/steps/judge.sh
 
-      - name: Upload result
+      - name: Record the replay in the Datadog experiment
+        if: always()
+        env:
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+          EXPERIMENT_ID: ${{ needs.plan.outputs.experiment_id }}
+          PROJECT_ID: ${{ needs.plan.outputs.project_id }}
+          DATASET_ID: ${{ needs.plan.outputs.dataset_id }}
+        run: registry/scripts/gym/steps/record-replay.sh
+
+      - name: Upload counts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gym-${{ matrix.label }}--${{ matrix.record }}
           if-no-files-found: ignore
           retention-days: 14
-          path: |
-            out/
-            replay/findings.md
+          path: out/
 
   report:
-    needs: replay
-    if: always()
+    needs: [plan, replay]
+    if: always() && needs.plan.result == 'success'
     runs-on: ubuntu-latest
+    env:
+      EXPERIMENT_ID: ${{ needs.plan.outputs.experiment_id }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -395,20 +284,21 @@ jobs:
           path: results
           merge-multiple: false
 
-      - name: Collect failures
-        run: |
-          find results -name FAILED -exec cat {} \; > failures.txt || true
-          echo "Failed replays: $(wc -l < failures.txt)"
-
       - name: Summarize
-        run: |
-          python3 scripts/gym/summarize_run.py \
-            --results-dir results \
-            --failures failures.txt \
-            --out summary.md --json summary.json
-          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+        env:
+          DATADOG_PROJECT: ${{ inputs.datadog_project }}
+        run: scripts/gym/steps/summarize.sh
+
+      - name: Close the Datadog experiment
+        if: always()
+        env:
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+          REPLAY_RESULT: ${{ needs.replay.result }}
+        run: scripts/gym/steps/finish-experiment.sh
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: gym-summary
           retention-days: 90
