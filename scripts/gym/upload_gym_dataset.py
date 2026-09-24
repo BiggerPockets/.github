@@ -46,7 +46,7 @@ search does not return cannot lead to a second project with the same name.
 
 Usage:
   DD_API_KEY=... DD_APP_KEY=... scripts/gym/upload_gym_dataset.py \
-      --project 'code-review-gym' --file gym/sol-first-pass-findings.yaml
+      --project 'biggiepockets-review-gym' --file gym/sol-first-pass-findings.yaml
 """
 import argparse
 import json

@@ -3,6 +3,12 @@ name: Gym experiment (first-pass model recall)
 # Replays recorded first-pass reviews against ONE model and reports how much of what the
 # recorded model found that model still finds.
 #
+# Results go to Datadog LLM Observability as one experiment per run, against the gym
+# dataset in the `biggiepockets-review-gym` project: each replay is a span holding the
+# model's review, the recorded findings and the judge's scores. Those quote the private
+# code under review, so nothing that quotes it is printed to a log or uploaded as an
+# artifact here — this repository is public. GitHub keeps only the counts.
+#
 # Why this exists: Stage 1's model is set by an organization variable (vars.FIRST_PASS_MODEL),
 # so changing it changes what reaches a human reviewer across every repo at once — and
 # nothing in a review notices a model that quietly stops reporting a class of defect. A
@@ -57,6 +63,14 @@ on:
         description: 'Only replay records recorded under the current first-pass prompt.'
         required: false
         default: 'true'
+      datadog_project:
+        description: 'Datadog LLM Obs project the experiment is recorded in'
+        required: false
+        default: 'biggiepockets-review-gym'
+      datadog_dataset:
+        description: 'Datadog dataset in that project mirroring the dataset file'
+        required: false
+        default: 'sol-first-pass-findings'
       max_parallel:
         description: 'Concurrent replays. OpenRouter reserves credit per in-flight request, so too many return 402.'
         required: false
@@ -70,6 +84,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      experiment_id: ${{ steps.experiment.outputs.experiment_id }}
+      project_id: ${{ steps.experiment.outputs.project_id }}
+      dataset_id: ${{ steps.experiment.outputs.dataset_id }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -97,9 +114,11 @@ jobs:
           GYM_REPO_TOKEN: ${{ secrets.GYM_REPO_TOKEN }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
         run: |
           missing=()
-          for name in OPENROUTER_API_KEY GYM_REPO_TOKEN JIRA_EMAIL JIRA_API_TOKEN; do
+          for name in OPENROUTER_API_KEY GYM_REPO_TOKEN JIRA_EMAIL JIRA_API_TOKEN DD_API_KEY DD_APP_KEY; do
             [ -n "${!name}" ] || missing+=("$name")
           done
           if [ ${#missing[@]} -gt 0 ]; then
@@ -155,6 +174,27 @@ jobs:
             ${{ inputs.match_prompt_version != 'false' && format('--prompt-version {0}', steps.prompt.outputs.first_pass_prompt_version) || '' }} \
             --out matrix.json
           echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
+
+      # Created before any replay so every replay has somewhere to post, and so a Datadog
+      # dataset that has drifted from pi-gym-data stops the run before it spends anything.
+      - name: Create Datadog experiment
+        id: experiment
+        env:
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+        run: |
+          created=$(python3 scripts/gym/datadog_experiment.py create \
+            --project '${{ inputs.datadog_project }}' \
+            --dataset '${{ inputs.datadog_dataset }}' \
+            --model '${{ inputs.model }}' \
+            --judge-model '${{ inputs.judge_model }}' \
+            --prompt-version '${{ steps.prompt.outputs.first_pass_prompt_version }}' \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --records matrix.json)
+          for key in experiment_id project_id dataset_id; do
+            echo "$key=$(printf '%s' "$created" | jq -r ".$key")" >> "$GITHUB_OUTPUT"
+          done
+          echo "Datadog experiment: $(printf '%s' "$created" | jq -r .experiment_id)"
 
   replay:
     needs: plan
@@ -291,6 +331,7 @@ jobs:
         run: |
           printf '%s' "$FIRST_PASS_PROMPT" > first-pass-prompt.txt
           system_prompt=$(cat "$GITHUB_WORKSPACE/registry/prompts/first-pass-system.md")
+          date +%s%N > "$GITHUB_WORKSPACE/replay/started_ns"
           timeout 900 pi --mode json \
             --model "${{ matrix.model }}" \
             --system-prompt "$system_prompt" \
@@ -301,13 +342,17 @@ jobs:
             @first-pass-prompt.txt \
             > first-pass-output.jsonl 2> first-pass-error.log || pi_exit=$?
           pi_exit="${pi_exit:-0}"
+          date +%s%N > "$GITHUB_WORKSPACE/replay/ended_ns"
           echo "$pi_exit" > "$GITHUB_WORKSPACE/replay/pi_exit"
 
           python3 "$GITHUB_WORKSPACE/registry/scripts/pi/final-message.py" \
             first-pass-output.jsonl > "$GITHUB_WORKSPACE/replay/findings.md"
+          # pi's error log can quote the model's partial output, so it goes to the
+          # Datadog span for this replay rather than to this public job log.
           if [ ! -s "$GITHUB_WORKSPACE/replay/findings.md" ]; then
             echo "::error::replay produced no findings (pi exit $pi_exit)" >&2
-            tail -60 first-pass-error.log >&2 || true
+            { echo "replay produced no findings (pi exit $pi_exit)"
+              tail -60 first-pass-error.log || true; } > "$GITHUB_WORKSPACE/replay/failure.txt"
             exit 1
           fi
 
@@ -344,20 +389,27 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/out"
           echo '${{ matrix.record }}' > "$GITHUB_WORKSPACE/out/FAILED"
 
-      # Judged only when the replay itself succeeded: scoring a crashed checkout as a model
-      # miss would blame the model for the harness.
-      - name: Judge the replay
-        if: steps.replay.outcome == 'success'
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      - name: Extract the recorded findings
+        if: always()
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/out"
           python3 - <<'PY' > "$GITHUB_WORKSPACE/replay/expected.md"
           import yaml
           doc = yaml.safe_load(open('gym-data/${{ inputs.dataset }}'))
           rec = next(r for r in doc['records'] if r['id'] == '${{ matrix.record }}')
           print(rec['expected_output']['findings'])
           PY
+
+      # Judged only when the replay itself succeeded: scoring a crashed checkout as a model
+      # miss would blame the model for the harness. The full verdict quotes the code under
+      # review, so it stays in replay/ (never uploaded) and goes to Datadog; out/ gets a
+      # copy with the counts only, which is all the run summary needs.
+      - name: Judge the replay
+        id: judge
+        if: steps.replay.outcome == 'success'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/out"
           python3 registry/scripts/gym/judge_findings.py \
             --expected "$GITHUB_WORKSPACE/replay/expected.md" \
             --actual "$GITHUB_WORKSPACE/replay/findings.md" \
@@ -365,22 +417,50 @@ jobs:
             --label '${{ matrix.label }}' \
             --severity '${{ matrix.severity }}' \
             --model '${{ inputs.judge_model }}' \
-            --out "$GITHUB_WORKSPACE/out/${{ matrix.label }}--${{ matrix.record }}.json"
+            --out "$GITHUB_WORKSPACE/replay/verdict.json"
+          jq '{record, label, severity, judge_model, score}' "$GITHUB_WORKSPACE/replay/verdict.json" \
+            > "$GITHUB_WORKSPACE/out/${{ matrix.label }}--${{ matrix.record }}.json"
 
-      - name: Upload result
+      # Every replay is posted, including failed ones, so the experiment shows which
+      # records did not run instead of silently holding fewer rows.
+      - name: Record the replay in the Datadog experiment
+        if: always()
+        env:
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+        run: |
+          failure=""
+          if [ '${{ steps.replay.outcome }}' != 'success' ]; then
+            failure=$(cat replay/failure.txt 2>/dev/null || echo "replay step did not succeed")
+          elif [ '${{ steps.judge.outcome }}' != 'success' ]; then
+            failure="judge did not produce a verdict"
+          fi
+          python3 registry/scripts/gym/datadog_experiment.py record \
+            --experiment-id '${{ needs.plan.outputs.experiment_id }}' \
+            --project-id '${{ needs.plan.outputs.project_id }}' \
+            --dataset-id '${{ needs.plan.outputs.dataset_id }}' \
+            --model '${{ matrix.model }}' \
+            --record '${{ matrix.record }}' \
+            --findings replay/findings.md \
+            --expected replay/expected.md \
+            --verdict replay/verdict.json \
+            --attribution 'out/${{ matrix.label }}--${{ matrix.record }}-attribution.json' \
+            --started-ns replay/started_ns \
+            --ended-ns replay/ended_ns \
+            ${failure:+--failure "$failure"}
+
+      - name: Upload counts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gym-${{ matrix.label }}--${{ matrix.record }}
           if-no-files-found: ignore
           retention-days: 14
-          path: |
-            out/
-            replay/findings.md
+          path: out/
 
   report:
-    needs: replay
-    if: always()
+    needs: [plan, replay]
+    if: always() && needs.plan.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -407,6 +487,23 @@ jobs:
             --failures failures.txt \
             --out summary.md --json summary.json
           cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo ""
+            echo "Per-record results: Datadog LLM Observability → Experiments →"
+            echo "project \`${{ inputs.datadog_project }}\`, experiment id"
+            echo "\`${{ needs.plan.outputs.experiment_id }}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Close the Datadog experiment
+        if: always()
+        env:
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+        run: |
+          status=completed
+          [ '${{ needs.replay.result }}' = 'success' ] || status=failed
+          python3 scripts/gym/datadog_experiment.py finish \
+            --experiment-id '${{ needs.plan.outputs.experiment_id }}' --status "$status"
 
       - uses: actions/upload-artifact@v4
         with:
