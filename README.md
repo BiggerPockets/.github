@@ -654,15 +654,6 @@ GitHub keeps only counts: the run summary, the `gym-summary` artifact, and a per
 artifact holding `score.json` (the judge's counts), `attribution.json` (the OpenRouter
 endpoints that served the replay) and, for a replay that failed, a `FAILED` marker.
 
-**Importing a run from its artifacts.** A gym run whose per-replay artifacts hold the
-review and the verdict themselves is recorded in Datadog by dispatching
-`gym-import-run.yml` with its `run_id`. That writes one experiment per model the run
-replayed, in the same shape as above, tagged `github_run_id:<id>` and `workflow_sha:<sha>`
-(the replay harness differs between workflow versions). A model with no scored replay is
-skipped, and a model already imported for that run is skipped too, so a repeat dispatch
-is harmless. Replay timings come from the run's job steps. The run's artifacts stay on
-GitHub until deleted.
-
 Each workflow step is one call to a script in `scripts/gym/steps/`, which takes its inputs
 from the step's `env:`. The Python they call is in `scripts/gym/`; the Datadog client the
 gym scripts share is `scripts/gym/datadog_api.py`.

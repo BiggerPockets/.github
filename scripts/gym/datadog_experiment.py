@@ -91,11 +91,10 @@ def dataset_record_ids(site, api_key, app_key, project_id, dataset_id):
 
 
 def create_body(dataset_id, project_id, dataset_version, model, judge_model,
-                prompt_version, run_url, extra_tags=()):
+                prompt_version, run_url):
     tags = [f"model:{model}", f"judge_model:{judge_model}"]
     if prompt_version:
         tags.append(f"prompt_version:{prompt_version}")
-    tags.extend(extra_tags)
     return {"data": {"type": "experiments", "attributes": {
         "name": EXPERIMENT_NAME,
         "description": f"First-pass recall of {model} against the recorded findings.",
@@ -175,7 +174,9 @@ def record_body(experiment_id, tags, record, replay):
     run = replay["run"]
     ended_ns = run.get("ended_ns") or time.time_ns()
     started_ns = run.get("started_ns") or ended_ns - 1
-    timestamp_ms = ended_ns // 1_000_000
+    # The backend rejects a metric timestamped more than 24 hours ago, so a metric carries
+    # the time it is posted and the span carries the time the replay ran.
+    timestamp_ms = time.time_ns() // 1_000_000
 
     metrics = []
 
@@ -235,24 +236,8 @@ def resolve_project(site, api_key, app_key, name):
     return project_id
 
 
-def find_experiment(site, api_key, app_key, project_id, tags):
-    """The experiment in the project that carries every one of `tags`, as its attributes
-    plus `id`, or None. The filter is a containment match; the tags are re-checked here
-    so a looser match on the server cannot pass for a duplicate."""
-    query = urllib.parse.urlencode([
-        ("filter[project_id]", project_id),
-        ("filter[metadata]", json.dumps({"tags": list(tags)}, separators=(",", ":"))),
-    ])
-    payload = request_json(site, api_key, app_key, "GET", f"{V2}/experiments?{query}")
-    for item in payload.get("data") or []:
-        attributes = item.get("attributes") or {}
-        if set(tags) <= set((attributes.get("metadata") or {}).get("tags") or []):
-            return {**attributes, "id": item.get("id")}
-    return None
-
-
 def start_experiment(site, api_key, app_key, project_id, dataset_file, records, model,
-                     judge_model, prompt_version, run_url, extra_tags=()):
+                     judge_model, prompt_version, run_url):
     """Create a running experiment of `model` over `records`, and return its ids as
     {experiment_id, project_id, dataset_id}."""
     name = dataset_name(dataset_file)
@@ -268,7 +253,7 @@ def start_experiment(site, api_key, app_key, project_id, dataset_file, records, 
             f"upload_gym_dataset.py.")
 
     body = create_body(dataset_id, project_id, version, model, judge_model,
-                       prompt_version, run_url, extra_tags)
+                       prompt_version, run_url)
     payload = request_json(site, api_key, app_key, "POST", f"{UNSTABLE}/experiments", body)
     experiment_id = (payload.get("data") or {}).get("id")
     if not experiment_id:

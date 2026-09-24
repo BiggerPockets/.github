@@ -76,6 +76,11 @@ class RecordBody(unittest.TestCase):
         span = span_of(self.body())
         self.assertEqual((span['start_ns'], span['duration']), (1_000, 4_000))
 
+    def test_timestamps_metrics_when_posted_not_when_the_replay_ran(self):
+        with mock.patch.object(dx.time, 'time_ns', return_value=9_000_000_000):
+            recall = metrics_by_label(self.body())['recall']
+        self.assertEqual(recall['timestamp_ms'], 9_000)
+
     def test_duration_is_never_zero(self):
         span = span_of(self.body(run={**RUN, 'started_ns': 5_000}))
         self.assertEqual(span['duration'], 1)
@@ -116,29 +121,6 @@ class CreateBody(unittest.TestCase):
         self.assertEqual((attrs['dataset_id'], attrs['dataset_version']), ('ds1', 2))
         self.assertEqual(attrs['config']['model'], 'openai/gpt-5.6-luna')
         self.assertIn('model:openai/gpt-5.6-luna', attrs['metadata']['tags'])
-
-    def test_appends_extra_tags(self):
-        attrs = attributes(dx.create_body('ds1', 'proj1', 2, 'm/one', 'judge/x', '', '',
-                                          ['github_run_id:42']))
-        self.assertIn('github_run_id:42', attrs['metadata']['tags'])
-
-
-class FindExperiment(unittest.TestCase):
-    def find(self, stored_tags):
-        payload = {'data': [{'id': 'exp1', 'attributes': {
-            'status': 'completed', 'metadata': {'tags': stored_tags}}}]}
-        with mock.patch.object(dx, 'request_json', return_value=payload) as request:
-            found = dx.find_experiment('site', 'k', 'a', 'proj1', ['model:m', 'run:1'])
-        return found, request.call_args.args[4]
-
-    def test_returns_the_experiment_carrying_every_tag(self):
-        found, path = self.find(['model:m', 'run:1', 'other:x'])
-        self.assertEqual((found['id'], found['status']), ('exp1', 'completed'))
-        self.assertIn('filter%5Bproject_id%5D=proj1', path)
-
-    def test_ignores_an_experiment_missing_one_of_the_tags(self):
-        found, _ = self.find(['model:m'])
-        self.assertIsNone(found)
 
 
 class DatasetName(unittest.TestCase):
