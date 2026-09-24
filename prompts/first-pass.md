@@ -43,10 +43,13 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
 12. Check whether the diff makes a new environment variable mandatory without giving
    development, CI, and review apps a value for it, per these rules:
    {{@prompts/_shared/env-var-rules.md}}
-13. Judge the value of the specs the diff adds or changes, per these rules, and report a
+13. Check that every URL path the diff adds or changes is reachable through the layers in
+   front of its handler — nginx, Rack middleware, route order — per these rules:
+   {{@prompts/_shared/route-reachability-rules.md}}
+14. Judge the value of the specs the diff adds or changes, per these rules, and report a
    useless spec with a file/line reference and the assertion that would make it fail:
    {{@prompts/_shared/spec-value-rules.md}}
-14. Report concrete issues — bugs, regressions, security problems, member-privacy
+15. Report concrete issues — bugs, regressions, security problems, member-privacy
    violations, incomplete tasks/half-measures/placeholders/deferred work, specs that cannot
    fail usefully, and genuine misses of the ticket's intent or clear scope creep — each with
    a file/line reference and a brief rationale. Do not list "doesn't match acceptance criteria" as an issue by itself; only
