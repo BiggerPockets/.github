@@ -32,42 +32,44 @@ def record(rid='repo-pr1', pr=1, head='a' * 40, base='b' * 40, severity='blockin
     }
 
 
-class ArmLabel(unittest.TestCase):
+class ModelLabel(unittest.TestCase):
     def test_strips_the_provider_and_punctuation(self):
-        self.assertEqual(plan_matrix.arm_label('openai/gpt-5.6-luna'), 'gpt-5-6-luna')
+        self.assertEqual(plan_matrix.model_label('openai/gpt-5.6-luna'), 'gpt-5-6-luna')
 
     def test_is_stable_for_a_bare_slug(self):
-        self.assertEqual(plan_matrix.arm_label('claude-haiku-4.5'), 'claude-haiku-4-5')
+        self.assertEqual(plan_matrix.model_label('claude-haiku-4.5'), 'claude-haiku-4-5')
 
 
 class PlanMatrix(unittest.TestCase):
     def doc(self, n=3):
         return {'records': [record(f'repo-pr{i}', pr=i) for i in range(1, n + 1)]}
 
-    def test_emits_one_job_per_record_per_arm(self):
-        include, _ = plan_matrix.plan(self.doc(3), ['a/one', 'b/two'])
-        self.assertEqual(len(include), 6)
+    def test_emits_one_job_per_record_for_the_one_model(self):
+        include, _ = plan_matrix.plan(self.doc(3), 'a/one')
+        self.assertEqual([j['record'] for j in include],
+                         ['repo-pr1', 'repo-pr2', 'repo-pr3'])
+        self.assertEqual({(j['model'], j['label']) for j in include}, {('a/one', 'one')})
 
     def test_limit_takes_the_first_n_so_runs_are_comparable(self):
-        include, _ = plan_matrix.plan(self.doc(5), ['a/one'], limit=2)
+        include, _ = plan_matrix.plan(self.doc(5), 'a/one', limit=2)
         self.assertEqual([j['record'] for j in include], ['repo-pr1', 'repo-pr2'])
 
     def test_carries_the_pinned_commit_into_each_job(self):
-        include, _ = plan_matrix.plan(self.doc(1), ['a/one'])
+        include, _ = plan_matrix.plan(self.doc(1), 'a/one')
         self.assertEqual(include[0]['head_sha'], 'a' * 40)
         self.assertEqual(include[0]['base_sha'], 'b' * 40)
 
     def test_skips_and_reports_unpinned_records(self):
         doc = self.doc(2)
         doc['records'][0]['input']['head_sha'] = None
-        include, skipped = plan_matrix.plan(doc, ['a/one'])
+        include, skipped = plan_matrix.plan(doc, 'a/one')
         self.assertEqual(skipped, ['repo-pr1'])
         self.assertEqual([j['record'] for j in include], ['repo-pr2'])
 
     def test_filters_by_severity(self):
         doc = {'records': [record('a', severity='blocker'),
                            record('b', severity='non-blocking')]}
-        include, _ = plan_matrix.plan(doc, ['a/one'], severities={'blocker'})
+        include, _ = plan_matrix.plan(doc, 'a/one', severities={'blocker'})
         self.assertEqual([j['record'] for j in include], ['a'])
 
     def test_prompt_version_filter_excludes_records_from_an_older_prompt(self):
@@ -75,7 +77,7 @@ class PlanMatrix(unittest.TestCase):
         # model swap together and reports the sum as a model difference.
         doc = {'records': [record('current', prompt_version='44f066e07f6b'),
                            record('stale', prompt_version='301569d42943')]}
-        include, skipped = plan_matrix.plan(doc, ['a/one'],
+        include, skipped = plan_matrix.plan(doc, 'a/one',
                                             prompt_version='44f066e07f6b')
         self.assertEqual([j['record'] for j in include], ['current'])
         self.assertIn('stale', skipped)
@@ -83,20 +85,20 @@ class PlanMatrix(unittest.TestCase):
     def test_no_prompt_version_filter_keeps_every_record(self):
         doc = {'records': [record('current', prompt_version='44f066e07f6b'),
                            record('stale', prompt_version='301569d42943')]}
-        include, skipped = plan_matrix.plan(doc, ['a/one'])
+        include, skipped = plan_matrix.plan(doc, 'a/one')
         self.assertEqual(len(include), 2)
         self.assertEqual(skipped, [])
 
     def test_a_record_with_no_recorded_prompt_version_is_excluded_when_filtering(self):
         doc = {'records': [record('unknown', prompt_version=None)]}
-        include, skipped = plan_matrix.plan(doc, ['a/one'],
+        include, skipped = plan_matrix.plan(doc, 'a/one',
                                             prompt_version='44f066e07f6b')
         self.assertEqual(include, [])
         self.assertIn('unknown', skipped)
 
     def test_severity_rides_along_for_weighting(self):
         doc = {'records': [record('a', severity='blocker')]}
-        include, _ = plan_matrix.plan(doc, ['a/one'])
+        include, _ = plan_matrix.plan(doc, 'a/one')
         self.assertEqual(include[0]['severity'], 'blocker')
 
 
@@ -111,10 +113,15 @@ class PlanMatrixRecordIdsFilter(unittest.TestCase):
         yaml.safe_dump({'records': [record(i) for i in ids]}, path.open('w'))
         return str(path)
 
+    def test_rejects_more_than_one_model(self):
+        dataset = self.write_dataset(['a'])
+        rc = plan_matrix.main(['--dataset', dataset, '--model', 'x/one,y/two'])
+        self.assertEqual(rc, 1)
+
     def test_keeps_only_the_named_records(self):
         dataset = self.write_dataset(['a', 'b', 'c'])
         out = Path(tempfile.mkdtemp()) / 'matrix.json'
-        rc = plan_matrix.main(['--dataset', dataset, '--arms', 'x/one',
+        rc = plan_matrix.main(['--dataset', dataset, '--model', 'x/one',
                                '--record-ids', 'a,c', '--out', str(out)])
         self.assertEqual(rc, 0)
         matrix = json.loads(out.read_text())
@@ -123,7 +130,7 @@ class PlanMatrixRecordIdsFilter(unittest.TestCase):
     def test_warns_but_does_not_fail_on_an_unknown_id(self):
         dataset = self.write_dataset(['a'])
         out = Path(tempfile.mkdtemp()) / 'matrix.json'
-        rc = plan_matrix.main(['--dataset', dataset, '--arms', 'x/one',
+        rc = plan_matrix.main(['--dataset', dataset, '--model', 'x/one',
                                '--record-ids', 'a,nonexistent', '--out', str(out)])
         self.assertEqual(rc, 0)
         matrix = json.loads(out.read_text())
@@ -177,9 +184,9 @@ class Score(unittest.TestCase):
 
 
 class Aggregate(unittest.TestCase):
-    def verdicts(self, arm, rows):
-        return {(arm, f'r{i}'): {
-            'record': f'r{i}', 'arm': arm, 'severity': sev,
+    def verdicts(self, label, rows):
+        return {(label, f'r{i}'): {
+            'record': f'r{i}', 'label': label, 'severity': sev,
             'score': {'baseline_count': b, 'matched_count': m, 'missed_count': b - m,
                       'extra_count': 0, 'weight': judge.WEIGHTS[sev],
                       'weighted_total': b * judge.WEIGHTS[sev],
@@ -190,48 +197,44 @@ class Aggregate(unittest.TestCase):
         # 1/1 and 1/9 is 2/10, not the 55% an average of ratios would give.
         summary = summarize.aggregate(self.verdicts('luna', [(1, 1, 'blocking'),
                                                              (9, 1, 'blocking')]))
-        self.assertAlmostEqual(summary['luna']['recall'], 0.2)
+        self.assertAlmostEqual(summary['recall'], 0.2)
 
     def test_splits_by_severity(self):
         summary = summarize.aggregate(self.verdicts('luna', [(2, 2, 'blocker'),
                                                              (4, 1, 'non-blocking')]))
-        by = summary['luna']['by_severity']
-        self.assertEqual(by['blocker'], {'baseline': 2, 'matched': 2})
-        self.assertEqual(by['non-blocking'], {'baseline': 4, 'matched': 1})
+        by = summary['by_severity']
+        self.assertEqual(by['blocker'], {'sought': 2, 'matched': 2})
+        self.assertEqual(by['non-blocking'], {'sought': 4, 'matched': 1})
 
     def test_weighted_recall_differs_when_blockers_are_missed(self):
         summary = summarize.aggregate(self.verdicts('luna', [(2, 0, 'blocker'),
                                                              (2, 2, 'non-blocking')]))
-        arm = summary['luna']
-        self.assertAlmostEqual(arm['recall'], 0.5)
-        self.assertLess(arm['weighted_recall'], arm['recall'])
+        self.assertAlmostEqual(summary['recall'], 0.5)
+        self.assertLess(summary['weighted_recall'], summary['recall'])
+
+    def test_rejects_verdicts_from_more_than_one_model(self):
+        mixed = {**self.verdicts('luna', [(1, 1, 'blocking')]),
+                 **self.verdicts('sol', [(1, 1, 'blocking')])}
+        with self.assertRaises(ValueError):
+            summarize.aggregate(mixed)
 
 
 class Render(unittest.TestCase):
-    def summary(self, arms):
+    def summary(self, matched=6):
         return summarize.aggregate({
-            (arm, 'r1'): {'record': 'r1', 'arm': arm, 'severity': 'blocking',
-                          'score': {'baseline_count': 10, 'matched_count': m,
-                                    'missed_count': 10 - m, 'extra_count': 0,
-                                    'weighted_total': 20.0, 'weighted_matched': m * 2.0}}
-            for arm, m in arms.items()})
+            ('luna', 'r1'): {'record': 'r1', 'label': 'luna', 'severity': 'blocking',
+                             'score': {'baseline_count': 10, 'matched_count': matched,
+                                       'missed_count': 10 - matched, 'extra_count': 0,
+                                       'weighted_total': 20.0,
+                                       'weighted_matched': matched * 2.0}}})
 
-    def test_refuses_to_conclude_from_a_single_arm(self):
-        out = summarize.render(self.summary({'luna': 6}))
-        self.assertIn('cannot be interpreted', out)
-
-    def test_reports_the_gap_against_the_control(self):
-        out = summarize.render(self.summary({'luna': 6, 'sol': 8}), baseline_arm='sol')
-        self.assertIn('vs control', out)
-        self.assertIn('-20.0 points', out)
-
-    def test_names_the_control_ceiling_rather_than_implying_100(self):
-        out = summarize.render(self.summary({'luna': 6, 'sol': 8}), baseline_arm='sol')
-        self.assertIn('80.0%', out)
-        self.assertIn('ceiling', out)
+    def test_reports_the_one_models_recall(self):
+        out = summarize.render(self.summary(6))
+        self.assertIn('`luna`', out)
+        self.assertIn('60.0%', out)
 
     def test_lists_failed_replays_as_excluded(self):
-        out = summarize.render(self.summary({'luna': 6, 'sol': 8}), 'sol', ['repo-pr9 luna'])
+        out = summarize.render(self.summary(), ['repo-pr9'])
         self.assertIn('excluded from recall', out)
 
 
@@ -270,13 +273,22 @@ class LoadRecord(unittest.TestCase):
 
 
 class LoadResults(unittest.TestCase):
-    def test_keys_verdicts_by_arm_and_record(self):
+    def test_keys_verdicts_by_label_and_record(self):
         directory = Path(tempfile.mkdtemp())
         (directory / 'a.json').write_text(json.dumps(
-            {'record': 'r1', 'arm': 'luna', 'score': {}}))
+            {'record': 'r1', 'label': 'luna', 'score': {}}))
         (directory / 'skip.txt').write_text('not json')
         results = summarize.load_results(str(directory))
         self.assertEqual(list(results), [('luna', 'r1')])
+
+    def test_ignores_the_attribution_file_that_shares_a_verdicts_key(self):
+        directory = Path(tempfile.mkdtemp())
+        (directory / 'luna--r1.json').write_text(json.dumps(
+            {'record': 'r1', 'label': 'luna', 'score': {'matched_count': 3}}))
+        (directory / 'luna--r1-attribution.json').write_text(json.dumps(
+            {'record': 'r1', 'label': 'luna', 'primary': 'x'}))
+        results = summarize.load_results(str(directory))
+        self.assertEqual(results[('luna', 'r1')]['score'], {'matched_count': 3})
 
     def test_ignores_unreadable_files(self):
         directory = Path(tempfile.mkdtemp())
