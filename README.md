@@ -547,8 +547,8 @@ wrong. Keep new records structurally identical to their neighbours.
 #### Running a gym experiment
 
 `.github/workflows/gym-experiment.yml` (Actions → **Gym experiment** → Run workflow) replays
-the recorded reviews against candidate models and reports how much of what the recorded model
-found each candidate still finds.
+the recorded reviews against **one** model and reports how much of what the recorded model
+found that model still finds.
 
 **It needs its own secrets.** `biggiepockets-review.yml` is a `workflow_call` workflow, so the
 credentials it names resolve from the *calling* repo through `secrets: inherit` — they are not
@@ -586,14 +586,16 @@ ticket intent, so the candidate would be marked down for missing findings it was
 the information to make. The workflow checks all four up front and stops rather than producing
 a number that looks like a regression.
 
-**Run two arms.** The default `arms` input is the candidate *and* the model the dataset was
-recorded from, and that is not padding. A review is not deterministic: the baseline model does
-not reproduce its own recorded findings at 100%, and how far short it falls is the noise floor
-for the whole measurement. A candidate at 65% means nothing until you know the baseline scores
-70% (a small real gap) or 95% (a large one). The summary refuses to draw a conclusion when only
-one arm ran.
+**One model per run.** The `model` input is a single OpenRouter slug, and the plan job
+rejects a comma-separated list. To evaluate a different model, dispatch the workflow again
+with that model. The summarizer likewise reports on exactly one model and fails if handed
+verdicts from more than one. `judge_model` must differ from `model`.
 
-Each record becomes one matrix job per arm, so a replay invokes `pi` exactly the way the
+```sh
+gh workflow run gym-experiment.yml -f model=openai/gpt-5.6-luna -f limit=3
+```
+
+Each record becomes one matrix job, so a replay invokes `pi` exactly the way the
 production first pass does — same system prompt, same tool allowlist, same OpenRouter routing —
 differing only in checking out the recorded commit. Start with `limit: 3`, read the findings
 yourself to confirm the judge is calling matches sensibly, then spend the full run.
@@ -613,8 +615,11 @@ Three things the harness controls for, each of which would otherwise quietly bia
 Scoring is per-finding recall judged by a third model — the question is *did it report this
 defect*, not *did it phrase it the same way*, so string comparison is the wrong instrument.
 Severity weighting comes from the dataset, not the judge, so it cannot drift between runs.
-Findings a candidate reports that the baseline missed are counted as `extra` and never
-penalised: the baseline is a previous model, not ground truth.
+Findings the evaluated model reports that the recorded model missed are counted as `extra`
+and never penalised: the recorded findings are a previous model's output, not ground truth.
+Review output is also non-deterministic, so the recorded model would not reproduce its own
+findings at 100% either — read the recall as "how much of the recorded review this model
+recovers", not as a score out of a perfect 100.
 
 **Concurrency is bounded by credit, not throughput.** OpenRouter reserves credit against every
 in-flight request rather than charging only what a request finally costs, so running many

@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
-"""Aggregate per-record judge verdicts into a per-arm comparison.
+"""Aggregate per-record judge verdicts into one model's recall report.
 
 This is where the run stops being a pile of JSON and becomes the answer to the question
-that started it: does the candidate first-pass model still catch what the previous one
-caught?
+that started it: does this first-pass model still catch what the recorded model caught?
 
-**Read the gap between arms, not a single arm's number.** A review is not deterministic.
-Re-running the baseline model against its own recorded findings does not score 100%, and
-how far short it falls is the measurement's noise floor. A candidate at 65% means nothing
-until you know the baseline reproduces itself at 70% (a small real gap) or at 95% (a large
-one). That is the entire reason the control arm is worth paying for, and why this report
-refuses to print a verdict when only one arm is present.
+A run evaluates exactly one model, so this report describes exactly one model. Verdicts
+from more than one model under the same results directory are an error rather than
+something to tabulate side by side: they mean two runs' artifacts were mixed together.
 
-Two numbers per arm. Plain recall is findings matched over findings sought. Weighted recall
-scores a missed blocker above a missed nitpick, using the severity recorded in the dataset
-rather than anything the judge decides, so the weighting cannot drift between runs. Where
-they disagree, look: a candidate whose plain recall holds but whose weighted recall drops
-is failing selectively on the findings that matter, which is worse than failing uniformly
-and is invisible in the plain number.
+Two numbers. Plain recall is findings matched over findings sought. Weighted recall scores
+a missed blocker above a missed nitpick, using the severity recorded in the dataset rather
+than anything the judge decides, so the weighting cannot drift between runs. Where they
+disagree, look: a model whose plain recall holds but whose weighted recall drops is failing
+selectively on the findings that matter, which is worse than failing uniformly and is
+invisible in the plain number.
 
 Records where the replay failed are reported separately and excluded from recall. Folding
 an infrastructure failure into a model's score would make a flaky checkout look like a
@@ -32,9 +28,13 @@ import json
 import os
 import sys
 
+SEVERITIES = ("blocker", "blocking", "non-blocking")
+
 
 def load_results(directory):
-    """Every verdict JSON under `directory`, keyed by (arm, record)."""
+    """Every verdict JSON under `directory`, keyed by (label, record). A replay also
+    uploads an endpoint-attribution JSON carrying the same record and label; it has no
+    score, and is skipped so it cannot stand in for the verdict."""
     results = {}
     for root, _, files in os.walk(directory):
         for name in files:
@@ -46,108 +46,83 @@ def load_results(directory):
                     payload = json.load(stream)
             except (OSError, ValueError):
                 continue
-            record, arm = payload.get("record"), payload.get("arm")
-            if record and arm:
-                results[(arm, record)] = payload
+            record, label = payload.get("record"), payload.get("label")
+            if record and label and "score" in payload:
+                results[(label, record)] = payload
     return results
 
 
 def aggregate(results):
-    """Per-arm totals. Recall is summed over findings, not averaged over records: a record
-    with eight findings should weigh more than one with a single finding, and averaging
-    per-record ratios would silently equalise them."""
-    arms = collections.defaultdict(lambda: {
-        "records": 0, "baseline": 0, "matched": 0, "missed": 0, "extra": 0,
-        "weighted_total": 0.0, "weighted_matched": 0.0, "empty_candidates": 0,
-        "by_severity": collections.defaultdict(lambda: {"baseline": 0, "matched": 0}),
-    })
-    for (arm, _record), payload in results.items():
-        score = payload.get("score") or {}
-        bucket = arms[arm]
-        bucket["records"] += 1
-        bucket["baseline"] += score.get("baseline_count", 0)
-        bucket["matched"] += score.get("matched_count", 0)
-        bucket["missed"] += score.get("missed_count", 0)
-        bucket["extra"] += score.get("extra_count", 0)
-        bucket["weighted_total"] += score.get("weighted_total", 0.0)
-        bucket["weighted_matched"] += score.get("weighted_matched", 0.0)
-        bucket["empty_candidates"] += 1 if score.get("empty_candidate") else 0
-        severity = payload.get("severity", "blocking")
-        bucket["by_severity"][severity]["baseline"] += score.get("baseline_count", 0)
-        bucket["by_severity"][severity]["matched"] += score.get("matched_count", 0)
+    """Totals for the one model in `results`. Recall is summed over findings, not averaged
+    over records: a record with eight findings should weigh more than one with a single
+    finding, and averaging per-record ratios would silently equalise them.
 
-    for bucket in arms.values():
-        bucket["recall"] = (bucket["matched"] / bucket["baseline"]
-                            if bucket["baseline"] else None)
-        bucket["weighted_recall"] = (bucket["weighted_matched"] / bucket["weighted_total"]
-                                     if bucket["weighted_total"] else None)
-        bucket["by_severity"] = {k: dict(v) for k, v in bucket["by_severity"].items()}
-    return dict(arms)
+    Raises ValueError when the verdicts come from more than one model."""
+    labels = sorted({label for label, _record in results})
+    if len(labels) != 1:
+        raise ValueError(f"expected verdicts for exactly one model, found {len(labels)}: "
+                         f"{', '.join(labels) or 'none'}")
+    totals = {
+        "label": labels[0],
+        "records": 0, "sought": 0, "matched": 0, "missed": 0, "extra": 0,
+        "weighted_total": 0.0, "weighted_matched": 0.0, "empty_candidates": 0,
+    }
+    by_severity = collections.defaultdict(lambda: {"sought": 0, "matched": 0})
+    for payload in results.values():
+        score = payload.get("score") or {}
+        totals["records"] += 1
+        totals["sought"] += score.get("baseline_count", 0)
+        totals["matched"] += score.get("matched_count", 0)
+        totals["missed"] += score.get("missed_count", 0)
+        totals["extra"] += score.get("extra_count", 0)
+        totals["weighted_total"] += score.get("weighted_total", 0.0)
+        totals["weighted_matched"] += score.get("weighted_matched", 0.0)
+        totals["empty_candidates"] += 1 if score.get("empty_candidate") else 0
+        severity = payload.get("severity", "blocking")
+        by_severity[severity]["sought"] += score.get("baseline_count", 0)
+        by_severity[severity]["matched"] += score.get("matched_count", 0)
+
+    totals["recall"] = (totals["matched"] / totals["sought"]
+                        if totals["sought"] else None)
+    totals["weighted_recall"] = (totals["weighted_matched"] / totals["weighted_total"]
+                                 if totals["weighted_total"] else None)
+    totals["by_severity"] = dict(by_severity)
+    return totals
 
 
 def pct(value):
     return "n/a" if value is None else f"{value * 100:.1f}%"
 
 
-def render(summary, baseline_arm=None, failures=None):
-    arms = sorted(summary)
-    lines = ["# Gym run: first-pass findings recall", ""]
-    lines += ["| arm | records | findings sought | matched | recall | weighted recall | extra |",
-              "|---|---:|---:|---:|---:|---:|---:|"]
-    for arm in arms:
-        a = summary[arm]
-        lines.append(f"| `{arm}` | {a['records']} | {a['baseline']} | {a['matched']} | "
-                     f"{pct(a['recall'])} | {pct(a['weighted_recall'])} | {a['extra']} |")
-    lines.append("")
-
-    if len(arms) < 2:
-        lines += [
-            "> **Only one arm ran, so this number cannot be interpreted.** Review output is "
-            "non-deterministic: the baseline model does not reproduce its own recorded "
-            "findings at 100% either. Without a control arm there is nothing to compare "
-            "this against, and a low score here is as likely to be normal variance as a "
-            "regression. Re-run with both arms.", ""]
-        return "\n".join(lines)
-
-    control = baseline_arm if baseline_arm in summary else None
-    if control:
-        ceiling = summary[control]["recall"]
-        lines += [f"Control arm `{control}` reproduces its own recorded findings at "
-                  f"**{pct(ceiling)}**. That is the ceiling, not 100% — treat it as the "
-                  f"noise floor for every other arm.", ""]
-        for arm in arms:
-            if arm == control:
-                continue
-            gap = ((summary[arm]["recall"] or 0) - (ceiling or 0))
-            lines.append(f"- `{arm}` vs control: **{gap * 100:+.1f} points** "
-                         f"({pct(summary[arm]['recall'])} vs {pct(ceiling)})")
-        lines.append("")
+def render(summary, failures=None):
+    s = summary
+    lines = [f"# Gym run: first-pass findings recall for `{s['label']}`", "",
+             "| records | findings sought | matched | recall | weighted recall | extra |",
+             "|---:|---:|---:|---:|---:|---:|",
+             f"| {s['records']} | {s['sought']} | {s['matched']} | {pct(s['recall'])} | "
+             f"{pct(s['weighted_recall'])} | {s['extra']} |", ""]
 
     lines += ["## Recall by severity", "",
-              "| arm | " + " | ".join(f"{s}" for s in ("blocker", "blocking", "non-blocking"))
-              + " |", "|---|---|---|---|"]
-    for arm in arms:
-        cells = []
-        for severity in ("blocker", "blocking", "non-blocking"):
-            stats = summary[arm]["by_severity"].get(severity)
-            cells.append("—" if not stats or not stats["baseline"]
-                         else f"{stats['matched']}/{stats['baseline']}")
-        lines.append(f"| `{arm}` | " + " | ".join(cells) + " |")
-    lines.append("")
+              "| " + " | ".join(SEVERITIES) + " |", "|---|---|---|"]
+    cells = []
+    for severity in SEVERITIES:
+        stats = s["by_severity"].get(severity)
+        cells.append("—" if not stats or not stats["sought"]
+                     else f"{stats['matched']}/{stats['sought']}")
+    lines += ["| " + " | ".join(cells) + " |", ""]
 
-    empty = {a: summary[a]["empty_candidates"] for a in arms if summary[a]["empty_candidates"]}
-    if empty:
-        lines.append("Replays that produced no findings at all: "
-                     + ", ".join(f"`{a}` ×{n}" for a, n in empty.items()))
-        lines.append("")
+    if s["empty_candidates"]:
+        lines += [f"Replays that produced no findings at all: {s['empty_candidates']}", ""]
     if failures:
         lines += [f"**{len(failures)} replay(s) failed and are excluded from recall** "
                   f"(infrastructure, not model quality): "
                   + ", ".join(sorted(failures)[:10]), ""]
     lines += ["---", "",
-              "Recall is against the recorded baseline's findings, which are a previous "
-              "model's output and not ground truth. Findings a candidate reports that the "
-              "baseline missed are counted under *extra* and never penalised."]
+              "Recall is against the recorded model's findings, which are a previous "
+              "model's output and not ground truth. Review output is non-deterministic, so "
+              "the recorded model would not reproduce its own findings at 100% either. "
+              "Findings this model reports that the recorded model missed are counted under "
+              "*extra* and never penalised."]
     return "\n".join(lines)
 
 
@@ -156,7 +131,6 @@ def main(argv=None):
     parser.add_argument("--results-dir", required=True)
     parser.add_argument("--out", default="summary.md")
     parser.add_argument("--json", dest="json_out")
-    parser.add_argument("--control-arm", help="arm label to treat as the control")
     parser.add_argument("--failures", help="file with one failed record id per line")
     args = parser.parse_args(argv)
 
@@ -164,18 +138,22 @@ def main(argv=None):
     if not results:
         print(f"no verdicts found under {args.results_dir}", file=sys.stderr)
         return 1
-    summary = aggregate(results)
+    try:
+        summary = aggregate(results)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
 
     failures = []
     if args.failures and os.path.exists(args.failures):
         failures = [line.strip() for line in open(args.failures) if line.strip()]
 
-    markdown = render(summary, args.control_arm, failures)
+    markdown = render(summary, failures)
     with open(args.out, "w") as stream:
         stream.write(markdown + "\n")
     if args.json_out:
         with open(args.json_out, "w") as stream:
-            json.dump({"arms": summary, "failures": failures}, stream, indent=2)
+            json.dump({"model": summary, "failures": failures}, stream, indent=2)
     print(markdown)
     return 0
 

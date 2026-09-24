@@ -48,3 +48,6 @@ it to the minimum: read-only, and only the repositories the job actually needs.
   under `continue-on-error` reports success when it dies on a syntax error. The suite
   parses every `run:` block with `bash -n`, so run it after editing a workflow. Inside a
   single-quoted jq program, an apostrophe in a comment ends the program.
+- A gym run (`gym-experiment.yml`) evaluates exactly one model. Evaluate only the model
+  you were asked to evaluate. Do not add the recorded model, a "control", or any second
+  model as a comparison run unless explicitly asked.

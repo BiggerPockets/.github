@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turn the gym dataset into a GitHub Actions job matrix, one job per record per arm.
+"""Turn the gym dataset into a GitHub Actions job matrix: one model, one job per record.
 
 Each replay is an independent review: its own checkout of a different repository at a
 different commit, its own model call, its own failure modes. Running them as separate
@@ -9,10 +9,13 @@ exactly the way the production review job does. A loop inside one job could not:
 Action cannot be called in a loop, so a loop would have to shell out to the CLI and would
 be measuring a slightly different harness than the one under test.
 
-The cost is runner minutes, and the matrix cap is real: GitHub allows 256 jobs, and the
-full dataset across two arms is close enough to that ceiling that `--limit` is not merely a
-convenience. Start with `--limit 3`, confirm the judge is calibrated on findings you can
-read yourself, then spend the full run.
+A run evaluates exactly one model. `--model` takes a single OpenRouter slug and rejects a
+list: evaluating another model is a separate run, started on purpose, never a side effect
+of this one.
+
+The cost is runner minutes, and the matrix cap is real: GitHub allows 256 jobs. Start with
+`--limit 3`, confirm the judge is calibrated on findings you can read yourself, then spend
+the full run.
 
 Records are emitted in dataset order and `--limit` takes the first N rather than a random
 sample, so two runs at the same limit are comparable. Unpinned records — no `head_sha` —
@@ -20,7 +23,7 @@ are skipped with a warning: replaying one would review whatever the pull request
 today, which is the failure the pinning exists to prevent.
 
 Usage:
-  plan_matrix.py --arms openai/gpt-5.6-luna,openai/gpt-5.6-sol --limit 3
+  plan_matrix.py --model openai/gpt-5.6-luna --limit 3
 Prints {"include": [...]} for `fromJSON` in a matrix strategy.
 """
 import argparse
@@ -35,14 +38,14 @@ MAX_MATRIX_JOBS = 256
 TICKET_KEY = re.compile(r"BIG-\d+", re.I)
 
 
-def arm_label(model):
-    """A short, filesystem- and artifact-safe name for an arm. `openai/gpt-5.6-luna`
+def model_label(model):
+    """A short, filesystem- and artifact-safe name for a model. `openai/gpt-5.6-luna`
     becomes `gpt-5-6-luna`, which is what appears in job names and artifact names."""
     tail = model.split("/")[-1]
     return re.sub(r"[^a-z0-9]+", "-", tail.lower()).strip("-")
 
 
-def plan(document, arms, limit=None, severities=None, prompt_version=None):
+def plan(document, model, limit=None, severities=None, prompt_version=None):
     """Jobs to run, plus the records deliberately left out.
 
     `prompt_version` is the fidelity filter that matters most after the commit pin. The
@@ -73,25 +76,24 @@ def plan(document, arms, limit=None, severities=None, prompt_version=None):
     include = []
     for record in pinned:
         source = record["input"]
-        for model in arms:
-            include.append({
-                "record": record["id"],
-                "arm": arm_label(model),
-                "model": model,
-                "repo": source["repo"],
-                "pr": source["pr"],
-                "head_sha": source["head_sha"],
-                "base_sha": source.get("base_sha"),
-                "severity": (record.get("metadata") or {}).get("severity", "blocking"),
-            })
+        include.append({
+            "record": record["id"],
+            "label": model_label(model),
+            "model": model,
+            "repo": source["repo"],
+            "pr": source["pr"],
+            "head_sha": source["head_sha"],
+            "base_sha": source.get("base_sha"),
+            "severity": (record.get("metadata") or {}).get("severity", "blocking"),
+        })
     return include, skipped + [r.get("id") for r in mismatched]
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dataset", default="gym/sol-first-pass-findings.yaml")
-    parser.add_argument("--arms", required=True,
-                        help="comma-separated OpenRouter model slugs")
+    parser.add_argument("--model", required=True,
+                        help="the one OpenRouter model slug to evaluate")
     parser.add_argument("--limit", type=int, help="first N records (smoke tests)")
     parser.add_argument("--record-ids",
                         help="comma-separated record ids to replay, instead of the whole "
@@ -116,10 +118,14 @@ def main(argv=None):
             print(f"--record-ids named {len(missing)} id(s) not found in the dataset: "
                   f"{', '.join(sorted(missing))}", file=sys.stderr)
 
-    arms = [a.strip() for a in args.arms.split(",") if a.strip()]
+    model = args.model.strip()
+    if not model or "," in model:
+        print(f"--model takes exactly one model slug, got {args.model!r}. "
+              f"Evaluate another model in its own run.", file=sys.stderr)
+        return 1
     severities = ([s.strip() for s in args.severity.split(",")]
                   if args.severity else None)
-    include, skipped = plan(document, arms, args.limit, severities, args.prompt_version)
+    include, skipped = plan(document, model, args.limit, severities, args.prompt_version)
 
     if not include:
         print("matrix is empty — check --limit, --severity and the dataset",
@@ -127,7 +133,7 @@ def main(argv=None):
         return 1
     if len(include) > MAX_MATRIX_JOBS:
         print(f"matrix has {len(include)} jobs, over GitHub's {MAX_MATRIX_JOBS} cap; "
-              f"use --limit or fewer arms", file=sys.stderr)
+              f"use --limit or --record-ids", file=sys.stderr)
         return 1
     if skipped:
         print(f"skipping {len(skipped)} record(s) (unpinned, or recorded under a "
@@ -140,8 +146,7 @@ def main(argv=None):
         with open(args.out, "w") as stream:
             stream.write(payload + "\n")
     print(payload)
-    print(f"{len(include)} jobs: {len(include) // max(len(arms), 1)} records x "
-          f"{len(arms)} arm(s)", file=sys.stderr)
+    print(f"{len(include)} jobs: {len(include)} records on {model}", file=sys.stderr)
     return 0
 
 

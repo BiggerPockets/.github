@@ -28,12 +28,12 @@ The baseline is a previous model, not ground truth — it missed things too, and
 that finds more is not thereby worse. They are surfaced as `extra_findings` for a human to
 look at, because a large number of them is interesting on its own.
 
-The judge model is deliberately not either arm: asking a model to grade itself against a
-competitor invites a thumb on the scale.
+The judge model is deliberately not the model under evaluation: asking a model to grade
+its own review invites a thumb on the scale.
 
 Usage:
   judge_findings.py --expected expected.md --actual findings.md --record <id> \
-      [--severity blocking] [--model anthropic/claude-haiku-4.5]
+      --label <evaluated-model-label> [--severity blocking] [--model anthropic/claude-haiku-4.5]
 Prints a JSON verdict. Exits 0 even when the candidate scores nothing — a zero is a
 result, not a failure — and nonzero only when the judge itself could not be reached.
 """
@@ -136,7 +136,8 @@ def main(argv=None):
     parser.add_argument("--expected", required=True, help="baseline findings file")
     parser.add_argument("--actual", required=True, help="candidate findings file")
     parser.add_argument("--record", required=True)
-    parser.add_argument("--arm", default="")
+    parser.add_argument("--label", default="",
+                        help="label of the model that wrote the candidate report")
     parser.add_argument("--severity", default="blocking", choices=sorted(WEIGHTS))
     parser.add_argument("--model", default=os.environ.get("JUDGE_MODEL", DEFAULT_JUDGE))
     parser.add_argument("--out", help="write the verdict here as well as to stdout")
@@ -161,7 +162,7 @@ def main(argv=None):
     if not actual:
         verdict = {"baseline_findings": [], "extra_findings": [],
                    "note": "candidate produced no findings"}
-        result = {"record": args.record, "arm": args.arm, "severity": args.severity,
+        result = {"record": args.record, "label": args.label, "severity": args.severity,
                   "judge_model": args.model, "verdict": verdict,
                   "score": {"baseline_count": 0, "matched_count": 0, "missed_count": 0,
                             "recall": 0.0, "weight": WEIGHTS[args.severity],
@@ -174,7 +175,7 @@ def main(argv=None):
         except (urllib.error.URLError, urllib.error.HTTPError, ValueError, KeyError) as error:
             print(f"judge failed for {args.record}: {error}", file=sys.stderr)
             return 1
-        result = {"record": args.record, "arm": args.arm, "severity": args.severity,
+        result = {"record": args.record, "label": args.label, "severity": args.severity,
                   "judge_model": args.model, "verdict": verdict,
                   "score": score(verdict, args.severity)}
 

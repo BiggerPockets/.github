@@ -1,7 +1,7 @@
 name: Gym experiment (first-pass model recall)
 
-# Replays recorded first-pass reviews against one or more candidate models and reports how
-# much of what the recorded model found each candidate still finds.
+# Replays recorded first-pass reviews against ONE model and reports how much of what the
+# recorded model found that model still finds.
 #
 # Why this exists: Stage 1's model is set by an organization variable (vars.FIRST_PASS_MODEL),
 # so changing it changes what reaches a human reviewer across every repo at once — and
@@ -10,11 +10,8 @@ name: Gym experiment (first-pass model recall)
 # only what it was handed. gym/sol-first-pass-findings.yaml holds what a previous model did
 # report, pinned to the commit it reviewed; this workflow re-asks those questions.
 #
-# RUN TWO ARMS. A review is not deterministic: the baseline model does not reproduce its own
-# recorded findings at 100%, and how far short it falls is this measurement's noise floor. A
-# candidate scoring 65% is meaningless until you know whether the baseline scores 70% or
-# 95%. The default arms are therefore the candidate AND the model the dataset was recorded
-# from, and the summary refuses to draw a conclusion from a single arm.
+# ONE MODEL PER RUN. The `model` input takes a single OpenRouter slug and the plan job
+# rejects a list. Evaluating a different model is a separate dispatch of this workflow.
 #
 # Fidelity: each replay job reproduces the production Stage-1 job as closely as possible —
 # same pi invocation, same system prompt, same tool allowlist, same OpenRouter routing —
@@ -28,20 +25,14 @@ name: Gym experiment (first-pass model recall)
 # answer off the page. See scripts/gym/replay_context.py.
 #
 # Cost: roughly $0.02 per replay on a cheap model and $0.17 on an expensive one, plus a
-# judge call per replay. The full dataset across two arms is ~194 jobs, near GitHub's 256
-# matrix cap. Start with limit=3.
+# judge call per replay. The full dataset is ~97 jobs. Start with limit=3.
 
 on:
   workflow_dispatch:
     inputs:
-      arms:
-        description: 'Comma-separated OpenRouter slugs. Include the baseline as a control.'
+      model:
+        description: 'The one OpenRouter model slug to evaluate (e.g. openai/gpt-5.6-luna).'
         required: true
-        default: 'openai/gpt-5.6-luna,openai/gpt-5.6-sol'
-      control_arm:
-        description: 'Arm label to treat as the control (short form, e.g. gpt-5-6-sol)'
-        required: false
-        default: 'gpt-5-6-sol'
       dataset:
         description: 'Path within BiggerPockets/pi-gym-data to the dataset file'
         required: false
@@ -59,7 +50,7 @@ on:
         required: false
         default: ''
       judge_model:
-        description: 'Model that scores the replays. Keep it off both arms.'
+        description: 'Model that scores the replays. Must not be the model under evaluation.'
         required: false
         default: 'anthropic/claude-haiku-4.5'
       match_prompt_version:
@@ -151,9 +142,13 @@ jobs:
 
       - id: plan
         run: |
+          if [ '${{ inputs.judge_model }}' = '${{ inputs.model }}' ]; then
+            echo "::error::judge_model must differ from the model under evaluation." >&2
+            exit 1
+          fi
           python3 scripts/gym/plan_matrix.py \
             --dataset 'gym-data/${{ inputs.dataset }}' \
-            --arms '${{ inputs.arms }}' \
+            --model '${{ inputs.model }}' \
             ${{ inputs.limit && format('--limit {0}', inputs.limit) || '' }} \
             ${{ inputs.severity && format('--severity {0}', inputs.severity) || '' }} \
             ${{ inputs.record_ids && format('--record-ids {0}', inputs.record_ids) || '' }} \
@@ -178,7 +173,7 @@ jobs:
       # Keep this low unless the balance is known to be generous.
       max-parallel: ${{ fromJSON(inputs.max_parallel || '3') }}
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    name: ${{ matrix.arm }} · ${{ matrix.record }}
+    name: ${{ matrix.label }} · ${{ matrix.record }}
     steps:
       - name: Checkout registry (prompts + scripts)
         uses: actions/checkout@v4
@@ -337,17 +332,17 @@ jobs:
           [ -n "$attribution" ] || attribution='{"primary":"","providers":[],"metrics":{}}'
           pi_exit=$(cat "$GITHUB_WORKSPACE/replay/pi_exit" 2>/dev/null || echo "unknown")
           jq -n --argjson attribution "$attribution" --arg record '${{ matrix.record }}' \
-            --arg arm '${{ matrix.arm }}' --arg pi_exit "$pi_exit" \
-            '{record: $record, arm: $arm, pi_exit: $pi_exit, timed_out: ($pi_exit == "124")} + $attribution' \
-            > "$GITHUB_WORKSPACE/out/${{ matrix.arm }}--${{ matrix.record }}-attribution.json"
+            --arg label '${{ matrix.label }}' --arg pi_exit "$pi_exit" \
+            '{record: $record, label: $label, pi_exit: $pi_exit, timed_out: ($pi_exit == "124")} + $attribution' \
+            > "$GITHUB_WORKSPACE/out/${{ matrix.label }}--${{ matrix.record }}-attribution.json"
           echo "Served by: $(printf '%s' "$attribution" | jq -c '.calls_by_provider // {}') (pi exit $pi_exit)"
 
       - name: Record a failed replay
         if: steps.replay.outcome == 'failure'
         run: |
-          echo "::warning::replay failed for ${{ matrix.record }} on ${{ matrix.arm }}"
+          echo "::warning::replay failed for ${{ matrix.record }} on ${{ matrix.label }}"
           mkdir -p "$GITHUB_WORKSPACE/out"
-          echo '${{ matrix.record }} ${{ matrix.arm }}' > "$GITHUB_WORKSPACE/out/FAILED"
+          echo '${{ matrix.record }}' > "$GITHUB_WORKSPACE/out/FAILED"
 
       # Judged only when the replay itself succeeded: scoring a crashed checkout as a model
       # miss would blame the model for the harness.
@@ -367,16 +362,16 @@ jobs:
             --expected "$GITHUB_WORKSPACE/replay/expected.md" \
             --actual "$GITHUB_WORKSPACE/replay/findings.md" \
             --record '${{ matrix.record }}' \
-            --arm '${{ matrix.arm }}' \
+            --label '${{ matrix.label }}' \
             --severity '${{ matrix.severity }}' \
             --model '${{ inputs.judge_model }}' \
-            --out "$GITHUB_WORKSPACE/out/${{ matrix.arm }}--${{ matrix.record }}.json"
+            --out "$GITHUB_WORKSPACE/out/${{ matrix.label }}--${{ matrix.record }}.json"
 
       - name: Upload result
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gym-${{ matrix.arm }}--${{ matrix.record }}
+          name: gym-${{ matrix.label }}--${{ matrix.record }}
           if-no-files-found: ignore
           retention-days: 14
           path: |
@@ -409,7 +404,6 @@ jobs:
         run: |
           python3 scripts/gym/summarize_run.py \
             --results-dir results \
-            --control-arm '${{ inputs.control_arm }}' \
             --failures failures.txt \
             --out summary.md --json summary.json
           cat summary.md >> "$GITHUB_STEP_SUMMARY"
