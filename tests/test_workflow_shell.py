@@ -10,16 +10,23 @@ silently, on every review in every consuming repo.
 `bash -n` parses without executing, which is the whole check: it catches the unbalanced
 quote, the unclosed heredoc and the stray `fi` at the time the workflow is edited rather
 than the next time it runs somewhere else.
+
+The shell scripts the workflows call are held to the same bar. The gym's step scripts are
+also held to shellcheck, where it is installed (it is on GitHub's Ubuntu runners).
 """
 
 import pathlib
 import re
+import shutil
 import subprocess
 import unittest
 
 import yaml
 
-WORKFLOWS = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows"
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+WORKFLOWS = ROOT / ".github" / "workflows"
+SCRIPTS = sorted((ROOT / "scripts").rglob("*.sh"))
+GYM_SCRIPTS = sorted((ROOT / "scripts" / "gym").rglob("*.sh"))
 
 # GitHub substitutes `${{ ... }}` before the shell ever sees it. Left in place it is not
 # valid bash, so stand each one up as a bare word — the same shape the runner produces
@@ -61,6 +68,26 @@ class WorkflowShellParses(unittest.TestCase):
             with self.subTest(workflow=workflow, job=job, step=step):
                 error = shell_syntax_error(script)
                 self.assertIsNone(error, f"{workflow} / {job} / {step}:\n{error}")
+
+
+class ScriptsParse(unittest.TestCase):
+    def test_every_shell_script_is_valid_bash(self):
+        self.assertTrue(SCRIPTS, "no shell scripts found under scripts/")
+        for script in SCRIPTS:
+            with self.subTest(script=str(script.relative_to(ROOT))):
+                self.assertIsNone(shell_syntax_error(script.read_text()))
+
+    def test_every_shell_script_is_executable(self):
+        # A workflow step runs these by path, so a missing execute bit fails the step.
+        for script in SCRIPTS:
+            with self.subTest(script=str(script.relative_to(ROOT))):
+                self.assertTrue(script.stat().st_mode & 0o111)
+
+    @unittest.skipUnless(shutil.which("shellcheck"), "shellcheck is not installed")
+    def test_every_gym_script_passes_shellcheck(self):
+        result = subprocess.run(["shellcheck", *map(str, GYM_SCRIPTS)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout)
 
 
 class ShellSyntaxError(unittest.TestCase):

@@ -19,6 +19,10 @@ Records where the replay failed are reported separately and excluded from recall
 an infrastructure failure into a model's score would make a flaky checkout look like a
 worse reviewer.
 
+Each replay's artifact holds a `score.json` (the judge's counts, when the replay was
+scored) and a `FAILED` marker holding the record id (when it was not). Those are the only
+files read.
+
 Usage:
   summarize_run.py --results-dir results/ --out summary.md [--json summary.json]
 """
@@ -31,25 +35,28 @@ import sys
 SEVERITIES = ("blocker", "blocking", "non-blocking")
 
 
+SCORE_FILE = "score.json"
+FAILED_FILE = "FAILED"
+
+
 def load_results(directory):
-    """Every verdict JSON under `directory`, keyed by (label, record). A replay also
-    uploads an endpoint-attribution JSON carrying the same record and label; it has no
-    score, and is skipped so it cannot stand in for the verdict."""
-    results = {}
+    """(scores keyed by (label, record), failed record ids) from every replay's artifact
+    under `directory`."""
+    results, failures = {}, []
     for root, _, files in os.walk(directory):
-        for name in files:
-            if not name.endswith(".json"):
-                continue
-            path = os.path.join(root, name)
+        if SCORE_FILE in files:
             try:
-                with open(path) as stream:
+                with open(os.path.join(root, SCORE_FILE)) as stream:
                     payload = json.load(stream)
             except (OSError, ValueError):
-                continue
+                payload = {}
             record, label = payload.get("record"), payload.get("label")
-            if record and label and "score" in payload:
+            if record and label:
                 results[(label, record)] = payload
-    return results
+        if FAILED_FILE in files:
+            with open(os.path.join(root, FAILED_FILE)) as stream:
+                failures.extend(line.strip() for line in stream if line.strip())
+    return results, sorted(failures)
 
 
 def aggregate(results):
@@ -116,7 +123,7 @@ def render(summary, failures=None):
     if failures:
         lines += [f"**{len(failures)} replay(s) failed and are excluded from recall** "
                   f"(infrastructure, not model quality): "
-                  + ", ".join(sorted(failures)[:10]), ""]
+                  + ", ".join(failures[:10]), ""]
     lines += ["---", "",
               "Recall is against the recorded model's findings, which are a previous "
               "model's output and not ground truth. Review output is non-deterministic, so "
@@ -126,36 +133,42 @@ def render(summary, failures=None):
     return "\n".join(lines)
 
 
+def render_unscored(failures):
+    """The report for a run in which no replay was scored."""
+    lines = ["# Gym run: no replay was scored", ""]
+    if failures:
+        lines.append(f"All {len(failures)} replay(s) failed: " + ", ".join(failures[:10]))
+    else:
+        lines.append("No replay produced a score or a failure marker.")
+    return "\n".join(lines)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--results-dir", required=True)
     parser.add_argument("--out", default="summary.md")
     parser.add_argument("--json", dest="json_out")
-    parser.add_argument("--failures", help="file with one failed record id per line")
     args = parser.parse_args(argv)
 
-    results = load_results(args.results_dir)
-    if not results:
-        print(f"no verdicts found under {args.results_dir}", file=sys.stderr)
-        return 1
-    try:
-        summary = aggregate(results)
-    except ValueError as error:
-        print(error, file=sys.stderr)
-        return 1
+    results, failures = load_results(args.results_dir)
+    if results:
+        try:
+            summary = aggregate(results)
+        except ValueError as error:
+            print(error, file=sys.stderr)
+            return 1
+        markdown = render(summary, failures)
+    else:
+        summary = None
+        markdown = render_unscored(failures)
 
-    failures = []
-    if args.failures and os.path.exists(args.failures):
-        failures = [line.strip() for line in open(args.failures) if line.strip()]
-
-    markdown = render(summary, failures)
     with open(args.out, "w") as stream:
         stream.write(markdown + "\n")
     if args.json_out:
         with open(args.json_out, "w") as stream:
             json.dump({"model": summary, "failures": failures}, stream, indent=2)
     print(markdown)
-    return 0
+    return 0 if results else 1
 
 
 if __name__ == "__main__":

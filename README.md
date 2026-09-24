@@ -634,9 +634,9 @@ That key is shared organization-wide, so this ceiling is shared with real review
 the same time — a wide gym run can starve production PR reviews of credit, not just itself.
 
 **Results go to Datadog.** Each run is one LLM Observability experiment, named
-`first-pass-recall`, in the `biggiepockets-review-gym` project against its
-`sol-first-pass-findings` dataset (the `datadog_project` and `datadog_dataset` inputs). Each
-replayed record is one span in it: the model's review as output, the recorded findings as
+`first-pass-recall`, in the `biggiepockets-review-gym` project (the `datadog_project`
+input), against the dataset the dataset file names in its `dataset.name`. Each replayed
+record is one span in it: the model's review as output, the recorded findings as
 expected output, the judge's per-finding verdict and the OpenRouter attribution as metadata,
 and `recall`, `weighted_recall`, `matched_count`, `missed_count`, `baseline_count`,
 `extra_count`, `empty_output` and `timed_out` as evaluation metrics. A replay that failed is
@@ -650,7 +650,12 @@ dataset and stops if one does not — re-upload with `upload_gym_dataset.py` aft
 the file. The Datadog writes use this repository's `DD_API_KEY`/`DD_APP_KEY`.
 
 GitHub keeps only counts: the run summary, the `gym-summary` artifact, and a per-replay
-artifact with the score and attribution JSON.
+artifact holding `score.json` (the judge's counts), `attribution.json` (the OpenRouter
+endpoints that served the replay) and, for a replay that failed, a `FAILED` marker.
+
+Each workflow step is one call to a script in `scripts/gym/steps/`, which takes its inputs
+from the step's `env:`. The Python they call is in `scripts/gym/`; the Datadog client the
+gym scripts share is `scripts/gym/datadog_api.py`.
 
 **Member data.** The findings are model-written prose about source code, not member records.
 Datadog's sensitive data scanner masks matches in the stored span before this ever reads them,

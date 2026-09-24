@@ -115,13 +115,20 @@ class PlanMatrixRecordIdsFilter(unittest.TestCase):
 
     def test_rejects_more_than_one_model(self):
         dataset = self.write_dataset(['a'])
-        rc = plan_matrix.main(['--dataset', dataset, '--model', 'x/one,y/two'])
+        rc = plan_matrix.main(['--dataset', dataset, '--model', 'x/one,y/two',
+                               '--judge-model', 'j/judge'])
+        self.assertEqual(rc, 1)
+
+    def test_rejects_a_judge_that_is_the_model_under_evaluation(self):
+        dataset = self.write_dataset(['a'])
+        rc = plan_matrix.main(['--dataset', dataset, '--model', 'x/one',
+                               '--judge-model', 'x/one'])
         self.assertEqual(rc, 1)
 
     def test_keeps_only_the_named_records(self):
         dataset = self.write_dataset(['a', 'b', 'c'])
         out = Path(tempfile.mkdtemp()) / 'matrix.json'
-        rc = plan_matrix.main(['--dataset', dataset, '--model', 'x/one',
+        rc = plan_matrix.main(['--dataset', dataset, '--model', 'x/one', '--judge-model', 'j/judge',
                                '--record-ids', 'a,c', '--out', str(out)])
         self.assertEqual(rc, 0)
         matrix = json.loads(out.read_text())
@@ -130,7 +137,7 @@ class PlanMatrixRecordIdsFilter(unittest.TestCase):
     def test_warns_but_does_not_fail_on_an_unknown_id(self):
         dataset = self.write_dataset(['a'])
         out = Path(tempfile.mkdtemp()) / 'matrix.json'
-        rc = plan_matrix.main(['--dataset', dataset, '--model', 'x/one',
+        rc = plan_matrix.main(['--dataset', dataset, '--model', 'x/one', '--judge-model', 'j/judge',
                                '--record-ids', 'a,nonexistent', '--out', str(out)])
         self.assertEqual(rc, 0)
         matrix = json.loads(out.read_text())
@@ -273,27 +280,37 @@ class LoadRecord(unittest.TestCase):
 
 
 class LoadResults(unittest.TestCase):
-    def test_keys_verdicts_by_label_and_record(self):
-        directory = Path(tempfile.mkdtemp())
-        (directory / 'a.json').write_text(json.dumps(
-            {'record': 'r1', 'label': 'luna', 'score': {}}))
-        (directory / 'skip.txt').write_text('not json')
-        results = summarize.load_results(str(directory))
+    def artifact(self, root, name, files):
+        directory = root / name
+        directory.mkdir()
+        for filename, content in files.items():
+            (directory / filename).write_text(content)
+
+    def test_reads_scores_and_failures_from_each_artifact(self):
+        root = Path(tempfile.mkdtemp())
+        self.artifact(root, 'gym-luna--r1', {
+            'score.json': json.dumps({'record': 'r1', 'label': 'luna', 'score': {}}),
+            'attribution.json': json.dumps({'primary': 'x'})})
+        self.artifact(root, 'gym-luna--r2', {'FAILED': 'r2\n'})
+        results, failures = summarize.load_results(str(root))
         self.assertEqual(list(results), [('luna', 'r1')])
+        self.assertEqual(failures, ['r2'])
 
-    def test_ignores_the_attribution_file_that_shares_a_verdicts_key(self):
-        directory = Path(tempfile.mkdtemp())
-        (directory / 'luna--r1.json').write_text(json.dumps(
-            {'record': 'r1', 'label': 'luna', 'score': {'matched_count': 3}}))
-        (directory / 'luna--r1-attribution.json').write_text(json.dumps(
-            {'record': 'r1', 'label': 'luna', 'primary': 'x'}))
-        results = summarize.load_results(str(directory))
-        self.assertEqual(results[('luna', 'r1')]['score'], {'matched_count': 3})
+    def test_ignores_an_unreadable_score(self):
+        root = Path(tempfile.mkdtemp())
+        self.artifact(root, 'gym-luna--r1', {'score.json': '{ not json'})
+        self.assertEqual(summarize.load_results(str(root)), ({}, []))
 
-    def test_ignores_unreadable_files(self):
-        directory = Path(tempfile.mkdtemp())
-        (directory / 'bad.json').write_text('{ not json')
-        self.assertEqual(summarize.load_results(str(directory)), {})
+
+class Main(unittest.TestCase):
+    def test_reports_the_failures_when_no_replay_was_scored(self):
+        root = Path(tempfile.mkdtemp())
+        (root / 'gym-luna--r1').mkdir()
+        (root / 'gym-luna--r1' / 'FAILED').write_text('r1\n')
+        out = root / 'summary.md'
+        rc = summarize.main(['--results-dir', str(root), '--out', str(out)])
+        self.assertEqual(rc, 1)
+        self.assertIn('r1', out.read_text())
 
 
 if __name__ == '__main__':
