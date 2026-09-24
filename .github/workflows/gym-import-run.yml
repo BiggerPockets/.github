@@ -1,0 +1,70 @@
+name: Gym import (artifacts to Datadog)
+
+# Records one gym run whose results are GitHub artifacts as Datadog LLM Obs experiments,
+# one per model the run replayed, alongside the experiments gym-experiment.yml records.
+# See scripts/gym/import_run.py for what is imported and how a repeat is detected.
+#
+# The artifacts quote the private code under review and this repository is public, so the
+# job prints counts and experiment ids only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'The gym-experiment.yml run to import, by its numeric id.'
+        required: true
+      dataset:
+        description: 'Path within BiggerPockets/pi-gym-data to the dataset file the run replayed.'
+        required: false
+        default: 'gym/sol-first-pass-findings.yaml'
+      datadog_project:
+        description: 'Datadog LLM Obs project the experiments are recorded in'
+        required: false
+        default: 'biggiepockets-review-gym'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    env:
+      RUN_ID: ${{ inputs.run_id }}
+      RUN_DIR: ${{ github.workspace }}/run
+      DATASET_FILE: gym-data/${{ inputs.dataset }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r scripts/gym/requirements.txt
+
+      - name: Check required secrets
+        env:
+          GYM_REPO_TOKEN: ${{ secrets.GYM_REPO_TOKEN }}
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+        run: scripts/gym/steps/check-secrets.sh GYM_REPO_TOKEN DD_API_KEY DD_APP_KEY
+
+      - name: Checkout gym dataset (BiggerPockets/pi-gym-data)
+        uses: actions/checkout@v4
+        with:
+          repository: BiggerPockets/pi-gym-data
+          token: ${{ secrets.GYM_REPO_TOKEN }}
+          persist-credentials: false
+          path: gym-data
+
+      - name: Fetch the run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/gym/steps/fetch-run.sh
+
+      - name: Import it into Datadog
+        env:
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+          DATADOG_PROJECT: ${{ inputs.datadog_project }}
+        run: >-
+          python3 scripts/gym/import_run.py
+          --run-dir "$RUN_DIR" --dataset-file "$DATASET_FILE" --project "$DATADOG_PROJECT"

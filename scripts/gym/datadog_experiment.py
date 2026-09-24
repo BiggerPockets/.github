@@ -91,10 +91,11 @@ def dataset_record_ids(site, api_key, app_key, project_id, dataset_id):
 
 
 def create_body(dataset_id, project_id, dataset_version, model, judge_model,
-                prompt_version, run_url):
+                prompt_version, run_url, extra_tags=()):
     tags = [f"model:{model}", f"judge_model:{judge_model}"]
     if prompt_version:
         tags.append(f"prompt_version:{prompt_version}")
+    tags.extend(extra_tags)
     return {"data": {"type": "experiments", "attributes": {
         "name": EXPERIMENT_NAME,
         "description": f"First-pass recall of {model} against the recorded findings.",
@@ -166,7 +167,7 @@ def metric(label, value, span_id, trace_id, experiment_id, timestamp_ms):
 def record_body(experiment_id, tags, record, replay):
     """The span and metrics for one replay.
 
-    A replay with no verdict gets an errored span and only the `timed_out` metric. Its
+    A replay with no verdict gets an errored span and at most the `timed_out` metric. Its
     recall is not zero, it is unmeasured, and posting a zero would read as the model
     missing everything."""
     span_id = str(secrets.randbits(63) or 1)
@@ -181,7 +182,9 @@ def record_body(experiment_id, tags, record, replay):
     def add(label, value):
         metrics.append(metric(label, value, span_id, trace_id, experiment_id, timestamp_ms))
 
-    add("timed_out", run.get("pi_exit") == TIMEOUT_EXIT)
+    # A replay with no recorded exit status is not known to have finished in time.
+    if run.get("pi_exit") is not None:
+        add("timed_out", run["pi_exit"] == TIMEOUT_EXIT)
     metadata = {"attribution": replay["attribution"], "pi_exit": run.get("pi_exit")}
 
     verdict = replay["verdict"]
@@ -225,51 +228,92 @@ def experiment_tags(experiment_id, project_id, dataset_id, model):
             f"dataset_id:{dataset_id}", f"model:{model}"]
 
 
-def cmd_create(args):
-    site, api_key, app_key = credentials()
-    project_id = find_project(site, api_key, app_key, args.project)
+def resolve_project(site, api_key, app_key, name):
+    project_id = find_project(site, api_key, app_key, name)
     if not project_id:
-        raise DatadogError(f"no LLM Obs project named {args.project}")
-    name = dataset_name(args.dataset_file)
+        raise DatadogError(f"no LLM Obs project named {name}")
+    return project_id
+
+
+def find_experiment(site, api_key, app_key, project_id, tags):
+    """The experiment in the project that carries every one of `tags`, as its attributes
+    plus `id`, or None. The filter is a containment match; the tags are re-checked here
+    so a looser match on the server cannot pass for a duplicate."""
+    query = urllib.parse.urlencode([
+        ("filter[project_id]", project_id),
+        ("filter[metadata]", json.dumps({"tags": list(tags)}, separators=(",", ":"))),
+    ])
+    payload = request_json(site, api_key, app_key, "GET", f"{V2}/experiments?{query}")
+    for item in payload.get("data") or []:
+        attributes = item.get("attributes") or {}
+        if set(tags) <= set((attributes.get("metadata") or {}).get("tags") or []):
+            return {**attributes, "id": item.get("id")}
+    return None
+
+
+def start_experiment(site, api_key, app_key, project_id, dataset_file, records, model,
+                     judge_model, prompt_version, run_url, extra_tags=()):
+    """Create a running experiment of `model` over `records`, and return its ids as
+    {experiment_id, project_id, dataset_id}."""
+    name = dataset_name(dataset_file)
     dataset_id, version = find_dataset(site, api_key, app_key, project_id, name)
 
     # The replays read the YAML file; the experiment points at the Datadog copy. A record
-    # missing from the copy would post a span linked to nothing, so the run stops here.
-    with open(args.matrix) as stream:
-        planned = {job["record"] for job in json.load(stream)["include"]}
-    missing = planned - dataset_record_ids(site, api_key, app_key, project_id, dataset_id)
+    # missing from the copy would post a span linked to nothing, so nothing is created.
+    missing = set(records) - dataset_record_ids(site, api_key, app_key, project_id, dataset_id)
     if missing:
         raise DatadogError(
-            f"{len(missing)} planned record(s) are not in Datadog dataset {name}: "
+            f"{len(missing)} record(s) are not in Datadog dataset {name}: "
             f"{', '.join(sorted(missing)[:10])}. Re-upload the dataset file with "
             f"upload_gym_dataset.py.")
 
-    body = create_body(dataset_id, project_id, version, args.model, args.judge_model,
-                       args.prompt_version, args.run_url)
+    body = create_body(dataset_id, project_id, version, model, judge_model,
+                       prompt_version, run_url, extra_tags)
     payload = request_json(site, api_key, app_key, "POST", f"{UNSTABLE}/experiments", body)
     experiment_id = (payload.get("data") or {}).get("id")
     if not experiment_id:
         raise DatadogError(f"experiment create returned no id: {json.dumps(payload)[:300]}")
     request_json(site, api_key, app_key, "PATCH", f"{UNSTABLE}/experiments/{experiment_id}",
                  status_body("running"))
-    print(json.dumps({"experiment_id": experiment_id, "project_id": project_id,
-                      "dataset_id": dataset_id}))
+    return {"experiment_id": experiment_id, "project_id": project_id, "dataset_id": dataset_id}
+
+
+def post_replay(site, api_key, app_key, ids, model, record, replay):
+    """Post one replay, as loaded by `load_replay`, to the experiment `ids` names."""
+    tags = experiment_tags(ids["experiment_id"], ids["project_id"], ids["dataset_id"], model)
+    request_json(site, api_key, app_key, "POST",
+                 f"{UNSTABLE}/experiments/{ids['experiment_id']}/events",
+                 record_body(ids["experiment_id"], tags, record, replay))
+
+
+def finish_experiment(site, api_key, app_key, experiment_id, status):
+    request_json(site, api_key, app_key, "PATCH", f"{UNSTABLE}/experiments/{experiment_id}",
+                 status_body(status))
+
+
+def cmd_create(args):
+    site, api_key, app_key = credentials()
+    with open(args.matrix) as stream:
+        records = {job["record"] for job in json.load(stream)["include"]}
+    ids = start_experiment(site, api_key, app_key,
+                           resolve_project(site, api_key, app_key, args.project),
+                           args.dataset_file, records, args.model, args.judge_model,
+                           args.prompt_version, args.run_url)
+    print(json.dumps(ids))
 
 
 def cmd_record(args):
     site, api_key, app_key = credentials()
-    tags = experiment_tags(args.experiment_id, args.project_id, args.dataset_id, args.model)
-    replay = load_replay(args.replay_dir, args.attribution)
-    request_json(site, api_key, app_key, "POST",
-                 f"{UNSTABLE}/experiments/{args.experiment_id}/events",
-                 record_body(args.experiment_id, tags, args.record, replay))
+    ids = {"experiment_id": args.experiment_id, "project_id": args.project_id,
+           "dataset_id": args.dataset_id}
+    post_replay(site, api_key, app_key, ids, args.model, args.record,
+                load_replay(args.replay_dir, args.attribution))
     print(f"{args.record}: posted to experiment {args.experiment_id}")
 
 
 def cmd_finish(args):
     site, api_key, app_key = credentials()
-    request_json(site, api_key, app_key, "PATCH",
-                 f"{UNSTABLE}/experiments/{args.experiment_id}", status_body(args.status))
+    finish_experiment(site, api_key, app_key, args.experiment_id, args.status)
     print(f"experiment {args.experiment_id}: {args.status}")
 
 
