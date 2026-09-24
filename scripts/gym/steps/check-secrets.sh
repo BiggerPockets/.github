@@ -22,6 +22,9 @@ echo "Add them with:"
 for name in "${missing[@]}"; do
   echo "  gh secret set $name --repo BiggerPockets/.github"
 done
-echo "Without JIRA_EMAIL/JIRA_API_TOKEN every replay degrades to a diff-only review, which"
-echo "is not comparable to the recorded findings and understates recall."
+case " ${missing[*]} " in
+  *" JIRA_"*)
+    echo "Without JIRA_EMAIL/JIRA_API_TOKEN every replay degrades to a diff-only review, which"
+    echo "is not comparable to the recorded findings and understates recall." ;;
+esac
 exit 1
