@@ -46,14 +46,17 @@ Synthesize a single review decision for pull request #{{PR}}.
 12. Check whether the diff renames, moves, or deletes a name that is persisted outside
    the codebase and read back after deploy, per these rules:
    {{@prompts/_shared/rename-compatibility-rules.md}}
-13. Judge the value of the specs the diff adds or changes, per these rules, and report a
+13. Check whether the diff makes a new environment variable mandatory without giving
+   development, CI, and review apps a value for it, per these rules:
+   {{@prompts/_shared/env-var-rules.md}}
+14. Judge the value of the specs the diff adds or changes, per these rules, and report a
    useless spec with a file/line reference and the assertion that would make it fail:
    {{@prompts/_shared/spec-value-rules.md}}
-14. Validate which of Codex's findings are real (discard false positives), add any genuine
+15. Validate which of Codex's findings are real (discard false positives), add any genuine
    issues Codex missed, and (when a ticket is available) judge genuine misses of the ticket's
    intent or clear scope creep — but give credit when the author went beyond the literal
    acceptance criteria in a sound way rather than flagging it as non-compliant.
-15. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
+16. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
    genuine, blocking issue (such as a bug, regression, privacy violation, half-finished task,
    placeholder, or deferred work); otherwise "approve". A useless spec is reported, never
    blocking. A change that exceeds the AC without breaking the ticket's intent is a reason

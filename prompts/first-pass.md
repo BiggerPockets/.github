@@ -40,10 +40,13 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
 11. Check whether the diff renames, moves, or deletes a name that is persisted outside
    the codebase and read back after deploy, per these rules:
    {{@prompts/_shared/rename-compatibility-rules.md}}
-12. Judge the value of the specs the diff adds or changes, per these rules, and report a
+12. Check whether the diff makes a new environment variable mandatory without giving
+   development, CI, and review apps a value for it, per these rules:
+   {{@prompts/_shared/env-var-rules.md}}
+13. Judge the value of the specs the diff adds or changes, per these rules, and report a
    useless spec with a file/line reference and the assertion that would make it fail:
    {{@prompts/_shared/spec-value-rules.md}}
-13. Report concrete issues — bugs, regressions, security problems, member-privacy
+14. Report concrete issues — bugs, regressions, security problems, member-privacy
    violations, incomplete tasks/half-measures/placeholders/deferred work, specs that cannot
    fail usefully, and genuine misses of the ticket's intent or clear scope creep — each with
    a file/line reference and a brief rationale. Do not list "doesn't match acceptance criteria" as an issue by itself; only
