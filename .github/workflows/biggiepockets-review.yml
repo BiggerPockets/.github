@@ -379,13 +379,17 @@ jobs:
       # diff, ticket/discussion context, and (possibly empty) findings on every retry.
       - name: Record first-pass completion metadata
         if: always()
+        env:
+          # llm-usage.py looks up what OpenRouter charged for each turn.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           first_pass_end_ns=$(date +%s%N)
           echo "FIRST_PASS_END_NS=$first_pass_end_ns" >> "$GITHUB_ENV"
-          # pi records its usage (tokens, turn count, and a cost.total computed from the
-          # model's pinned OpenRouter rates) in the event stream it just wrote. Read it
-          # here and hand it to the job that reports the trace, since that stream stays
-          # on this runner. One line, because the handoff is read as env.
+          # pi records each turn's usage and generation id in the event stream it just
+          # wrote. llm-usage.py totals the tokens and looks up the amount OpenRouter
+          # charged; it runs here and hands the result to the job that reports the
+          # trace, since that stream stays on this runner. One line, because the
+          # handoff is read as env.
           first_pass_usage=$(python3 registry/scripts/llm-usage.py pi "${FIRST_PASS_MODEL:-unspecified}" \
             "${FIRST_PASS_OUTPUT_FILE:-}" | tr -d '\n') || first_pass_usage=""
           {
@@ -675,6 +679,8 @@ jobs:
           # org identifier is committed here; both fall back to public defaults.
           DD_SITE: ${{ vars.DD_SITE }}
           DD_LLMOBS_ML_APP: ${{ vars.DD_LLMOBS_ML_APP }}
+          # llm-usage.py looks up what OpenRouter charged for each Stage 2 turn.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           FIRST_PASS_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.first_pass_prompt_template }}
           ARM_PROMPT_TEMPLATE: ${{ steps.resolve.outputs.arm_prompt_template }}
         run: |
@@ -779,17 +785,18 @@ jobs:
           # catalogued model from its token counts, and takes the reported `total_cost`
           # at face value for one it doesn't carry.
           #
-          # Both numbers come from what the tools recorded. pi records a usage object
-          # (tokens, a turn count, and a cost.total computed from the model's OpenRouter
-          # list rates on the runner, pinned in scripts/pi/models.json) on every pass —
-          # that is the same rate table OpenRouter bills against, so cost.total is the
-          # amount the pass is charged. Both stages run pi and so report identically; the
-          # first pass's counters travel from its own job in FIRST_PASS_USAGE_JSON, since
-          # its event stream stays on that runner.
+          # Both numbers come from what was recorded. pi records each turn's token usage
+          # and OpenRouter generation id; llm-usage.py totals the tokens over the turns
+          # and reports as total_cost the amount OpenRouter charged for those
+          # generations. When that lookup cannot account for every turn it reports pi's
+          # own figure from the rates pinned in scripts/pi/models.json as estimated_cost
+          # instead, which Datadog does not count as spend. Both stages run pi and so
+          # report identically; the first pass's counters travel from its own job in
+          # FIRST_PASS_USAGE_JSON, since its event stream stays on that runner.
           #
           # turn_count rides along in metrics. It is what makes the token counts
-          # interpretable: pi reports a running session total, so a multi-turn first pass
-          # counts its conversation prefix once per turn and its cumulative input is not a
+          # interpretable: they are totals over every turn, so a multi-turn first pass
+          # counts its conversation prefix once per turn and its total input is not a
           # context-window requirement. scripts/pi/check_model_freshness.py divides the two
           # apart using this count when it sizes context for the weekly chart.
           # Only usage objects are read, never message content.

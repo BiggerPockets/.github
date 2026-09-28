@@ -12,10 +12,11 @@ This never decides anything on its own — review quality isn't something an API
 score, so picking a replacement model stays a human call. All this does is surface
 the two things that ARE checkable automatically:
 
-  1. Rate drift: the $/1M rates pinned in models.json are what pi uses to compute
-     cost.total for Datadog (see llm-usage.py's docstring). If OpenRouter's list
-     price for a pinned model has moved, the billing we report is wrong until
-     someone updates the pin.
+  1. Rate drift: the $/1M rates pinned in models.json are what pi prices a pass at,
+     and what a span reports as `estimated_cost` when OpenRouter's charges for it
+     can't be looked up (see llm-usage.py's docstring). If OpenRouter's list price
+     for a pinned model has moved, those estimates are wrong until someone updates
+     the pin.
   2. Cheaper same-tier candidates: reasoning-capable models with >=100k context
      and at least MIN_UPTIME_PCT uptime that currently cost less than the
      cheapest pinned model on an *effective* $/1M basis (see below) AND score no

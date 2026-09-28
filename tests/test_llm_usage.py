@@ -1,9 +1,11 @@
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/llm-usage.py'
 spec = importlib.util.spec_from_file_location('llm_usage', SCRIPT)
@@ -179,81 +181,122 @@ class CodexUsageTest(unittest.TestCase):
         self.assertEqual(counts['input_tokens'], 10)
 
 
-class PiUsageTest(unittest.TestCase):
-    def test_reads_counts_and_computed_cost_from_the_last_finished_message(self):
-        usage = {'input': 17515, 'output': 17, 'cacheRead': 17024,
-                 'cacheWrite': 0, 'totalTokens': 34556,
-                 'cost': {'input': 0.000332785, 'output': 5.1e-07,
-                          'cacheRead': 0.000038966, 'cacheWrite': 0,
-                          'total': 0.000372255}}
-        path = write('\n'.join(json.dumps(e) for e in pi_stream(pi_message(usage=usage))))
-        counts, cost = llm_usage.pi_usage(path)
-        self.assertEqual(counts, {'input_tokens': 17515, 'output_tokens': 17,
-                                  'cache_read_input_tokens': 17024,
-                                  'cache_write_input_tokens': 0,
-                                  'turn_count': 1})
-        self.assertEqual(cost, 0.000372255)
+def pi_turn(input_tokens, output_tokens, cost=0.0, response_id=None, **extra):
+    message = pi_message(usage={'input': input_tokens, 'output': output_tokens,
+                                'cacheRead': extra.pop('cache_read', 0), 'cacheWrite': 0,
+                                'cost': {'total': cost}}, **extra)
+    if response_id:
+        message['responseId'] = response_id
+    return message
 
-    def test_prefers_the_last_clean_message_over_a_failed_retry_after_it(self):
-        clean = pi_message(stop_reason='stop', text='review done', usage={
-            'input': 500, 'output': 100, 'cacheRead': 0, 'cacheWrite': 0,
-            'totalTokens': 600, 'cost': {'total': 0.9}})
-        failed = pi_message(stop_reason='error', error='429 rate limited', usage={
-            'input': 10, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0,
-            'totalTokens': 10, 'cost': {'total': 0.0}})
-        path = write('\n'.join(json.dumps(e) for e in pi_stream(clean, failed)))
-        counts, cost = llm_usage.pi_usage(path)
-        self.assertEqual(counts['input_tokens'], 500)
-        self.assertEqual(cost, 0.9)
+
+def write_stream(*messages):
+    return write('\n'.join(json.dumps(e) for e in pi_stream(*messages)))
+
+
+class PiUsageTest(unittest.TestCase):
+    def test_adds_up_every_turns_tokens(self):
+        path = write_stream(pi_turn(100, 10, cache_read=50), pi_turn(300, 20, cache_read=250))
+        counts, _ = llm_usage.pi_usage(path)
+        self.assertEqual(counts, {'input_tokens': 400, 'output_tokens': 30,
+                                  'cache_read_input_tokens': 300,
+                                  'cache_write_input_tokens': 0, 'turn_count': 2})
+
+    def test_counts_a_failed_retrys_tokens_too(self):
+        clean = pi_turn(500, 100, text='review done')
+        failed = pi_turn(10, 0, stop_reason='error', error='429 rate limited')
+        counts, _ = llm_usage.pi_usage(write_stream(clean, failed))
+        self.assertEqual(counts['input_tokens'], 510)
+
+    def test_without_an_api_key_reports_pis_figure_as_an_estimate(self):
+        path = write_stream(pi_turn(10, 1, cost=0.25), pi_turn(20, 2, cost=0.5))
+        _, costs = llm_usage.pi_usage(path)
+        self.assertEqual(costs, {'estimated_cost': 0.75})
 
     def test_zero_cost_is_no_reported_cost(self):
-        usage = {'input': 10, 'output': 2, 'cacheRead': 0, 'cacheWrite': 0,
-                 'totalTokens': 12, 'cost': {'total': 0.0}}
-        path = write('\n'.join(json.dumps(e) for e in pi_stream(pi_message(usage=usage))))
-        _, cost = llm_usage.pi_usage(path)
-        self.assertIsNone(cost)
+        _, costs = llm_usage.pi_usage(write_stream(pi_turn(10, 2)))
+        self.assertEqual(costs, {})
+
+    def test_reports_what_openrouter_charged_for_every_turn(self):
+        path = write_stream(pi_turn(10, 1, cost=0.1, response_id='gen-1'),
+                            pi_turn(20, 2, cost=0.2, response_id='gen-2'))
+        with mock.patch.object(llm_usage.openrouter, 'billed_cost',
+                               return_value=0.61) as billed:
+            _, costs = llm_usage.pi_usage(path, api_key='key')
+        billed.assert_called_once_with(['gen-1', 'gen-2'], 'key')
+        self.assertEqual(costs, {'total_cost': 0.61})
+
+    def test_a_turn_that_used_no_tokens_needs_no_generation_id(self):
+        path = write_stream(pi_turn(10, 1, response_id='gen-1'),
+                            pi_turn(0, 0, stop_reason='error', error='connection reset'))
+        with mock.patch.object(llm_usage.openrouter, 'billed_cost',
+                               return_value=0.2) as billed:
+            _, costs = llm_usage.pi_usage(path, api_key='key')
+        billed.assert_called_once_with(['gen-1'], 'key')
+        self.assertEqual(costs, {'total_cost': 0.2})
+
+    def test_falls_back_to_the_estimate_when_a_charged_turn_has_no_id(self):
+        path = write_stream(pi_turn(10, 1, cost=0.1, response_id='gen-1'),
+                            pi_turn(20, 2, cost=0.2))
+        with mock.patch.object(llm_usage.openrouter, 'billed_cost') as billed:
+            _, costs = llm_usage.pi_usage(path, api_key='key')
+        billed.assert_not_called()
+        self.assertEqual(list(costs), ['estimated_cost'])
+        self.assertAlmostEqual(costs['estimated_cost'], 0.3)
+
+    def test_falls_back_to_the_estimate_when_a_lookup_fails(self):
+        path = write_stream(pi_turn(10, 1, cost=0.1, response_id='gen-1'))
+        with mock.patch.object(llm_usage.openrouter, 'billed_cost', return_value=None):
+            _, costs = llm_usage.pi_usage(path, api_key='key')
+        self.assertEqual(costs, {'estimated_cost': 0.1})
+
+    def test_a_lookup_that_raises_does_not_fail_the_report(self):
+        path = write_stream(pi_turn(10, 1, cost=0.1, response_id='gen-1'))
+        with mock.patch.object(llm_usage.openrouter, 'billed_cost',
+                               side_effect=RuntimeError('boom')):
+            _, costs = llm_usage.pi_usage(path, api_key='key')
+        self.assertEqual(costs, {'estimated_cost': 0.1})
 
     def test_missing_file_yields_nothing(self):
-        self.assertEqual(llm_usage.pi_usage('/nonexistent/pi-output.jsonl'), ({}, None))
-        self.assertEqual(llm_usage.pi_usage(''), ({}, None))
+        self.assertEqual(llm_usage.pi_usage('/nonexistent/pi-output.jsonl'), ({}, {}))
+        self.assertEqual(llm_usage.pi_usage(''), ({}, {}))
 
     def test_stream_without_an_assistant_message_yields_nothing(self):
         path = write('\n'.join(json.dumps(e) for e in [
             {'type': 'session'}, {'type': 'turn_start'},
             {'type': 'agent_end', 'messages': []},
         ]))
-        self.assertEqual(llm_usage.pi_usage(path), ({}, None))
+        self.assertEqual(llm_usage.pi_usage(path), ({}, {}))
 
     def test_does_not_double_count_turns_reported_twice(self):
         # pi_stream emits each message as its own message_end AND again inside
         # agent_end's transcript. Counting both would report twice the turns.
-        path = write('\n'.join(json.dumps(e) for e in pi_stream(
-            pi_message(usage={'input': 10, 'output': 1, 'cost': {'total': 0.1}}),
-            pi_message(usage={'input': 20, 'output': 2, 'cost': {'total': 0.2}}),
-        )))
-        counts, _ = llm_usage.pi_usage(path)
+        counts, _ = llm_usage.pi_usage(write_stream(pi_turn(10, 1), pi_turn(20, 2)))
         self.assertEqual(counts['turn_count'], 2)
+        self.assertEqual(counts['input_tokens'], 30)
 
-    def test_counts_turns_from_message_events_when_the_run_never_ended(self):
-        # A killed or timed-out pass has no agent_end, so the per-message events
-        # are all there is to count.
-        events = [{'type': 'session'}, {'type': 'turn_start'}]
-        events += [{'type': 'message_end', 'message': pi_message(
-            usage={'input': 10, 'output': 1, 'cost': {'total': 0.1}})} for _ in range(3)]
+    def test_counts_each_turn_once_when_the_run_never_ended(self):
+        # A killed or timed-out pass has no agent_end. pi writes each turn's message
+        # in message_start, message_end and turn_end; only message_end is counted.
+        events = [{'type': 'session'}]
+        for _ in range(3):
+            message = pi_turn(10, 1)
+            events += [{'type': 'turn_start'},
+                       {'type': 'message_start', 'message': message},
+                       {'type': 'message_end', 'message': message},
+                       {'type': 'turn_end', 'message': message, 'toolResults': []}]
         path = write('\n'.join(json.dumps(e) for e in events))
         counts, _ = llm_usage.pi_usage(path)
         self.assertEqual(counts['turn_count'], 3)
+        self.assertEqual(counts['input_tokens'], 30)
 
     def test_agent_end_alone_is_enough_when_no_message_end_events_exist(self):
         events = [{'type': 'session'},
-                  {'type': 'agent_end', 'messages': [
-                      pi_message(usage={'input': 7, 'output': 3, 'cacheRead': 0,
-                                        'cacheWrite': 0, 'totalTokens': 10,
-                                        'cost': {'total': 0.01}})]}]
+                  {'type': 'agent_end', 'messages': [pi_turn(7, 3, cost=0.01)]}]
         path = write('\n'.join(json.dumps(e) for e in events))
-        counts, cost = llm_usage.pi_usage(path)
+        counts, costs = llm_usage.pi_usage(path)
         self.assertEqual(counts['input_tokens'], 7)
-        self.assertEqual(cost, 0.01)
+        self.assertEqual(costs, {'estimated_cost': 0.01})
 
 
 class BuildSpanFieldsTest(unittest.TestCase):
@@ -275,6 +318,16 @@ class BuildSpanFieldsTest(unittest.TestCase):
             'deepseek/deepseek-v4.1-flash', {'input_tokens': 1000}, 0.0031)
         self.assertEqual(fields['metrics']['total_cost'], 0.0031)
 
+    def test_reports_an_estimate_apart_from_total_cost(self):
+        fields = llm_usage.build_span_fields('x/y', {'input_tokens': 1000}, None, 0.004)
+        self.assertEqual(fields['metrics']['estimated_cost'], 0.004)
+        self.assertNotIn('total_cost', fields['metrics'])
+
+    def test_a_charged_cost_replaces_the_estimate(self):
+        fields = llm_usage.build_span_fields('x/y', {'input_tokens': 1000}, 0.003, 0.004)
+        self.assertEqual(fields['metrics']['total_cost'], 0.003)
+        self.assertNotIn('estimated_cost', fields['metrics'])
+
     def test_omits_the_derived_total_when_a_count_is_missing(self):
         fields = llm_usage.build_span_fields('x/y', {'input_tokens': 1000}, None)
         self.assertNotIn('total_tokens', fields['metrics'])
@@ -291,6 +344,16 @@ class MainTest(unittest.TestCase):
 
     def test_exits_zero_with_no_arguments(self):
         self.assertEqual(llm_usage.main(['llm-usage.py']), 0)
+
+    def test_pi_looks_up_charges_with_the_openrouter_key(self):
+        path = write_stream(pi_turn(10, 1, cost=0.1, response_id='gen-1'))
+        with mock.patch.dict(os.environ, {'OPENROUTER_API_KEY': 'key'}), \
+                mock.patch.object(llm_usage.openrouter, 'billed_cost',
+                                  return_value=0.2) as billed, \
+                mock.patch('sys.stdout', new_callable=io.StringIO) as out:
+            llm_usage.main(['llm-usage.py', 'pi', 'deepseek/deepseek-v4.1-flash', path])
+        billed.assert_called_once_with(['gen-1'], 'key')
+        self.assertEqual(json.loads(out.getvalue())['metrics']['total_cost'], 0.2)
 
 
 if __name__ == '__main__':
