@@ -141,17 +141,22 @@ in the catalog, token counts are enough. For one it does not carry, the span rep
 `total_cost` metric taken at face value.
 
 Both passes record usage the same way. pi runs in `--mode json` and writes a JSON event
-stream; every assistant message carries a usage object with token counts and `cost.total`
-— a price computed by pi from the model's OpenRouter list rates, the same rates OpenRouter
-bills against, so it is the amount the pass is charged. Every model either stage may run
-on is pinned with its rates in `scripts/pi/models.json` (the catalog pi ships predates
-them, and the live catalog refresh is a background fetch, not a startup step — a committed
-pin is what makes a fresh runner deterministic); adding or rolling a model means changing
-that file in the same commit. Each stage reads its own event stream and hands the totals
-to the reporting job. Only usage objects are read — never message content, transcripts,
-prompts, or diffs.
+stream. Every assistant message carries the token usage of its own request and, on
+OpenRouter, the request's generation id (`responseId`). `scripts/llm-usage.py` adds the
+tokens up over the pass and looks each generation up through OpenRouter's
+`GET /api/v1/generation`, which returns what OpenRouter charged for it. The sum is the
+span's `total_cost`. If any turn cannot be looked up, the span carries pi's own figure as
+`estimated_cost` instead, and no `total_cost`: pi prices tokens at the rates pinned in
+`scripts/pi/models.json`, which lag OpenRouter whenever its prices move, so Datadog's
+spend views count only amounts actually charged. Every model either stage may run on is
+pinned in that file (the catalog pi ships predates them, and the live catalog refresh is
+a background fetch, not a startup step — a committed pin is what makes a fresh runner
+deterministic); adding or rolling a model means changing that file in the same commit.
+Each stage reads its own event stream and hands the totals to the reporting job. Only
+usage objects and generation ids are read — never message content, transcripts, prompts,
+or diffs.
 
-Each span also carries a **`turn_count`**. pi reports tokens as a running session total,
+Each span also carries a **`turn_count`**. A pass's token counts are totals over its turns,
 so a multi-turn pass counts its conversation prefix once per turn: a first pass showing
 1.15M input tokens is a ~29-turn session over an ~80k working context, not an 1.15M-token
 prompt. Without the turn count those two are indistinguishable, and sizing a context

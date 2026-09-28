@@ -16,11 +16,15 @@ Where the numbers come from:
   emitted as `total_cost` — a real charge, not an estimate.
 - The Codex pass writes token counters to its session rollout. Its model is in the
   catalog, so those counts are enough for Datadog to price it.
-- The pi pass records a usage object on every run (input/output/cacheRead/cacheWrite
-  plus `cost.total`, a price computed by pi from the model's OpenRouter list rates
-  pinned in scripts/pi/models.json — the same rates OpenRouter bills against, so
-  `cost.total` is the amount the pass is charged; verified against a live run
-  where 17,515 input tokens at $0.019/M priced exactly to what OpenRouter charges).
+- pi records a usage object on each assistant turn, covering that turn's request
+  alone, so the pass's tokens are the sum over its turns. pi does not record what
+  OpenRouter charged: its `cost.total` is tokens times the rates pinned in
+  scripts/pi/models.json, which go stale whenever OpenRouter's prices move. What it
+  does record is each turn's `responseId`, which on OpenRouter is the generation id,
+  and GET /api/v1/generation returns the amount charged for it. The sum of those is
+  emitted as `total_cost` when every charged turn resolves (scripts/pi/openrouter.py,
+  `billed_cost`). When any does not, pi's own figure is emitted as `estimated_cost`
+  instead, a metric Datadog does not price from, and `total_cost` is left out.
 - Claude Code's own `total_cost_usd` is deliberately ignored. It is computed against
   Anthropic's list prices, and these passes are billed by OpenRouter for a non-
   Anthropic model, so it describes a bill nobody was sent. (The Claude Code harness
@@ -31,19 +35,21 @@ Datadog's catalog keys on the bare model and its originating provider, so
 `split_model` splits that into ("gpt-5.6-sol", "openai"); the fact that the call was
 routed through OpenRouter is preserved separately as a `gateway` tag.
 
-Every pass also reports a `turn_count`: how many model turns it took. Both
-harnesses report tokens as a running session total, so the token counts alone
+Every pass also reports a `turn_count`: how many model turns it took. Every pass's
+token counts are a total over the session's turns, so the token counts alone
 cannot distinguish a long cheap agentic session from one enormous prompt, and a
 cumulative input figure is not a context-window requirement. The turn count is
 what separates the two, and it is the reason the freshness check sizes context
 off fresh (non-cached) input rather than the cumulative total.
 
-Only counts, costs, and model identifiers pass through here. Message content,
+Only counts, costs, and model identifiers pass through here. pi's generation ids are
+read too, and sent only to OpenRouter's generation endpoint. Message content,
 transcripts, prompts, diffs, and responses are never read or emitted.
 
 Usage: llm-usage.py claude <model-slug> [execution-file]
        llm-usage.py codex  <model-slug> [rollout-dir]
        llm-usage.py pi     <model-slug> [event-stream-file]
+The pi pass reads OPENROUTER_API_KEY from the environment for the billing lookups.
 Prints a JSON object on stdout for the workflow's jq to splice into a span:
   {"model_name": ..., "model_provider": ..., "gateway": ..., "metrics": {...}}
 `metrics` carries only what is actually known; it is `{}` when nothing is.
@@ -52,6 +58,9 @@ Never raises and always exits 0 — cost telemetry must not fail a code review.
 import json
 import os
 import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "pi"))
+import openrouter  # noqa: E402
 
 # Datadog's catalog keys on the originating provider, not the gateway a call was
 # routed through. Slugs the workflow uses map to that provider by their first segment.
@@ -77,8 +86,8 @@ CODEX_USAGE_FIELDS = {
 }
 
 # pi's normalized usage object, as written to its JSON event stream (--mode json),
-# mapped to Datadog's metric names. `cost.total` (computed by pi from the model's
-# OpenRouter list rates) is handled separately below.
+# mapped to Datadog's metric names. `cost.total` (pi's estimate from the pinned
+# rates) is handled separately below.
 PI_USAGE_FIELDS = {
     "input": "input_tokens",
     "output": "output_tokens",
@@ -226,20 +235,36 @@ def codex_usage(directory):
     return (counts, openrouter_cost(totals))
 
 
-def pi_cost(usage):
-    """The amount pi computed for the pass from the model's OpenRouter list rates
-    (usage.cost.total), or None when it is absent, non-numeric, or zero. Zero is
-    treated as "nothing reported" — a free call or an absent rate table both
-    report no cost, matching the claude/codex conventions."""
-    if not isinstance(usage, dict):
+def pi_estimated_cost(messages):
+    """pi's own price for the pass: the sum of each turn's `usage.cost.total`, which
+    pi computes from the rates pinned in scripts/pi/models.json. None when no turn
+    carries a positive figure."""
+    total = 0.0
+    for message in messages:
+        cost = message["usage"].get("cost")
+        value = read_number(cost.get("total")) if isinstance(cost, dict) else None
+        if value is not None and value > 0:
+            total += value
+    return total or None
+
+
+def pi_charged(message):
+    """Whether a turn used any tokens, and so could have been charged for."""
+    return any((read_number(message["usage"].get(field)) or 0) > 0
+               for field in PI_USAGE_FIELDS)
+
+
+def pi_billed_cost(messages, api_key):
+    """What OpenRouter charged for the pass, from each charged turn's generation id,
+    or None unless every one of those turns has an id and resolves."""
+    charged = [m for m in messages if pi_charged(m)]
+    ids = [m.get("responseId") for m in charged]
+    if not ids or not all(isinstance(i, str) and i for i in ids):
         return None
-    cost = usage.get("cost")
-    if not isinstance(cost, dict):
+    try:
+        return openrouter.billed_cost(ids, api_key)
+    except Exception:  # noqa: BLE001 — cost telemetry must not fail a review
         return None
-    total = read_number(cost.get("total"))
-    if total is None or total <= 0:
-        return None
-    return total
 
 
 def pi_assistant_messages(events):
@@ -250,7 +275,8 @@ def pi_assistant_messages(events):
     both would double-count every turn, so when `agent_end` carries a transcript
     that is taken as authoritative and the per-message events are ignored. A
     stream that ends without one (a killed or timed-out run) falls back to the
-    `message_end`/`turn_end` events, which is all such a run has."""
+    `message_end` events, which is all such a run has. `message_start` and
+    `turn_end` carry the same message again and are not read."""
     from_agent_end = []
     from_events = []
 
@@ -268,47 +294,51 @@ def pi_assistant_messages(events):
                 from_agent_end = [m for m in messages if usable(m)]
             continue
         message = event.get("message")
-        if usable(message):
+        if event.get("type") == "message_end" and usable(message):
             from_events.append(message)
     return from_agent_end or from_events
 
 
-def pi_usage(path):
-    """pi's JSON event stream (--mode json) -> (token counts, reported cost or None).
-    Every assistant message carries the cumulative usage of the turn so far; the last
-    one that finished cleanly is the whole pass. Events of interest are
-    message_end/turn_end (message under `message`) and agent_end (messages array).
+def pi_usage(path, api_key=None):
+    """pi's JSON event stream (--mode json) -> (token counts, costs).
 
-    The number of those messages is the pass's turn count, reported alongside the
-    tokens so a long cheap session is distinguishable from one enormous prompt."""
-    candidates = pi_assistant_messages(read_messages(path))
-    if not candidates:
-        return ({}, None)
-    # Prefer the last message that finished cleanly; fall back to the last one with
-    # any usage; last resort is the last assistant message overall.
-    chosen = next(
-        (m for m in reversed(candidates) if m.get("stopReason") == "stop"),
-        next(
-            (m for m in reversed(candidates) if sum(
-                read_number(m["usage"].get(k)) or 0 for k in ("input", "output")) > 0),
-            candidates[-1]))
-    usage = chosen.get("usage") or {}
-    counts = collect(usage, PI_USAGE_FIELDS)
-    counts["turn_count"] = len(candidates)
-    return (counts, pi_cost(usage))
+    Each assistant message carries the usage of its own request, so the pass's
+    counts are the sum over its messages, failed retries included, since those were
+    sent too. The number of messages is the turn count, reported alongside the
+    tokens so a long cheap session is distinguishable from one enormous prompt.
+
+    Costs is a dict holding `total_cost`, the amount OpenRouter charged, when every
+    charged turn resolves, and otherwise `estimated_cost`, pi's figure from the
+    pinned rates. It is empty when neither is known."""
+    messages = pi_assistant_messages(read_messages(path))
+    if not messages:
+        return ({}, {})
+    counts = {}
+    for message in messages:
+        for metric, value in collect(message["usage"], PI_USAGE_FIELDS).items():
+            counts[metric] = counts.get(metric, 0) + value
+    counts["turn_count"] = len(messages)
+    billed = pi_billed_cost(messages, api_key) if api_key else None
+    if billed is not None:
+        return (counts, {"total_cost": billed})
+    estimated = pi_estimated_cost(messages)
+    return (counts, {"estimated_cost": estimated} if estimated is not None else {})
 
 
-def build_span_fields(slug, counts, cost):
+def build_span_fields(slug, counts, cost, estimated_cost=None):
     """Pure assembly of the span fields the workflow splices in: a catalog-matching
     model identity, whichever token counts are known, and a reported cost when there
     is one. `total_tokens` is Datadog's own metric name, so it is spelled out rather
-    than left for Datadog to infer."""
+    than left for Datadog to infer. An estimate goes under `estimated_cost`, never
+    `total_cost`, so Datadog's spend views count only amounts actually charged."""
     model_name, provider = split_model(slug)
     metrics = dict(counts)
     if "input_tokens" in metrics and "output_tokens" in metrics:
         metrics["total_tokens"] = metrics["input_tokens"] + metrics["output_tokens"]
     if cost is not None:
         metrics["total_cost"] = cost
+    elif estimated_cost is not None:
+        metrics["estimated_cost"] = estimated_cost
     return {
         "model_name": model_name,
         "model_provider": provider,
@@ -321,15 +351,17 @@ def main(argv):
     pass_name = argv[1] if len(argv) > 1 else ""
     slug = argv[2] if len(argv) > 2 else ""
     source = argv[3] if len(argv) > 3 else ""
+    estimated = None
     if pass_name == "codex":
         counts, cost = codex_usage(source or DEFAULT_ROLLOUT_DIR)
     elif pass_name == "claude":
         counts, cost = claude_usage(source)
     elif pass_name == "pi":
-        counts, cost = pi_usage(source)
+        counts, costs = pi_usage(source, os.environ.get("OPENROUTER_API_KEY"))
+        cost, estimated = costs.get("total_cost"), costs.get("estimated_cost")
     else:
         counts, cost = ({}, None)
-    print(json.dumps(build_span_fields(slug, counts, cost)))
+    print(json.dumps(build_span_fields(slug, counts, cost, estimated)))
     return 0
 
 

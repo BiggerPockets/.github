@@ -30,9 +30,11 @@ It reads only ids and per-call statistics, never prompts or completions.
 """
 
 import argparse
+import concurrent.futures
 import json
 import statistics
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -66,6 +68,15 @@ MIN_CANDIDATES = 6
 # is a round trip on the critical path of reporting. The most recent calls are the
 # ones that describe a slow or killed run, so the tail is what gets resolved.
 MAX_LOOKUPS = 40
+
+# Billing is the opposite case: a total is only a total if no call is missing from it,
+# so every call is looked up. The lookups run concurrently under one deadline, which
+# bounds what a pass of a hundred-odd turns adds to reporting. A generation's record
+# can lag the response that produced it, so a missing one is retried before the total
+# is given up on.
+BILLING_WORKERS = 8
+BILLING_DEADLINE_S = 120
+BILLING_ATTEMPTS = 4
 
 
 def _get(url, api_key=None, timeout=30):
@@ -258,6 +269,43 @@ def summarize(records):
         "calls_by_provider": dict(ranked),
         "metrics": metrics,
     }
+
+
+def _lookup_until(generation_id, api_key, deadline):
+    """lookup(), retried with backoff while attempts and the deadline allow."""
+    for attempt in range(BILLING_ATTEMPTS):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        record = lookup(generation_id, api_key, timeout=min(15, remaining))
+        if record:
+            return record
+        pause = 2 ** attempt
+        if attempt + 1 < BILLING_ATTEMPTS and time.monotonic() + pause < deadline:
+            time.sleep(pause)
+    return None
+
+
+def billed_cost(generation_ids, api_key):
+    """What OpenRouter charged for these generations in USD, or None unless every one
+    of them resolved to a `total_cost`.
+
+    A partial sum is not returned. It would be reported as the pass's cost and read
+    as one, while being short by however many calls failed to resolve.
+    """
+    if not generation_ids or not api_key:
+        return None
+    deadline = time.monotonic() + BILLING_DEADLINE_S
+    with concurrent.futures.ThreadPoolExecutor(max_workers=BILLING_WORKERS) as pool:
+        records = list(pool.map(lambda i: _lookup_until(i, api_key, deadline),
+                                generation_ids))
+    total = 0.0
+    for record in records:
+        try:
+            total += float(record["total_cost"])
+        except (TypeError, KeyError, ValueError):
+            return None
+    return total
 
 
 def attribute(path, api_key, max_lookups=MAX_LOOKUPS):
