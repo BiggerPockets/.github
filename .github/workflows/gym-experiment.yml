@@ -13,11 +13,12 @@ name: Gym experiment (first-pass model recall)
 # ONE MODEL PER RUN. The `model` input takes a single OpenRouter slug and planning rejects
 # a list. Evaluating a different model is a separate dispatch of this workflow.
 #
-# Results go to Datadog LLM Observability as one experiment per run (see
-# scripts/gym/datadog_experiment.py). Each replay is a span holding the model's review, the
-# recorded findings and the judge's scores. Those quote the private code under review, and
-# this repository is public, so none of it is printed to a log or uploaded as an artifact
-# here. GitHub keeps only the counts.
+# Each replay's result is saved as a JSON file in the private BiggerPockets/pi-gym-data
+# repo (see scripts/gym/gym_results.py), and the run is also recorded in Datadog LLM
+# Observability as one experiment (see scripts/gym/datadog_experiment.py). Both hold the
+# model's review, the recorded findings and the judge's scores. Those quote the private
+# code under review, and this repository is public, so none of it is printed to a log or
+# uploaded as an artifact here. GitHub keeps only the counts.
 #
 # Each step's logic lives in scripts/gym/steps/, one script per step, taking its inputs
 # from the step's `env:`.
@@ -90,17 +91,22 @@ jobs:
       # the review service account's BIGGIEPOCKETS_PAT, which can write. It is a fine-grained
       # PAT with read-only Contents and Pull requests on the repositories the dataset points
       # at, plus read-only Contents on BiggerPockets/pi-gym-data. A leak of it cannot write.
+      # GYM_RESULTS_TOKEN is the one token here that writes: a fine-grained PAT with
+      # read-write Contents on BiggerPockets/pi-gym-data and no other repository, used only
+      # to save each replay's result there.
       - name: Check required secrets
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GYM_REPO_TOKEN: ${{ secrets.GYM_REPO_TOKEN }}
+          GYM_RESULTS_TOKEN: ${{ secrets.GYM_RESULTS_TOKEN }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           DD_API_KEY: ${{ secrets.DD_API_KEY }}
           DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
         run: >-
           scripts/gym/steps/check-secrets.sh
-          OPENROUTER_API_KEY GYM_REPO_TOKEN JIRA_EMAIL JIRA_API_TOKEN DD_API_KEY DD_APP_KEY
+          OPENROUTER_API_KEY GYM_REPO_TOKEN GYM_RESULTS_TOKEN JIRA_EMAIL JIRA_API_TOKEN
+          DD_API_KEY DD_APP_KEY
 
       - name: Resolve the current first-pass prompt version
         id: prompt
@@ -255,6 +261,14 @@ jobs:
           PROJECT_ID: ${{ needs.plan.outputs.project_id }}
           DATASET_ID: ${{ needs.plan.outputs.dataset_id }}
         run: registry/scripts/gym/steps/record-replay.sh
+
+      # The durable per-record copy of the run, in the private dataset repo.
+      - name: Save the replay result to pi-gym-data
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GYM_RESULTS_TOKEN }}
+          JUDGE_MODEL: ${{ inputs.judge_model }}
+        run: registry/scripts/gym/steps/save-result.sh
 
       - name: Upload counts
         if: always()
