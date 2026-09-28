@@ -89,7 +89,7 @@ class ReviewDiagnosticsTest(unittest.TestCase):
         self.assertEqual(report['result']['errors'],
                          ['429 provider error [REDACTED]'])
         self.assertEqual(report['result']['num_turns'], 1)
-        self.assertEqual(report['result']['total_cost'], 0.0012)
+        self.assertNotIn('total_cost', report['result'])
         self.assertNotIn('private tool transcript', json.dumps(report) + summary)
         self.assertNotIn('private-test-secret', json.dumps(report) + summary)
 

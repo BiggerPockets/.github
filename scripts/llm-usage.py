@@ -18,13 +18,12 @@ Where the numbers come from:
   catalog, so those counts are enough for Datadog to price it.
 - pi records a usage object on each assistant turn, covering that turn's request
   alone, so the pass's tokens are the sum over its turns. pi does not record what
-  OpenRouter charged: its `cost.total` is tokens times the rates pinned in
-  scripts/pi/models.json, which go stale whenever OpenRouter's prices move. What it
-  does record is each turn's `responseId`, which on OpenRouter is the generation id,
-  and GET /api/v1/generation returns the amount charged for it. The sum of those is
-  emitted as `total_cost` when every charged turn resolves (scripts/pi/openrouter.py,
-  `billed_cost`). When any does not, no cost is emitted. pi's own figure is never
-  used: it is an estimate from a rate sheet nothing keeps current.
+  OpenRouter charged; its `cost.total` would be tokens times a rate sheet, and
+  scripts/pi/models.json deliberately carries none, so it is zero and never read.
+  What pi does record is each turn's `responseId`, which on OpenRouter is the
+  generation id, and GET /api/v1/generation returns the amount charged for it. The
+  sum of those is emitted as `total_cost` when every charged turn resolves
+  (scripts/pi/openrouter.py, `billed_cost`). When any does not, no cost is emitted.
 - Claude Code's own `total_cost_usd` is deliberately ignored. It is computed against
   Anthropic's list prices, and these passes are billed by OpenRouter for a non-
   Anthropic model, so it describes a bill nobody was sent. (The Claude Code harness
@@ -86,8 +85,7 @@ CODEX_USAGE_FIELDS = {
 }
 
 # pi's normalized usage object, as written to its JSON event stream (--mode json),
-# mapped to Datadog's metric names. pi's `cost.total` is an estimate from pinned
-# rates and is not read.
+# mapped to Datadog's metric names. pi's `cost.total` is not read.
 PI_USAGE_FIELDS = {
     "input": "input_tokens",
     "output": "output_tokens",
