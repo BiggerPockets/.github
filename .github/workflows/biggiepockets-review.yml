@@ -788,9 +788,8 @@ jobs:
           # Both numbers come from what was recorded. pi records each turn's token usage
           # and OpenRouter generation id; llm-usage.py totals the tokens over the turns
           # and reports as total_cost the amount OpenRouter charged for those
-          # generations. When that lookup cannot account for every turn it reports pi's
-          # own figure from the rates pinned in scripts/pi/models.json as estimated_cost
-          # instead, which Datadog does not count as spend. Both stages run pi and so
+          # generations. When that lookup cannot account for every turn it reports no
+          # cost rather than an estimate. Both stages run pi and so
           # report identically; the first pass's counters travel from its own job in
           # FIRST_PASS_USAGE_JSON, since its event stream stays on that runner.
           #

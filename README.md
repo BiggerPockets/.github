@@ -145,11 +145,10 @@ stream. Every assistant message carries the token usage of its own request and, 
 OpenRouter, the request's generation id (`responseId`). `scripts/llm-usage.py` adds the
 tokens up over the pass and looks each generation up through OpenRouter's
 `GET /api/v1/generation`, which returns what OpenRouter charged for it. The sum is the
-span's `total_cost`. If any turn cannot be looked up, the span carries pi's own figure as
-`estimated_cost` instead, and no `total_cost`: pi prices tokens at the rates pinned in
-`scripts/pi/models.json`, which lag OpenRouter whenever its prices move, so Datadog's
-spend views count only amounts actually charged. Every model either stage may run on is
-pinned in that file (the catalog pi ships predates them, and the live catalog refresh is
+span's `total_cost`. If any turn cannot be looked up, the span carries no cost. pi's own
+`cost.total` is never reported: it prices tokens at rates pinned in
+`scripts/pi/models.json`, which nothing keeps current. Every model either stage may run on
+is pinned in that file (the catalog pi ships predates them, and the live catalog refresh is
 a background fetch, not a startup step — a committed pin is what makes a fresh runner
 deterministic); adding or rolling a model means changing that file in the same commit.
 Each stage reads its own event stream and hands the totals to the reporting job. Only

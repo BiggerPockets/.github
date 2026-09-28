@@ -208,65 +208,60 @@ class PiUsageTest(unittest.TestCase):
         counts, _ = llm_usage.pi_usage(write_stream(clean, failed))
         self.assertEqual(counts['input_tokens'], 510)
 
-    def test_without_an_api_key_reports_pis_figure_as_an_estimate(self):
-        path = write_stream(pi_turn(10, 1, cost=0.25), pi_turn(20, 2, cost=0.5))
-        _, costs = llm_usage.pi_usage(path)
-        self.assertEqual(costs, {'estimated_cost': 0.75})
-
-    def test_zero_cost_is_no_reported_cost(self):
-        _, costs = llm_usage.pi_usage(write_stream(pi_turn(10, 2)))
-        self.assertEqual(costs, {})
+    def test_never_reports_pis_own_estimate(self):
+        path = write_stream(pi_turn(10, 1, cost=0.25, response_id='gen-1'))
+        _, cost = llm_usage.pi_usage(path)
+        self.assertIsNone(cost)
 
     def test_reports_what_openrouter_charged_for_every_turn(self):
         path = write_stream(pi_turn(10, 1, cost=0.1, response_id='gen-1'),
                             pi_turn(20, 2, cost=0.2, response_id='gen-2'))
         with mock.patch.object(llm_usage.openrouter, 'billed_cost',
                                return_value=0.61) as billed:
-            _, costs = llm_usage.pi_usage(path, api_key='key')
+            _, cost = llm_usage.pi_usage(path, api_key='key')
         billed.assert_called_once_with(['gen-1', 'gen-2'], 'key')
-        self.assertEqual(costs, {'total_cost': 0.61})
+        self.assertEqual(cost, 0.61)
 
     def test_a_turn_that_used_no_tokens_needs_no_generation_id(self):
         path = write_stream(pi_turn(10, 1, response_id='gen-1'),
                             pi_turn(0, 0, stop_reason='error', error='connection reset'))
         with mock.patch.object(llm_usage.openrouter, 'billed_cost',
                                return_value=0.2) as billed:
-            _, costs = llm_usage.pi_usage(path, api_key='key')
+            _, cost = llm_usage.pi_usage(path, api_key='key')
         billed.assert_called_once_with(['gen-1'], 'key')
-        self.assertEqual(costs, {'total_cost': 0.2})
+        self.assertEqual(cost, 0.2)
 
-    def test_falls_back_to_the_estimate_when_a_charged_turn_has_no_id(self):
+    def test_reports_no_cost_when_a_charged_turn_has_no_id(self):
         path = write_stream(pi_turn(10, 1, cost=0.1, response_id='gen-1'),
                             pi_turn(20, 2, cost=0.2))
         with mock.patch.object(llm_usage.openrouter, 'billed_cost') as billed:
-            _, costs = llm_usage.pi_usage(path, api_key='key')
+            _, cost = llm_usage.pi_usage(path, api_key='key')
         billed.assert_not_called()
-        self.assertEqual(list(costs), ['estimated_cost'])
-        self.assertAlmostEqual(costs['estimated_cost'], 0.3)
+        self.assertIsNone(cost)
 
-    def test_falls_back_to_the_estimate_when_a_lookup_fails(self):
+    def test_reports_no_cost_when_a_lookup_fails(self):
         path = write_stream(pi_turn(10, 1, cost=0.1, response_id='gen-1'))
         with mock.patch.object(llm_usage.openrouter, 'billed_cost', return_value=None):
-            _, costs = llm_usage.pi_usage(path, api_key='key')
-        self.assertEqual(costs, {'estimated_cost': 0.1})
+            _, cost = llm_usage.pi_usage(path, api_key='key')
+        self.assertIsNone(cost)
 
     def test_a_lookup_that_raises_does_not_fail_the_report(self):
         path = write_stream(pi_turn(10, 1, cost=0.1, response_id='gen-1'))
         with mock.patch.object(llm_usage.openrouter, 'billed_cost',
                                side_effect=RuntimeError('boom')):
-            _, costs = llm_usage.pi_usage(path, api_key='key')
-        self.assertEqual(costs, {'estimated_cost': 0.1})
+            _, cost = llm_usage.pi_usage(path, api_key='key')
+        self.assertIsNone(cost)
 
     def test_missing_file_yields_nothing(self):
-        self.assertEqual(llm_usage.pi_usage('/nonexistent/pi-output.jsonl'), ({}, {}))
-        self.assertEqual(llm_usage.pi_usage(''), ({}, {}))
+        self.assertEqual(llm_usage.pi_usage('/nonexistent/pi-output.jsonl'), ({}, None))
+        self.assertEqual(llm_usage.pi_usage(''), ({}, None))
 
     def test_stream_without_an_assistant_message_yields_nothing(self):
         path = write('\n'.join(json.dumps(e) for e in [
             {'type': 'session'}, {'type': 'turn_start'},
             {'type': 'agent_end', 'messages': []},
         ]))
-        self.assertEqual(llm_usage.pi_usage(path), ({}, {}))
+        self.assertEqual(llm_usage.pi_usage(path), ({}, None))
 
     def test_does_not_double_count_turns_reported_twice(self):
         # pi_stream emits each message as its own message_end AND again inside
@@ -294,9 +289,8 @@ class PiUsageTest(unittest.TestCase):
         events = [{'type': 'session'},
                   {'type': 'agent_end', 'messages': [pi_turn(7, 3, cost=0.01)]}]
         path = write('\n'.join(json.dumps(e) for e in events))
-        counts, costs = llm_usage.pi_usage(path)
+        counts, _ = llm_usage.pi_usage(path)
         self.assertEqual(counts['input_tokens'], 7)
-        self.assertEqual(costs, {'estimated_cost': 0.01})
 
 
 class BuildSpanFieldsTest(unittest.TestCase):
@@ -317,16 +311,6 @@ class BuildSpanFieldsTest(unittest.TestCase):
         fields = llm_usage.build_span_fields(
             'deepseek/deepseek-v4.1-flash', {'input_tokens': 1000}, 0.0031)
         self.assertEqual(fields['metrics']['total_cost'], 0.0031)
-
-    def test_reports_an_estimate_apart_from_total_cost(self):
-        fields = llm_usage.build_span_fields('x/y', {'input_tokens': 1000}, None, 0.004)
-        self.assertEqual(fields['metrics']['estimated_cost'], 0.004)
-        self.assertNotIn('total_cost', fields['metrics'])
-
-    def test_a_charged_cost_replaces_the_estimate(self):
-        fields = llm_usage.build_span_fields('x/y', {'input_tokens': 1000}, 0.003, 0.004)
-        self.assertEqual(fields['metrics']['total_cost'], 0.003)
-        self.assertNotIn('estimated_cost', fields['metrics'])
 
     def test_omits_the_derived_total_when_a_count_is_missing(self):
         fields = llm_usage.build_span_fields('x/y', {'input_tokens': 1000}, None)
