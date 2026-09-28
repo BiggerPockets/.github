@@ -5,18 +5,14 @@ price/quality frontier.
 Both review stages pin their models in scripts/pi/models.json and are checked by
 this same script, once per stage (--stage=stage1|stage2, see STAGES). A stage has
 its own pinned set, its own Datadog spans, its own real token mix, and its own
-chart; everything else — the catalog, drift, uptime and leaderboard machinery —
-is shared.
+chart; everything else — the catalog, uptime and leaderboard machinery — is
+shared.
 
 This never decides anything on its own — review quality isn't something an API can
 score, so picking a replacement model stays a human call. All this does is surface
-the two things that ARE checkable automatically:
+the things that ARE checkable automatically:
 
-  1. Rate drift: the $/1M rates pinned in models.json are what pi prices a pass at,
-     and what a span reports as `estimated_cost` when OpenRouter's charges for it
-     can't be looked up (see llm-usage.py's docstring). If OpenRouter's list price
-     for a pinned model has moved, those estimates are wrong until someone updates
-     the pin.
+  1. Pinned models missing from OpenRouter's catalog.
   2. Cheaper same-tier candidates: reasoning-capable models with >=100k context
      and at least MIN_UPTIME_PCT uptime that currently cost less than the
      cheapest pinned model on an *effective* $/1M basis (see below) AND score no
@@ -56,7 +52,7 @@ doesn't expose throughput/latency (always null), and after the >=95% filter
 the remaining uptime spread is too small to be a useful axis, so it stays a
 table-only reliability gate instead.
 
-Prints one JSON object to stdout: {"stage": str, "drift": [...], "missing": [...],
+Prints one JSON object to stdout: {"stage": str, "missing": [...],
 "candidates": [...], "unreliable_pinned": [...], "token_mix": {...} | null,
 "notable": bool}. Never raises and always exits 0 — this is a weekly
 nudge-to-look, not a check that should ever fail CI.
@@ -83,7 +79,6 @@ from matplotlib.ticker import FuncFormatter
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 OPENROUTER_ENDPOINTS_URL = "https://openrouter.ai/api/v1/models/{model_id}/endpoints"
-DRIFT_THRESHOLD = 0.05  # flag a pinned rate more than 5% off the live list price
 CANDIDATE_MIN_CONTEXT = 100_000
 CANDIDATE_LIMIT = 5
 CANDIDATE_POOL_SIZE = 40  # cheaper-and-no-weaker pool checked for uptime before limiting
@@ -91,7 +86,7 @@ MIN_UPTIME_PCT = 95.0  # a model down more than 5% of the time isn't a real savi
 DEFAULT_STAGE = "stage2"
 
 # Each review stage pins its own models, bills its own token mix, and needs its own
-# chart, but the catalog/drift/uptime/leaderboard machinery is identical for both, so
+# chart, but the catalog/uptime/leaderboard machinery is identical for both, so
 # the check runs once per stage rather than existing twice.
 #
 # `spans` lists the Datadog LLM Obs span names that carry the stage's real usage,
@@ -457,32 +452,16 @@ def load_pinned(path, stage):
     return [m for m in models if stage in (m.get("stages") or [stage])]
 
 
-def rate_drift(pinned, live_entry):
-    """Compare pinned $/1M rates to OpenRouter's current list price. Returns a list
-    of per-field drift descriptions, empty when everything is within threshold."""
-    pricing = live_entry.get("pricing", {})
-    field_map = {
-        "input": "prompt",
-        "output": "completion",
-        "cacheRead": "input_cache_read",
-        "cacheWrite": "input_cache_write",
+def live_rates(entry):
+    """A catalog entry's input/cacheRead/output rates in $/1M, as OpenRouter lists them
+    today. Every price this check uses comes from here: models.json pins no rates,
+    since nothing would keep a pinned copy current."""
+    pricing = entry.get("pricing", {})
+    return {
+        "input": per_token_to_per_million(pricing.get("prompt")),
+        "cacheRead": per_token_to_per_million(pricing.get("input_cache_read")),
+        "output": per_token_to_per_million(pricing.get("completion")),
     }
-    drifts = []
-    for pinned_field, live_field in field_map.items():
-        pinned_rate = pinned.get("cost", {}).get(pinned_field)
-        live_rate = per_token_to_per_million(pricing.get(live_field))
-        if pinned_rate is None or live_rate is None:
-            continue
-        if pinned_rate == 0 and live_rate == 0:
-            continue
-        baseline = max(pinned_rate, live_rate, 1e-9)
-        if abs(pinned_rate - live_rate) / baseline > DRIFT_THRESHOLD:
-            drifts.append({
-                "field": pinned_field,
-                "pinned": pinned_rate,
-                "live": round(live_rate, 6),
-            })
-    return drifts
 
 
 def is_reasoning_capable(entry):
@@ -520,15 +499,10 @@ def find_candidates(catalog, pinned_ids, cheapest_pinned_effective_rate, token_m
             continue
         if (entry.get("context_length") or 0) < CANDIDATE_MIN_CONTEXT:
             continue
-        pricing = entry.get("pricing", {})
-        input_rate = per_token_to_per_million(pricing.get("prompt"))
+        rates = live_rates(entry)
+        input_rate = rates["input"]
         if input_rate is None or input_rate <= 0:
             continue
-        rates = {
-            "input": input_rate,
-            "cacheRead": per_token_to_per_million(pricing.get("input_cache_read")),
-            "output": per_token_to_per_million(pricing.get("completion")),
-        }
         effective_rate = effective_rate_per_million(rates, token_mix)
         if cheapest_pinned_effective_rate is not None and effective_rate >= cheapest_pinned_effective_rate:
             continue
@@ -742,7 +716,7 @@ def main(argv):
         else:
             args.append(arg)
 
-    result = {"stage": stage, "drift": [], "missing": [], "candidates": [],
+    result = {"stage": stage, "missing": [], "candidates": [],
               "unreliable_pinned": [], "notable": False}
     if stage not in STAGES:
         result["error"] = f"unknown stage {stage!r} (have: {', '.join(sorted(STAGES))})"
@@ -775,17 +749,12 @@ def main(argv):
         if live_entry is None:
             result["missing"].append(model["id"])
             continue
-        drifts = rate_drift(model, live_entry)
-        if drifts:
-            result["drift"].append({"id": model["id"], "fields": drifts})
         uptime = fetch_uptime(model["id"])
         if uptime is not None and uptime < MIN_UPTIME_PCT:
             result["unreliable_pinned"].append({"id": model["id"], "uptime_pct": uptime})
-        cost = model.get("cost", {})
-        rate = cost.get("input")
-        effective_rate = effective_rate_per_million(
-            {"input": rate, "cacheRead": cost.get("cacheRead"), "output": cost.get("output")}, token_mix
-        )
+        rates = live_rates(live_entry)
+        rate = rates["input"]
+        effective_rate = effective_rate_per_million(rates, token_mix)
         if effective_rate is not None and (
             cheapest_pinned_effective_rate is None or effective_rate < cheapest_pinned_effective_rate
         ):
@@ -813,7 +782,7 @@ def main(argv):
         catalog, pinned_ids, cheapest_pinned_effective_rate, token_mix,
         coding_score_index, min_pinned_coding_score)
     result["notable"] = bool(
-        result["drift"] or result["missing"] or result["candidates"] or result["unreliable_pinned"]
+        result["missing"] or result["candidates"] or result["unreliable_pinned"]
     )
 
     if result["notable"]:

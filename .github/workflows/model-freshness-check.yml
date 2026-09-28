@@ -1,9 +1,8 @@
 name: Weekly pi model freshness check
 
-# scripts/pi/models.json pins the OpenRouter list rates each review stage bills
-# against and reviews on. Prices move, uptime degrades, and better/cheaper models
-# ship on their own schedule, so this runs weekly and opens an issue when any of
-# that has drifted: a pinned rate no longer matches OpenRouter's live price, a
+# scripts/pi/models.json pins the OpenRouter models each review stage runs on.
+# Uptime degrades and better/cheaper models ship on their own schedule, so this runs
+# weekly against OpenRouter's live catalog and prices, and opens an issue when a
 # pinned model has dropped out of the catalog or its uptime has slipped below 95%,
 # or a cheaper reasoning-capable model with comparable context and healthy uptime
 # has shown up. It never edits models.json itself — swapping a review model is a
@@ -116,16 +115,6 @@ jobs:
               echo "| Model |"
               echo "| --- |"
               echo "$missing" | sed 's/^/| /; s/$/ |/'
-              echo
-            fi
-
-            drift_count=$(jq '.drift | length' freshness.json)
-            if [ "$drift_count" -gt 0 ]; then
-              echo "### Pinned rates that no longer match OpenRouter's list price"
-              echo
-              echo "| Model | Field | Pinned \$/1M | Live \$/1M |"
-              echo "| --- | --- | --- | --- |"
-              jq -r '.drift[] | .id as $id | .fields[] | "| \($id) | \(.field) | \(.pinned) | \(.live) |"' freshness.json
               echo
             fi
 

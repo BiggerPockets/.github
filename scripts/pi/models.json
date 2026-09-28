@@ -3,8 +3,7 @@
   "//": "",
   "//": "pi resolves models from the config dir pointed at by PI_CODING_AGENT_DIR. This file",
   "//": "declares the OpenRouter provider and every model either stage is allowed to run on,",
-  "//": "each with its OpenRouter list rates, so a FRESH CI runner (no cached models-store.json)",
-  "//": "resolves them deterministically. These models are absent from the catalog pi ships",
+  "//": "so a FRESH CI runner (no cached models-store.json) resolves them deterministically. These models are absent from the catalog pi ships",
   "//": "and the live catalog refresh is a background fetch, not a startup step we can rely",
   "//": "on.",
   "//": "",
@@ -24,11 +23,10 @@
   "//": "this file suggest. What a stage actually needs is charted weekly by",
   "//": "scripts/pi/check_model_freshness.py against real usage, not guessed from these specs.",
   "//": "",
-  "//": "Rates are $/1M tokens exactly as OpenRouter publishes them at the time of pinning.",
-  "//": "pi computes its own cost.total from these. Datadog does not: scripts/llm-usage.py",
-  "//": "reports what OpenRouter actually charged, and falls back to pi's figure only as an",
-  "//": "`estimated_cost`. Adding a model means adding its id AND its published rates",
-  "//": "together; rolling one means updating both.",
+  "//": "No model carries a `cost` block. Prices change on OpenRouter's schedule and nothing",
+  "//": "here keeps a copy current, so pi prices every call at zero and its cost.total is never",
+  "//": "read. What a pass cost is what OpenRouter charged for it, which scripts/llm-usage.py",
+  "//": "looks up by generation id.",
   "//": "",
   "//": "The apiKey interpolation reads OPENROUTER_API_KEY from the workflow environment",
   "//": "— no interactive login or OAuth is involved. api/api identify the OpenAI-compatible",
@@ -43,49 +41,25 @@
           "id": "openai/gpt-5.6-luna",
           "name": "GPT-5.6 Luna",
           "stages": ["stage1"],
-          "reasoning": true,
-          "cost": {
-            "input": 0.2,
-            "output": 1.2,
-            "cacheRead": 0.02,
-            "cacheWrite": 0.25
-          }
+          "reasoning": true
         },
         {
           "id": "openai/gpt-5.6-sol",
           "name": "GPT-5.6 Sol",
           "stages": ["stage1"],
-          "reasoning": true,
-          "cost": {
-            "input": 2.0,
-            "output": 10.0,
-            "cacheRead": 0.2,
-            "cacheWrite": 2.5
-          }
+          "reasoning": true
         },
         {
           "id": "deepseek/deepseek-v4.1-flash",
           "name": "DeepSeek V4.1 Flash",
           "stages": ["stage1", "stage2"],
-          "reasoning": true,
-          "cost": {
-            "input": 0.15,
-            "output": 0.6,
-            "cacheRead": 0.003,
-            "cacheWrite": 0
-          }
+          "reasoning": true
         },
         {
           "id": "anthropic/claude-haiku-4.5",
           "name": "Claude Haiku 4.5",
           "stages": ["stage2"],
-          "reasoning": true,
-          "cost": {
-            "input": 1.0,
-            "output": 5.0,
-            "cacheRead": 0.1,
-            "cacheWrite": 1.25
-          }
+          "reasoning": true
         }
       ]
     }

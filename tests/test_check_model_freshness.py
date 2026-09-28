@@ -20,7 +20,6 @@ PINNED = {
     "id": "z-ai/glm-5.3-flash",
     "name": "GLM 5.3 Flash",
     "reasoning": True,
-    "cost": {"input": 0.09, "output": 0.3, "cacheRead": 0.018, "cacheWrite": 0},
 }
 
 # Roughly what fetch_token_mix has actually observed for the pi pass: reviews
@@ -28,18 +27,17 @@ PINNED = {
 HEAVY_CACHE_MIX = {"fresh_input_share": 0.1, "cache_read_share": 0.85, "output_share": 0.05, "sample_count": 50}
 
 
-class RateDriftTest(unittest.TestCase):
-    def test_no_drift_within_threshold(self):
+class LiveRatesTest(unittest.TestCase):
+    def test_reads_per_million_rates_from_the_catalog_entry(self):
         live_entry = {"pricing": {"prompt": "0.00000009", "completion": "0.0000003",
-                                   "input_cache_read": "0.000000018", "input_cache_write": "0"}}
-        self.assertEqual(freshness.rate_drift(PINNED, live_entry), [])
+                                   "input_cache_read": "0.000000018"}}
+        rates = freshness.live_rates(live_entry)
+        self.assertAlmostEqual(rates["input"], 0.09)
+        self.assertAlmostEqual(rates["output"], 0.3)
+        self.assertAlmostEqual(rates["cacheRead"], 0.018)
 
-    def test_flags_a_rate_that_moved_past_threshold(self):
-        live_entry = {"pricing": {"prompt": "0.00000018", "completion": "0.0000003",
-                                   "input_cache_read": "0.000000018", "input_cache_write": "0"}}
-        drifts = freshness.rate_drift(PINNED, live_entry)
-        self.assertEqual(len(drifts), 1)
-        self.assertEqual(drifts[0]["field"], "input")
+    def test_a_missing_price_is_none(self):
+        self.assertIsNone(freshness.live_rates({"pricing": {}})["input"])
 
 
 class EffectiveRatePerMillionTest(unittest.TestCase):
@@ -762,8 +760,7 @@ class MainStageTest(unittest.TestCase):
         self.assertEqual(result["missing"], ["b/stage-two"])
 
     def test_each_stage_defaults_to_its_own_chart_path(self):
-        path = write_models([{"id": "a/one", "stages": ["stage1"],
-                              "cost": {"input": 0.1, "output": 0.4, "cacheRead": 0.01}}])
+        path = write_models([{"id": "a/one", "stages": ["stage1"]}])
         freshness.fetch_catalog = lambda: ({"a/one": {
             "pricing": {"prompt": "0.0000001"}, "supported_parameters": ["reasoning"],
             "context_length": 1_000_000}}, None)
@@ -820,7 +817,7 @@ class MainTest(unittest.TestCase):
         self.assertEqual(result["missing"], ["z-ai/glm-5.3-flash"])
         self.assertTrue(result["notable"])
 
-    def test_reports_not_notable_when_catalog_matches_pin_exactly(self):
+    def test_reports_not_notable_when_nothing_changed(self):
         models_path = write_models([PINNED])
         live_entry = {"pricing": {"prompt": "0.00000009", "completion": "0.0000003",
                                    "input_cache_read": "0.000000018", "input_cache_write": "0"},
@@ -897,6 +894,19 @@ class MainTest(unittest.TestCase):
         _, _ = self.run_main(models_path, chart_path)
 
         self.assertIn("price vs. coding score", Path(chart_path).read_text())
+
+    def test_prices_the_pinned_model_from_the_live_catalog(self):
+        models_path = write_models([PINNED])
+        reasoning = {"supported_parameters": ["reasoning"], "context_length": 1_000_000}
+        freshness.fetch_catalog = lambda: ({
+            "z-ai/glm-5.3-flash": {"pricing": {"prompt": "0.000001"}, **reasoning},
+            "x/cheaper": {"pricing": {"prompt": "0.0000005"}, "name": "Cheaper", **reasoning},
+            "x/pricier": {"pricing": {"prompt": "0.000002"}, "name": "Pricier", **reasoning},
+        }, None)
+
+        result, _ = self.run_main(models_path)
+
+        self.assertEqual([c["id"] for c in result["candidates"]], ["x/cheaper"])
 
     def test_does_not_write_a_chart_when_not_notable(self):
         models_path = write_models([PINNED])

@@ -145,11 +145,10 @@ stream. Every assistant message carries the token usage of its own request and, 
 OpenRouter, the request's generation id (`responseId`). `scripts/llm-usage.py` adds the
 tokens up over the pass and looks each generation up through OpenRouter's
 `GET /api/v1/generation`, which returns what OpenRouter charged for it. The sum is the
-span's `total_cost`. If any turn cannot be looked up, the span carries pi's own figure as
-`estimated_cost` instead, and no `total_cost`: pi prices tokens at the rates pinned in
-`scripts/pi/models.json`, which lag OpenRouter whenever its prices move, so Datadog's
-spend views count only amounts actually charged. Every model either stage may run on is
-pinned in that file (the catalog pi ships predates them, and the live catalog refresh is
+span's `total_cost`. If any turn cannot be looked up, the span carries no cost. Nothing in
+this repository stores a model's price or estimates a cost from one: prices change on
+OpenRouter's schedule and nothing here would keep a copy current. Every model either
+stage may run on is pinned, without prices, in `scripts/pi/models.json` (the catalog pi ships predates them, and the live catalog refresh is
 a background fetch, not a startup step — a committed pin is what makes a fresh runner
 deterministic); adding or rolling a model means changing that file in the same commit.
 Each stage reads its own event stream and hands the totals to the reporting job. Only
@@ -199,9 +198,7 @@ silently in both directions: set above the field it excludes nothing, and set be
 `max_price` is a hard filter, so the review has nowhere to run at all. Instead the
 ceiling is set at the cheapest point that still admits six endpoints. That is expressed
 as room to reroute because room is what a ceiling trades away — roughly, it is as tight
-as today's field allows while never leaving fallbacks stranded. On the current
-`deepseek-v4.1-flash` field it lands at $0.20/$0.60 per million tokens, excluding every
-endpoint in the expensive tail up to $0.375/$1.50 while keeping seven candidates.
+as today's field allows while never leaving fallbacks stranded.
 
 *Sorting on speed is only safe because of the ceiling.* An endpoint sets both its own
 price and its own serving rate, so "fastest" is a position it can simply buy. The two
@@ -225,8 +222,8 @@ generation time and billed cost. The review's Datadog span then carries:
 - **`openrouter.latency_ms_max` / `openrouter.generation_ms_total`** — per-call timings
   from inside the pass, next to the span duration, which is wall clock for the whole of
   it.
-- **`openrouter.billed_cost`** — what OpenRouter actually charged, which a cost computed
-  from list rates cannot see.
+- **`openrouter.billed_cost`** — what OpenRouter actually charged for the calls
+  attributed.
 
 Measuring this rather than asserting it up front is what lets routing keep its
 fallbacks, and it is why the report survives the timeout: every turn that finished wrote
@@ -268,12 +265,10 @@ Once installed, trigger a review either way:
 ### Weekly model freshness check
 
 `.github/workflows/model-freshness-check.yml` runs every Monday and checks the models
-pinned in `scripts/pi/models.json` against OpenRouter's live catalog. It never edits that
-file — choosing a review model is a judgment call on review quality that no API can make —
-it opens (or comments on) an issue when something is worth a look:
+pinned in `scripts/pi/models.json` against OpenRouter's live catalog and prices. It never
+edits that file — choosing a review model is a judgment call on review quality that no API
+can make — it opens (or comments on) an issue when something is worth a look:
 
-- a pinned rate no longer matches OpenRouter's list price, which means the cost we report
-  to Datadog is wrong until someone updates the pin;
 - a pinned model has dropped out of the catalog, or its uptime has slipped below 95%;
 - a cheaper reasoning-capable model with comparable context and healthy uptime has shipped,
   **and** reviews no worse than the weakest pinned model.

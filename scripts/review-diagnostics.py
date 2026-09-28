@@ -21,8 +21,10 @@ import os
 from pathlib import Path
 import sys
 
+# Claude Code's `total_cost_usd` is left out: it is priced at Anthropic's list rates,
+# not what anyone was charged.
 FIELDS = ('type', 'subtype', 'is_error', 'result', 'errors', 'duration_ms',
-          'num_turns', 'total_cost_usd', 'session_id')
+          'num_turns', 'session_id')
 
 # pi --mode json emits these event types on the wire.
 PI_EVENT_TYPES = {'session', 'agent_start', 'agent_end', 'turn_start', 'turn_end',
@@ -83,13 +85,9 @@ def pi_result(events):
         'model': message.get('model'),
         'provider': message.get('provider'),
     }
+    # pi's usage.cost is not what anyone was charged, so only token counts are kept.
     usage = message.get('usage')
     if isinstance(usage, dict):
-        cost = usage.get('cost')
-        if isinstance(cost, dict):
-            total = cost.get('total')
-            if isinstance(total, (int, float)) and not isinstance(total, bool):
-                result['total_cost'] = total
         result['usage'] = {key: usage[key] for key in
                            ('input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens')
                            if key in usage}

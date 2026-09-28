@@ -18,13 +18,12 @@ Where the numbers come from:
   catalog, so those counts are enough for Datadog to price it.
 - pi records a usage object on each assistant turn, covering that turn's request
   alone, so the pass's tokens are the sum over its turns. pi does not record what
-  OpenRouter charged: its `cost.total` is tokens times the rates pinned in
-  scripts/pi/models.json, which go stale whenever OpenRouter's prices move. What it
-  does record is each turn's `responseId`, which on OpenRouter is the generation id,
-  and GET /api/v1/generation returns the amount charged for it. The sum of those is
-  emitted as `total_cost` when every charged turn resolves (scripts/pi/openrouter.py,
-  `billed_cost`). When any does not, pi's own figure is emitted as `estimated_cost`
-  instead, a metric Datadog does not price from, and `total_cost` is left out.
+  OpenRouter charged; its `cost.total` would be tokens times a rate sheet, and
+  scripts/pi/models.json deliberately carries none, so it is zero and never read.
+  What pi does record is each turn's `responseId`, which on OpenRouter is the
+  generation id, and GET /api/v1/generation returns the amount charged for it. The
+  sum of those is emitted as `total_cost` when every charged turn resolves
+  (scripts/pi/openrouter.py, `billed_cost`). When any does not, no cost is emitted.
 - Claude Code's own `total_cost_usd` is deliberately ignored. It is computed against
   Anthropic's list prices, and these passes are billed by OpenRouter for a non-
   Anthropic model, so it describes a bill nobody was sent. (The Claude Code harness
@@ -86,8 +85,7 @@ CODEX_USAGE_FIELDS = {
 }
 
 # pi's normalized usage object, as written to its JSON event stream (--mode json),
-# mapped to Datadog's metric names. `cost.total` (pi's estimate from the pinned
-# rates) is handled separately below.
+# mapped to Datadog's metric names. pi's `cost.total` is not read.
 PI_USAGE_FIELDS = {
     "input": "input_tokens",
     "output": "output_tokens",
@@ -235,19 +233,6 @@ def codex_usage(directory):
     return (counts, openrouter_cost(totals))
 
 
-def pi_estimated_cost(messages):
-    """pi's own price for the pass: the sum of each turn's `usage.cost.total`, which
-    pi computes from the rates pinned in scripts/pi/models.json. None when no turn
-    carries a positive figure."""
-    total = 0.0
-    for message in messages:
-        cost = message["usage"].get("cost")
-        value = read_number(cost.get("total")) if isinstance(cost, dict) else None
-        if value is not None and value > 0:
-            total += value
-    return total or None
-
-
 def pi_charged(message):
     """Whether a turn used any tokens, and so could have been charged for."""
     return any((read_number(message["usage"].get(field)) or 0) > 0
@@ -300,45 +285,37 @@ def pi_assistant_messages(events):
 
 
 def pi_usage(path, api_key=None):
-    """pi's JSON event stream (--mode json) -> (token counts, costs).
+    """pi's JSON event stream (--mode json) -> (token counts, charged cost or None).
 
     Each assistant message carries the usage of its own request, so the pass's
     counts are the sum over its messages, failed retries included, since those were
     sent too. The number of messages is the turn count, reported alongside the
     tokens so a long cheap session is distinguishable from one enormous prompt.
 
-    Costs is a dict holding `total_cost`, the amount OpenRouter charged, when every
-    charged turn resolves, and otherwise `estimated_cost`, pi's figure from the
-    pinned rates. It is empty when neither is known."""
+    The cost is what OpenRouter charged for the pass, and None unless every charged
+    turn resolves."""
     messages = pi_assistant_messages(read_messages(path))
     if not messages:
-        return ({}, {})
+        return ({}, None)
     counts = {}
     for message in messages:
         for metric, value in collect(message["usage"], PI_USAGE_FIELDS).items():
             counts[metric] = counts.get(metric, 0) + value
     counts["turn_count"] = len(messages)
-    billed = pi_billed_cost(messages, api_key) if api_key else None
-    if billed is not None:
-        return (counts, {"total_cost": billed})
-    estimated = pi_estimated_cost(messages)
-    return (counts, {"estimated_cost": estimated} if estimated is not None else {})
+    return (counts, pi_billed_cost(messages, api_key) if api_key else None)
 
 
-def build_span_fields(slug, counts, cost, estimated_cost=None):
+def build_span_fields(slug, counts, cost):
     """Pure assembly of the span fields the workflow splices in: a catalog-matching
     model identity, whichever token counts are known, and a reported cost when there
     is one. `total_tokens` is Datadog's own metric name, so it is spelled out rather
-    than left for Datadog to infer. An estimate goes under `estimated_cost`, never
-    `total_cost`, so Datadog's spend views count only amounts actually charged."""
+    than left for Datadog to infer."""
     model_name, provider = split_model(slug)
     metrics = dict(counts)
     if "input_tokens" in metrics and "output_tokens" in metrics:
         metrics["total_tokens"] = metrics["input_tokens"] + metrics["output_tokens"]
     if cost is not None:
         metrics["total_cost"] = cost
-    elif estimated_cost is not None:
-        metrics["estimated_cost"] = estimated_cost
     return {
         "model_name": model_name,
         "model_provider": provider,
@@ -351,17 +328,15 @@ def main(argv):
     pass_name = argv[1] if len(argv) > 1 else ""
     slug = argv[2] if len(argv) > 2 else ""
     source = argv[3] if len(argv) > 3 else ""
-    estimated = None
     if pass_name == "codex":
         counts, cost = codex_usage(source or DEFAULT_ROLLOUT_DIR)
     elif pass_name == "claude":
         counts, cost = claude_usage(source)
     elif pass_name == "pi":
-        counts, costs = pi_usage(source, os.environ.get("OPENROUTER_API_KEY"))
-        cost, estimated = costs.get("total_cost"), costs.get("estimated_cost")
+        counts, cost = pi_usage(source, os.environ.get("OPENROUTER_API_KEY"))
     else:
         counts, cost = ({}, None)
-    print(json.dumps(build_span_fields(slug, counts, cost, estimated)))
+    print(json.dumps(build_span_fields(slug, counts, cost)))
     return 0
 
 
