@@ -640,14 +640,20 @@ the same time — a wide gym run can starve production PR reviews of credit, not
 not, writes one JSON file to `results/<dataset name>/<run id>-<attempt>-<model label>/<record id>.json`
 in the private dataset repo (`scripts/gym/gym_results.py`). The file holds the record's
 repository, pull request and commits; the size of the reviewed diff (files, added and deleted
-lines, counted from the `pr.diff` the model reviewed); the model and judge; the judge's scores
+lines, counted from the `pr.diff` the model reviewed); the model and judge; the prompt
+(`replay_prompt_version` and `registry_sha`, the commit of this repo the replay ran from, which
+recovers the exact prompt text, plus `recorded_prompt_version`, the version that produced the
+recorded findings); the judge's scores
 and per-finding verdict; the model's review; the recorded findings; the OpenRouter attribution;
 and, for a failed replay, why it failed. This is the durable per-record copy of every run, so a
 run can be analysed at any time, for example recall by diff size, without depending on how long
 any other system keeps it. A re-run of the workflow gets a new attempt number, so its files sit
 beside the first attempt's.
 
-**Results also go to Datadog.** Each run is one LLM Observability experiment, named
+**Results also go to Datadog, when it is reachable.** `pi-gym-data` is the primary copy, so
+Datadog is not required: if the keys are missing or rejected, or the experiment cannot be
+created, the Datadog steps log a warning and the run carries on without it. Each run is one
+LLM Observability experiment, named
 `first-pass-recall`, in the `biggiepockets-review-gym` project (the `datadog_project`
 input), against the dataset the dataset file names in its `dataset.name`. Each replayed
 record is one span in it: the model's review as output, the recorded findings as
@@ -661,8 +667,8 @@ so runs can be listed together over time.
 
 The replays read the dataset from `pi-gym-data`; the experiment points at the Datadog copy.
 Before any replay, the plan job checks that every planned record exists in the Datadog
-dataset and stops if one does not — re-upload with `upload_gym_dataset.py` after changing
-the file. The Datadog writes use this repository's `DD_API_KEY`/`DD_APP_KEY`.
+dataset, and records the run without Datadog if one does not — re-upload with
+`upload_gym_dataset.py` after changing the file. The Datadog writes use this repository's `DD_API_KEY`/`DD_APP_KEY`.
 
 GitHub keeps only counts: the run summary, the `gym-summary` artifact, and a per-replay
 artifact holding `score.json` (the judge's counts), `attribution.json` (the OpenRouter

@@ -3,8 +3,9 @@
 # BiggerPockets/pi-gym-data repo. See scripts/gym/gym_results.py.
 #
 # Env: GH_TOKEN (write access to Contents on pi-gym-data), DATASET_FILE, RECORD, MODEL,
-# JUDGE_MODEL, REPLAY_DIR, OUT_DIR, and the runner's GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT,
-# GITHUB_SERVER_URL and GITHUB_REPOSITORY.
+# JUDGE_MODEL, PROMPT_NAME, PROMPT_VERSION, REPLAY_DIR, OUT_DIR, and the runner's
+# GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GITHUB_SERVER_URL, GITHUB_REPOSITORY and GITHUB_SHA.
+# GITHUB_SHA is the commit of this repository the replay ran from.
 set -euo pipefail
 gym="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -17,4 +18,7 @@ python3 "$gym/gym_results.py" \
   --attribution "$OUT_DIR/attribution.json" \
   --run-id "$GITHUB_RUN_ID" \
   --run-attempt "$GITHUB_RUN_ATTEMPT" \
-  --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+  --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+  --prompt-name "${PROMPT_NAME:-}" \
+  --prompt-version "${PROMPT_VERSION:-}" \
+  --registry-sha "$GITHUB_SHA"

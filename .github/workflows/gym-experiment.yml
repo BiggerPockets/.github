@@ -15,10 +15,12 @@ name: Gym experiment (first-pass model recall)
 #
 # Each replay's result is saved as a JSON file in the private BiggerPockets/pi-gym-data
 # repo (see scripts/gym/gym_results.py), and the run is also recorded in Datadog LLM
-# Observability as one experiment (see scripts/gym/datadog_experiment.py). Both hold the
-# model's review, the recorded findings and the judge's scores. Those quote the private
-# code under review, and this repository is public, so none of it is printed to a log or
-# uploaded as an artifact here. GitHub keeps only the counts.
+# Observability as one experiment (see scripts/gym/datadog_experiment.py). pi-gym-data is
+# the primary copy: when Datadog is unreachable or rejects the keys, the Datadog steps warn
+# and the run carries on without it. Both hold the model's review, the recorded findings
+# and the judge's scores. Those quote the private code under review, and this repository
+# is public, so none of it is printed to a log or uploaded as an artifact here. GitHub
+# keeps only the counts.
 #
 # Each step's logic lives in scripts/gym/steps/, one script per step, taking its inputs
 # from the step's `env:`.
@@ -101,12 +103,9 @@ jobs:
           GYM_RESULTS_TOKEN: ${{ secrets.GYM_RESULTS_TOKEN }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-          DD_API_KEY: ${{ secrets.DD_API_KEY }}
-          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
         run: >-
           scripts/gym/steps/check-secrets.sh
           OPENROUTER_API_KEY GYM_REPO_TOKEN GYM_RESULTS_TOKEN JIRA_EMAIL JIRA_API_TOKEN
-          DD_API_KEY DD_APP_KEY
 
       - name: Resolve the current first-pass prompt version
         id: prompt
@@ -268,6 +267,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GYM_RESULTS_TOKEN }}
           JUDGE_MODEL: ${{ inputs.judge_model }}
+          PROMPT_NAME: ${{ steps.resolve.outputs.first_pass_prompt_name }}
+          PROMPT_VERSION: ${{ steps.resolve.outputs.first_pass_prompt_version }}
         run: registry/scripts/gym/steps/save-result.sh
 
       - name: Upload counts

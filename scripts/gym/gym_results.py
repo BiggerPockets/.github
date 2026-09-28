@@ -7,9 +7,9 @@ one file:
   results/<dataset name>/<run id>-<attempt>-<model label>/<record id>.json
 
 holding everything needed to analyse the run without re-running it: the record's pull
-request and commits, the size of the reviewed diff, the model, the judge's scores and
-verdict, the model's review, the recorded findings, and why the replay failed when it
-did. The review, the findings and the verdict quote the private code under review, which
+request and commits, the size of the reviewed diff, the model, the prompt, the judge's
+scores and verdict, the model's review, the recorded findings, and why the replay failed
+when it did. The review, the findings and the verdict quote the private code under review, which
 is why this goes to the private repo and never to this public repository's logs or
 artifacts.
 
@@ -21,11 +21,19 @@ attempt's rather than colliding with them.
 The diff size is counted from the `pr.diff` that `replay_context.py` built for the
 replay, which is the diff the model actually reviewed.
 
+The prompt is recorded as three values rather than as text. `replay_prompt_version` is
+the content-derived version `resolve-prompts.sh` gave the prompt the replay ran with, and
+`registry_sha` is the commit of BiggerPockets/.github it ran from, which recovers the exact
+text from git. `recorded_prompt_version` is the version that produced the recorded
+findings. Where the two versions differ, the replay measures the prompt change and the
+model together.
+
 Usage:
   gym_results.py --dataset gym-data/gym/x.yaml --record repo-pr1 --model openai/gpt-5.6-luna \\
       --judge-model anthropic/claude-haiku-4.5 --replay-dir replay --run-id 123 \\
-      --run-attempt 1 --run-url https://... [--attribution out/attribution.json] \\
-      [--repo BiggerPockets/pi-gym-data]
+      --run-attempt 1 --run-url https://... --prompt-name first-pass \\
+      --prompt-version 3f4a8e3d3003 --registry-sha <sha> \\
+      [--attribution out/attribution.json] [--repo BiggerPockets/pi-gym-data]
 Needs GH_TOKEN with write access to Contents on the results repository.
 """
 import argparse
@@ -78,9 +86,11 @@ def load_dataset(path):
     return name, {r.get("id"): r for r in document.get("records") or []}
 
 
-def result_row(dataset_name, record, model, judge_model, run, replay, diff):
-    """The saved result for one replay. `record` is the dataset record it replayed."""
+def result_row(dataset_name, record, model, judge_model, run, prompt, replay, diff):
+    """The saved result for one replay. `record` is the dataset record it replayed, and
+    `prompt` is {name, version, registry_sha} for the prompt the replay ran with."""
     source = record.get("input") or {}
+    metadata = record.get("metadata") or {}
     verdict = replay["verdict"]
     score = (verdict or {}).get("score") or {}
     pi_exit = replay["run"].get("pi_exit")
@@ -92,10 +102,14 @@ def result_row(dataset_name, record, model, judge_model, run, replay, diff):
         "pr": source.get("pr"),
         "head_sha": source.get("head_sha"),
         "base_sha": source.get("base_sha"),
-        "severity": (record.get("metadata") or {}).get("severity"),
+        "severity": metadata.get("severity"),
         "model": model,
         "judge_model": judge_model,
         "run": run,
+        "replay_prompt_name": prompt.get("name"),
+        "replay_prompt_version": prompt.get("version"),
+        "registry_sha": prompt.get("registry_sha"),
+        "recorded_prompt_version": metadata.get("codex_prompt_version"),
         "diff": diff,
         "status": "error" if failure_reason(replay) else "ok",
         "failure": failure_reason(replay),
@@ -150,6 +164,9 @@ def main(argv=None):
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--run-attempt", required=True)
     parser.add_argument("--run-url")
+    parser.add_argument("--prompt-name", help="the replay's resolved prompt name")
+    parser.add_argument("--prompt-version", help="the replay's resolved prompt version")
+    parser.add_argument("--registry-sha", help="the BiggerPockets/.github commit replayed from")
     parser.add_argument("--repo", default=RESULTS_REPO)
     args = parser.parse_args(argv)
 
@@ -162,10 +179,13 @@ def main(argv=None):
         if args.record not in records:
             raise ResultsError(f"record {args.record} not found in {args.dataset}")
         run = {"id": args.run_id, "attempt": args.run_attempt, "url": args.run_url}
+        # An unresolved prompt reaches here as an empty string; store it as unknown.
+        prompt = {"name": args.prompt_name or None, "version": args.prompt_version or None,
+                  "registry_sha": args.registry_sha or None}
         replay = load_replay(args.replay_dir, args.attribution)
         diff = diff_stats(os.path.join(args.replay_dir, "repo", "pr.diff"))
         row = result_row(dataset_name, records[args.record], args.model, args.judge_model,
-                         run, replay, diff)
+                         run, prompt, replay, diff)
         path = result_path(dataset_name, run, args.model, args.record)
         put_file(args.repo, path, json.dumps(row, indent=2) + "\n",
                  f"Gym result: {args.record} ({args.model}, run {args.run_id})", token)

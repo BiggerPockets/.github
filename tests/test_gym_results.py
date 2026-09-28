@@ -18,8 +18,9 @@ RECORD = {
     'id': 'repo-pr7',
     'input': {'repo': 'org/repo', 'pr': 7, 'head_sha': 'a' * 40, 'base_sha': 'b' * 40},
     'expected_output': {'findings': 'recorded\n'},
-    'metadata': {'severity': 'blocking'},
+    'metadata': {'severity': 'blocking', 'codex_prompt_version': '44f066e07f6b'},
 }
+PROMPT = {'name': 'first-pass', 'version': '3f4a8e3d3003', 'registry_sha': 'c' * 40}
 SCORE = {'recall': 0.5, 'weighted_recall': 0.25, 'matched_count': 1, 'missed_count': 1,
          'baseline_count': 2, 'extra_count': 0}
 VERDICT = {'judge_model': 'judge/x', 'verdict': {'baseline_findings': []}, 'score': SCORE}
@@ -48,7 +49,7 @@ def replay(**overrides):
 
 
 def row(**overrides):
-    return gr.result_row('sol-set', RECORD, 'openai/gpt-5.6-luna', 'judge/x', RUN,
+    return gr.result_row('sol-set', RECORD, 'openai/gpt-5.6-luna', 'judge/x', RUN, PROMPT,
                          replay(**overrides), {'files': 2, 'additions': 2, 'deletions': 2})
 
 
@@ -71,6 +72,12 @@ class ResultRow(unittest.TestCase):
                          ('org/repo', 7, 'a' * 40, 'b' * 40))
         self.assertEqual(result['diff']['additions'], 2)
         self.assertEqual(result['severity'], 'blocking')
+
+    def test_carries_the_replay_prompt_and_the_recorded_one(self):
+        result = row()
+        self.assertEqual((result['replay_prompt_name'], result['replay_prompt_version'],
+                          result['registry_sha'], result['recorded_prompt_version']),
+                         ('first-pass', '3f4a8e3d3003', 'c' * 40, '44f066e07f6b'))
 
     def test_carries_the_scores_verdict_and_both_reviews(self):
         result = row()
@@ -153,7 +160,8 @@ class Main(unittest.TestCase):
                 status = gr.main(['--dataset', dataset, '--record', 'repo-pr7',
                                   '--model', 'openai/gpt-5.6-luna', '--judge-model', 'j/x',
                                   '--replay-dir', replay_dir, '--run-id', '123',
-                                  '--run-attempt', '1'])
+                                  '--run-attempt', '1', '--prompt-version', '',
+                                  '--registry-sha', 'c' * 40])
 
         self.assertEqual(status, 0)
         repo, path, content = put.call_args.args[:3]
@@ -162,6 +170,8 @@ class Main(unittest.TestCase):
         saved = json.loads(content)
         self.assertEqual(saved['diff'], {'files': 2, 'additions': 2, 'deletions': 2})
         self.assertEqual(saved['score'], SCORE)
+        self.assertIsNone(saved['replay_prompt_version'])
+        self.assertEqual(saved['registry_sha'], 'c' * 40)
 
     def test_fails_without_a_token(self):
         with mock.patch.dict(os.environ, {}, clear=True):
