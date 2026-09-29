@@ -207,6 +207,10 @@ settings are sound together and neither is sound alone.
 *Fallbacks stay on.* A degrading endpoint is the common cause of a slow review, and
 moving off it mid-run is the entire point of ranking endpoints in the first place.
 
+*fp4 endpoints are never used.* Endpoints serving 4-bit floating-point weights are
+left out of the field before the ceiling is set, and the preference carries a
+`quantizations` allowlist without `fp4`, which OpenRouter enforces on fallbacks too.
+
 **After a pass exits**, the workflow reports which endpoints actually served it. pi
 records `responseId` on every completed assistant turn, and on OpenRouter that is the
 generation id, so the ids are already in `pi-output.jsonl` with no change to pi. Each

@@ -52,6 +52,13 @@ GENERATION_URL = "https://openrouter.ai/api/v1/generation"
 # is sound alone.
 SORT = "throughput"
 
+# Endpoints serving 4-bit floating-point (fp4) weights are never used. OpenRouter's
+# `quantizations` preference is an allowlist, so this lists every other value it
+# defines, `unknown` included for endpoints that do not publish theirs. The same set
+# filters the live field before the ceiling is taken, so an fp4 endpoint's low price
+# cannot pull the ceiling down either.
+QUANTIZATIONS = ("int4", "int8", "fp6", "fp8", "fp16", "bf16", "fp32", "unknown")
+
 # How many endpoints the ceiling must leave standing. This is the one number that
 # sets where the ceiling lands, and it is expressed as room to reroute rather than as
 # a price, because room is what the ceiling actually trades away. The ceiling is then
@@ -92,8 +99,9 @@ def eligible_endpoints(payload):
 
     A negative `status` is OpenRouter's own derank. Tool support is not optional
     here: pi is an agent and every turn carries tools, so an endpoint without them
-    is not a cheaper option, it is a broken one. Excluding both before taking the
-    median keeps the ceiling anchored to endpoints routing would really consider.
+    is not a cheaper option, it is a broken one. An endpoint outside QUANTIZATIONS
+    is one routing is told never to use. Excluding all three before taking the
+    ceiling keeps it anchored to endpoints routing would really consider.
     """
     endpoints = (payload.get("data") or {}).get("endpoints") or []
     return [
@@ -101,6 +109,7 @@ def eligible_endpoints(payload):
         for endpoint in endpoints
         if (endpoint.get("status") or 0) >= 0
         and "tools" in (endpoint.get("supported_parameters") or [])
+        and (endpoint.get("quantization") or "unknown") in QUANTIZATIONS
     ]
 
 
@@ -167,6 +176,8 @@ def routing_for(slug, timeout=30):
         # review, and rerouting off it is the whole point of ranking them; turning
         # this off would convert that reroute into a failed review.
         "allow_fallbacks": True,
+        # A hard filter, fallbacks included, unlike the sort.
+        "quantizations": list(QUANTIZATIONS),
     }
     ceiling = price_ceiling(endpoints)
     if ceiling:
