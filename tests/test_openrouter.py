@@ -50,3 +50,34 @@ class BilledCostTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def _endpoint(name, prompt, completion, quantization=None):
+    endpoint = {'provider_name': name, 'status': 0, 'supported_parameters': ['tools'],
+                'pricing': {'prompt': str(prompt / 1e6), 'completion': str(completion / 1e6)}}
+    if quantization:
+        endpoint['quantization'] = quantization
+    return endpoint
+
+
+class RoutingTest(unittest.TestCase):
+    def test_leaves_fp4_endpoints_out_of_the_field(self):
+        payload = {'data': {'endpoints': [_endpoint('a', 0.1, 0.4, 'fp8'),
+                                          _endpoint('b', 0.03, 0.5, 'fp4'),
+                                          _endpoint('c', 0.2, 0.6)]}}
+        names = [e['provider_name'] for e in openrouter.eligible_endpoints(payload)]
+        self.assertEqual(names, ['a', 'c'])
+
+    def test_an_fp4_endpoint_does_not_lower_the_ceiling(self):
+        field = [_endpoint(str(i), 0.1 + i / 100, 0.4, 'fp8') for i in range(7)]
+        field.append(_endpoint('cheap-fp4', 0.01, 0.1, 'fp4'))
+        with mock.patch.object(openrouter, '_get', return_value={'data': {'endpoints': field}}):
+            routing = openrouter.routing_for('some/model')
+        self.assertEqual(routing['max_price'], {'prompt': 0.15, 'completion': 0.4})
+
+    def test_tells_openrouter_never_to_route_to_fp4(self):
+        field = [_endpoint('a', 0.1, 0.4, 'fp8')]
+        with mock.patch.object(openrouter, '_get', return_value={'data': {'endpoints': field}}):
+            routing = openrouter.routing_for('some/model')
+        self.assertNotIn('fp4', routing['quantizations'])
+        self.assertIn('unknown', routing['quantizations'])
