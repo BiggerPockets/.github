@@ -460,6 +460,7 @@ cannot be committed by accident before it's pushed there.
 scripts/gym/export_sol_findings.py       # Datadog LLM Obs spans -> that YAML
 scripts/gym/download_dataset_records.py  # Datadog LLM Obs dataset -> that YAML, once spans have expired
 scripts/gym/confirm_findings.py          # marks the findings each PR's author went on to fix
+scripts/gym/rescore_results.py           # re-scores saved gym results against those, without re-running
 scripts/gym/upload_gym_dataset.py        # that YAML -> a Datadog LLM Obs experiments dataset (for scoring)
 ```
 
