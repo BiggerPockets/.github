@@ -1,14 +1,15 @@
 name: Gym experiment (first-pass model recall)
 
-# Replays recorded first-pass reviews against ONE model and reports how much of what the
-# recorded model found that model still finds.
+# Replays recorded first-pass reviews against ONE model and reports how many of the recorded
+# findings that the pull request's author went on to fix that model also finds.
 #
 # Why this exists: Stage 1's model is set by an organization variable (vars.FIRST_PASS_MODEL),
 # so changing it changes what reaches a human reviewer across every repo at once — and
 # nothing in a review notices a model that quietly stops reporting a class of defect. A
 # finding that is never written leaves no trace, the run still passes, and Stage 2 verifies
 # only what it was handed. The gym dataset holds what a previous model did report, pinned
-# to the commit it reviewed; this workflow re-asks those questions.
+# to the commit it reviewed, with the findings the author then fixed marked as confirmed
+# (scripts/gym/confirm_findings.py); this workflow re-asks those questions.
 #
 # ONE MODEL PER RUN. The `model` input takes a single OpenRouter slug and planning rejects
 # a list. Evaluating a different model is a separate dispatch of this workflow.
@@ -54,10 +55,6 @@ on:
         description: 'Model that scores the replays. Must not be the model under evaluation.'
         required: false
         default: 'anthropic/claude-haiku-4.5'
-      match_prompt_version:
-        description: 'Only replay records recorded under the current first-pass prompt.'
-        required: false
-        default: 'true'
       datadog_project:
         description: 'Datadog LLM Obs project the experiment is recorded in'
         required: false
@@ -134,7 +131,6 @@ jobs:
           LIMIT: ${{ inputs.limit }}
           SEVERITY: ${{ inputs.severity }}
           RECORD_IDS: ${{ inputs.record_ids }}
-          PROMPT_VERSION: ${{ inputs.match_prompt_version != 'false' && steps.prompt.outputs.first_pass_prompt_version || '' }}
         run: scripts/gym/steps/plan.sh
 
       - name: Create the Datadog experiment

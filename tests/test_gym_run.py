@@ -26,7 +26,8 @@ def record(rid='repo-pr1', pr=1, head='a' * 40, base='b' * 40, severity='blockin
         'id': rid,
         'input': {'repo': 'org/repo', 'pr': pr, 'head_sha': head, 'base_sha': base,
                   'instruction': f'Review pr:{pr} against ticket.json/pr.diff'},
-        'expected_output': {'findings': '- **Blocking** thing\n'},
+        'expected_output': {'findings': '- **Blocking** thing\n- **Blocking** other\n',
+                            'confirmed_findings': '- **Blocking** thing\n'},
         'metadata': {'severity': severity, 'reviewed_at': '2026-09-17T13:16:34+00:00',
                      'codex_prompt_version': prompt_version},
     }
@@ -72,29 +73,22 @@ class PlanMatrix(unittest.TestCase):
         include, _ = plan_matrix.plan(doc, 'a/one', severities={'blocker'})
         self.assertEqual([j['record'] for j in include], ['a'])
 
-    def test_prompt_version_filter_excludes_records_from_an_older_prompt(self):
-        # Replaying a record whose prompt has changed measures the prompt edit and the
-        # model swap together and reports the sum as a model difference.
-        doc = {'records': [record('current', prompt_version='44f066e07f6b'),
-                           record('stale', prompt_version='301569d42943')]}
-        include, skipped = plan_matrix.plan(doc, 'a/one',
-                                            prompt_version='44f066e07f6b')
-        self.assertEqual([j['record'] for j in include], ['current'])
-        self.assertIn('stale', skipped)
+    def test_skips_and_reports_records_with_no_confirmed_finding(self):
+        # The confirmed findings are what a replay is scored against; with none there is
+        # nothing to seek.
+        doc = self.doc(3)
+        doc['records'][0]['expected_output']['confirmed_findings'] = ''
+        del doc['records'][1]['expected_output']['confirmed_findings']
+        include, skipped = plan_matrix.plan(doc, 'a/one')
+        self.assertEqual([j['record'] for j in include], ['repo-pr3'])
+        self.assertEqual(skipped, ['repo-pr1', 'repo-pr2'])
 
-    def test_no_prompt_version_filter_keeps_every_record(self):
+    def test_keeps_records_whatever_prompt_version_produced_them(self):
         doc = {'records': [record('current', prompt_version='44f066e07f6b'),
-                           record('stale', prompt_version='301569d42943')]}
+                           record('older', prompt_version='301569d42943')]}
         include, skipped = plan_matrix.plan(doc, 'a/one')
         self.assertEqual(len(include), 2)
         self.assertEqual(skipped, [])
-
-    def test_a_record_with_no_recorded_prompt_version_is_excluded_when_filtering(self):
-        doc = {'records': [record('unknown', prompt_version=None)]}
-        include, skipped = plan_matrix.plan(doc, 'a/one',
-                                            prompt_version='44f066e07f6b')
-        self.assertEqual(include, [])
-        self.assertIn('unknown', skipped)
 
     def test_severity_rides_along_for_weighting(self):
         doc = {'records': [record('a', severity='blocker')]}
@@ -277,6 +271,24 @@ class LoadRecord(unittest.TestCase):
         path.write_text(yaml.safe_dump({'records': [record('other')]}))
         with self.assertRaises(SystemExit):
             replay.load_record(str(path), 'wanted')
+
+
+class ReplayExpected(unittest.TestCase):
+    def test_the_judge_is_handed_only_the_confirmed_findings(self):
+        from unittest import mock
+        import yaml
+        directory = Path(tempfile.mkdtemp())
+        dataset = directory / 'd.yaml'
+        dataset.write_text(yaml.safe_dump({'records': [record('wanted')]}))
+        with mock.patch.object(replay, 'fetch_repo'), \
+                mock.patch.object(replay, 'build_diff', return_value=0), \
+                mock.patch.object(replay, 'fetch_ticket', return_value=False), \
+                mock.patch.object(replay, 'build_conversations', return_value={}):
+            rc = replay.main(['--record', 'wanted', '--dataset', str(dataset),
+                              '--workdir', str(directory / 'work')])
+        self.assertEqual(rc, 0)
+        self.assertEqual((directory / 'work' / 'expected.md').read_text(),
+                         '- **Blocking** thing\n')
 
 
 class LoadResults(unittest.TestCase):

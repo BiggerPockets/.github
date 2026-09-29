@@ -4,7 +4,7 @@
 One gym run is one experiment: one model replayed against the Datadog copy of the gym
 dataset, which `upload_gym_dataset.py` keeps in sync with the YAML file. Each replayed
 record becomes one experiment span. The span carries the model's review as its output and
-the recorded findings as its expected output, with the judge's scores attached as
+the record's confirmed findings as its expected output, with the judge's scores attached as
 evaluation metrics. That is where per-record results live. They quote the private code
 under review, so they go to Datadog rather than to this public repository's artifacts or
 logs.
@@ -30,7 +30,7 @@ they have in the YAML, so a replay's record id is already its Datadog record id.
 
   run.json      {"started_ns", "ended_ns", "pi_exit"} from the replay step
   findings.md   the model's review
-  expected.md   the recorded findings for the record
+  expected.md   the record's confirmed findings
   verdict.json  the judge's verdict; absent when the replay or the judge failed
   failure.txt   why the replay failed; absent when it did not
 """
