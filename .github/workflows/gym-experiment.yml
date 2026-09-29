@@ -153,9 +153,9 @@ jobs:
       fail-fast: false
       # OpenRouter reserves credit against every in-flight request, so concurrency is
       # bounded by the account balance, not throughput: 8 large-context replays at once
-      # returned "402 Payment Required" on well over half the jobs, and a 402 loses the
-      # replay rather than queueing it. The key is shared organization-wide, so a wide run
-      # can also starve production reviews of credit.
+      # returned "402 Payment Required" on well over half the jobs. replay.sh retries a
+      # pass that ends on a 402, but only three passes in all. The key is shared
+      # organization-wide, so a wide run can also starve production reviews of credit.
       max-parallel: ${{ fromJSON(inputs.max_parallel || '3') }}
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     name: ${{ matrix.label }} · ${{ matrix.record }}
