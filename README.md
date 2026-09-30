@@ -674,6 +674,17 @@ them to the dataset as `expected_output.structured_findings` and to saved result
 `structured_findings`. `location_agreement.py` then reports, over every saved result, how often
 a match by location, and by location and a shared category, gives the judge's verdict.
 
+**Categories do not work as a match criterion.** Over the 271 confirmed findings with a saved
+judge verdict, requiring the two findings to share a category drops about a quarter of the
+location matches the judge agrees with (22 of 77 with one category per finding, 17 of 75 with up
+to two) while removing only about half of the 10 location matches the judge rejects, so agreement
+with the judge falls from 71–72% by location alone to 66–67%. The two sides are labelled
+separately and disagree mostly about the *first* category — `correctness` against `completeness`,
+`privacy` against `security` — so allowing a second one barely helps. A category is still a
+useful label on a recorded finding, for recall broken down by kind of defect, since that counts
+the recorded finding's label alone. Location is the machine match; the judge settles what it
+cannot.
+
 **Concurrency is bounded by credit, not throughput.** OpenRouter reserves credit against every
 in-flight request rather than charging only what a request finally costs, so running many
 large-context replays at once returns `402 Payment Required: This request would exceed your

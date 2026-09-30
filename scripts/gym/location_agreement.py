@@ -8,6 +8,11 @@ recorded findings' structured form comes from `structure_findings.py`; the revie
 from its findings block, or from `structure_findings.py` for a review written before the
 block existed.
 
+Requiring a shared category was measured and rejected: it drops real matches because the
+two sides' labels disagree, and location rarely matches wrongly to begin with. The README's
+gym section has the numbers. The rule stays here so a change to the categories can be
+measured the same way.
+
 Prints, per rule, how many findings the judge and the rule both call found, only one of
 them does, or neither does. Counts only: the findings quote private source.
 
