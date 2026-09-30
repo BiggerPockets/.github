@@ -3,7 +3,7 @@
 
 The first-pass prompt now ends every report with a fenced `findings` block (see
 `finding_locations.py`). The recorded findings in the gym dataset, and the reviews saved
-by earlier gym runs, are prose only. This asks a model, once per report, to restate each
+by earlier gym runs, are prose only. This asks a model, once per report (by default the gym judge), to restate each
 prose finding in the block's form: severity, category, locations, summary. It is
 extraction, not judgement: the model is told to take locations only from the finding's
 own text, and any location whose path the finding does not mention is dropped.
@@ -40,9 +40,11 @@ import yaml
 
 from confirm_findings import Block, citations, split_findings
 from finding_locations import CATEGORIES, structured
+from judge_findings import DEFAULT_JUDGE
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "openai/gpt-5.6-sol"
+# The gym judge: this is the same reading of review prose, and a cheap model does it.
+DEFAULT_MODEL = DEFAULT_JUDGE
 PROMPT = Path(__file__).resolve().parents[2] / "prompts/first-pass.md"
 SEVERITIES = {"blocker", "blocking", "non-blocking"}
 # Findings link into the runner's checkout; a restated path is repository-relative.
@@ -132,7 +134,18 @@ def restate(text, model, api_key):
     return parse(call_model(model, findings, api_key), findings)
 
 
+def save_dataset(path, document):
+    for record in document.get("records") or []:
+        for key in ("findings", "confirmed_findings"):
+            text = record["expected_output"].get(key)
+            if text:
+                record["expected_output"][key] = Block(text)
+    with open(path, "w") as stream:
+        yaml.dump(document, stream, sort_keys=False, allow_unicode=True, width=100)
+
+
 def structure_dataset(path, model, api_key, today):
+    """Restate each record, saving after every one so an interrupted run keeps its work."""
     with open(path) as stream:
         document = yaml.safe_load(stream)
     tally = {"restated": 0, "skipped": 0, "failed": 0, "findings": 0, "unlocated": 0}
@@ -150,17 +163,10 @@ def structure_dataset(path, model, api_key, today):
         expected["structured_findings"] = restated
         record.setdefault("metadata", {})["structuring"] = {
             "model": model, "labeled_on": today.isoformat()}
+        save_dataset(path, document)
         tally["restated"] += 1
         tally["findings"] += len(restated)
         tally["unlocated"] += sum(1 for f in restated if not f["locations"])
-
-    for record in document.get("records") or []:
-        for key in ("findings", "confirmed_findings"):
-            text = record["expected_output"].get(key)
-            if text:
-                record["expected_output"][key] = Block(text)
-    with open(path, "w") as stream:
-        yaml.dump(document, stream, sort_keys=False, allow_unicode=True, width=100)
     return tally
 
 
