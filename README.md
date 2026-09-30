@@ -470,6 +470,8 @@ scripts/gym/download_dataset_records.py  # Datadog LLM Obs dataset -> that YAML,
 scripts/gym/confirm_findings.py          # marks the findings each PR's author went on to fix
 scripts/gym/rescore_results.py           # re-scores saved gym results against those, without re-running
 scripts/gym/finding_locations.py         # matches a replay's findings block to those by file and line
+scripts/gym/structure_findings.py        # restates prose findings (dataset and saved reviews) as findings blocks
+scripts/gym/location_agreement.py        # how far matching by location, and by category, agrees with the judge
 scripts/gym/upload_gym_dataset.py        # that YAML -> a Datadog LLM Obs experiments dataset (for scoring)
 ```
 
@@ -666,7 +668,11 @@ result carries this as `location_score` beside the judge's `score`, with the num
 on which the two agree. The run summary reports both. Location is weaker evidence than the
 judge's reading: two defects can share a line, and one review can cite a defect at its caller
 while another cites its definition. The confirmed findings are prose, so their locations come
-from their `path:line` citations and they carry no category yet.
+from their `path:line` citations. `structure_findings.py` restates prose findings in the block's
+form once, with a model told to take locations only from each finding's own text, and writes
+them to the dataset as `expected_output.structured_findings` and to saved results as
+`structured_findings`. `location_agreement.py` then reports, over every saved result, how often
+a match by location, and by location and category, gives the judge's verdict.
 
 **Concurrency is bounded by credit, not throughput.** OpenRouter reserves credit against every
 in-flight request rather than charging only what a request finally costs, so running many

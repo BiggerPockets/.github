@@ -72,6 +72,15 @@ def overlaps(cited, pointed):
     return False
 
 
+def found(recorded, candidates, same_category=False):
+    """Whether any structured candidate finding points at the structured `recorded` one,
+    and, with `same_category`, gives it the same category."""
+    cited = locations(recorded)
+    return any(overlaps(cited, locations(c))
+               and (not same_category or c.get("category") == recorded.get("category"))
+               for c in candidates if isinstance(c, dict))
+
+
 def location_matches(expected, actual):
     """One bool per recorded finding in `expected`, in order: whether some candidate
     finding in `actual` points at it. None when `actual` has no findings block."""
