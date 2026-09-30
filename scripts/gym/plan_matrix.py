@@ -20,7 +20,9 @@ the full run.
 Records are emitted in dataset order and `--limit` takes the first N rather than a random
 sample, so two runs at the same limit are comparable. Unpinned records — no `head_sha` —
 are skipped with a warning: replaying one would review whatever the pull request looks like
-today, which is the failure the pinning exists to prevent.
+today, which is the failure the pinning exists to prevent. So are records with no confirmed
+finding (see `confirm_findings.py`): a replay is scored against the findings the author went
+on to fix, and a record with none has nothing to score.
 
 Usage:
   plan_matrix.py --model openai/gpt-5.6-luna --judge-model anthropic/claude-haiku-4.5 --limit 3
@@ -45,31 +47,24 @@ def model_label(model):
     return re.sub(r"[^a-z0-9]+", "-", tail.lower()).strip("-")
 
 
-def plan(document, model, limit=None, severities=None, prompt_version=None):
+def plan(document, model, limit=None, severities=None):
     """Jobs to run, plus the records deliberately left out.
 
-    `prompt_version` is the fidelity filter that matters most after the commit pin. The
-    findings in a record were produced by a specific first-pass prompt; replaying that
-    record under a different prompt measures the prompt change and the model change
-    together, and reports the sum as if it were the model. Passing the currently resolved
-    version keeps the comparison to records the current prompt actually produced."""
+    A record is replayed only when it is pinned to the reviewed commit and has at least
+    one confirmed finding. The confirmed findings are defects the author fixed after the
+    review, so they hold whichever first-pass prompt the replay runs under."""
     records = document.get("records") or []
     if severities:
         records = [r for r in records
                    if (r.get("metadata") or {}).get("severity") in severities]
-    mismatched = []
-    if prompt_version:
-        kept = []
-        for r in records:
-            recorded = (r.get("metadata") or {}).get("codex_prompt_version")
-            (kept if recorded == prompt_version else mismatched).append(r)
-        records = kept
     pinned, skipped = [], []
     for record in records:
-        if (record.get("input") or {}).get("head_sha"):
-            pinned.append(record)
-        else:
+        if not (record.get("input") or {}).get("head_sha"):
             skipped.append(record.get("id"))
+        elif not (record.get("expected_output") or {}).get("confirmed_findings"):
+            skipped.append(record.get("id"))
+        else:
+            pinned.append(record)
     if limit is not None:
         pinned = pinned[:limit]
 
@@ -86,7 +81,7 @@ def plan(document, model, limit=None, severities=None, prompt_version=None):
             "base_sha": source.get("base_sha"),
             "severity": (record.get("metadata") or {}).get("severity", "blocking"),
         })
-    return include, skipped + [r.get("id") for r in mismatched]
+    return include, skipped
 
 
 def main(argv=None):
@@ -103,9 +98,6 @@ def main(argv=None):
                              "dataset — for re-running specific records (e.g. ones that "
                              "failed or timed out last time) without paying for the rest")
     parser.add_argument("--severity", help="comma-separated severities to include")
-    parser.add_argument("--prompt-version",
-                        help="only replay records recorded under this first-pass prompt "
-                             "version; omit to replay every record regardless")
     parser.add_argument("--out", help="also write the matrix JSON here")
     args = parser.parse_args(argv)
 
@@ -131,10 +123,11 @@ def main(argv=None):
         return 1
     severities = ([s.strip() for s in args.severity.split(",")]
                   if args.severity else None)
-    include, skipped = plan(document, model, args.limit, severities, args.prompt_version)
+    include, skipped = plan(document, model, args.limit, severities)
 
     if not include:
-        print("matrix is empty — check --limit, --severity and the dataset",
+        print("matrix is empty — check --limit, --severity, and that the dataset has been "
+              "labeled by confirm_findings.py",
               file=sys.stderr)
         return 1
     if len(include) > MAX_MATRIX_JOBS:
@@ -142,8 +135,8 @@ def main(argv=None):
               f"use --limit or --record-ids", file=sys.stderr)
         return 1
     if skipped:
-        print(f"skipping {len(skipped)} record(s) (unpinned, or recorded under a "
-              f"different prompt version): "
+        print(f"skipping {len(skipped)} record(s) (unpinned, or with no confirmed "
+              f"finding): "
               f"{', '.join(skipped[:5])}{' …' if len(skipped) > 5 else ''}",
               file=sys.stderr)
 

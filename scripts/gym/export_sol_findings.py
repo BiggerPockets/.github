@@ -75,6 +75,8 @@ scrubbed again here so the committed file does not depend on that scanner's conf
 Usage:
   DD_API_KEY=... DD_APP_KEY=... scripts/gym/export_sol_findings.py \
       --model openai/gpt-5.6-sol --out gym/sol-first-pass-findings.yaml
+Then run `confirm_findings.py` over the file: a gym replay is scored against the findings
+it marks as fixed, and a record it has not labeled is not replayed.
 
 Exits non-zero when credentials are missing or Datadog cannot be reached, so a
 scheduled refresh fails loudly instead of committing a truncated dataset.

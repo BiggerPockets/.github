@@ -25,8 +25,8 @@ The prompt is recorded as three values rather than as text. `replay_prompt_versi
 the content-derived version `resolve-prompts.sh` gave the prompt the replay ran with, and
 `registry_sha` is the commit of BiggerPockets/.github it ran from, which recovers the exact
 text from git. `recorded_prompt_version` is the version that produced the recorded
-findings. Where the two versions differ, the replay measures the prompt change and the
-model together.
+findings. The replay is scored against the findings the author went on to fix, so a
+difference between the two versions does not change what is being sought.
 
 Usage:
   gym_results.py --dataset gym-data/gym/x.yaml --record repo-pr1 --model openai/gpt-5.6-luna \\

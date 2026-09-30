@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Score one replayed review against the findings the recorded model wrote for that PR.
+"""Score one replayed review against the recorded findings the PR's author went on to fix.
 
-The question is per-finding recall: of the defects the baseline reported on this pull
-request, which did the candidate also report? It is deliberately not "are these two reports
+The question is per-finding recall: of the confirmed defects the baseline reported on this
+pull request, which did the candidate also report? It is deliberately not "are these two reports
 similar". Two reviews can describe the same race condition in entirely different words, at
 different line numbers, under different headings, and that is a hit; two reviews can share
 most of their vocabulary while flagging unrelated things, and that is a miss. String

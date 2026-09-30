@@ -427,7 +427,25 @@ are the only surviving record of what was catchable on those diffs, so they beco
 regression set.
 
 `sol-first-pass-findings.yaml` is that set for `openai/gpt-5.6-sol`: one record per pull
-request, holding the PR to review and the findings Sol reported for it.
+request, holding the PR to review, the findings Sol reported for it, and which of those
+findings the author went on to fix.
+
+A replay is scored against the fixed findings only. Sol's findings as a whole are one
+model's view of the diff, shaped by its blind spots and by the prompt it ran under; the ones
+the author fixed are defects that turned out to be real, and they stay real whichever
+prompt or model is replayed. `scripts/gym/confirm_findings.py` marks them. For each finding
+it compares the lines the finding cites at the reviewed commit with the same file at the
+pull request's final head, and counts the finding as fixed when a later commit changed a
+cited line (within three lines) before the pull request merged. The fixed findings go to
+`expected_output.confirmed_findings`; each finding's status (`fixed`, `untouched`,
+`unknown`) and the counts go to `metadata.confirmation`. A pull request that is still open,
+or closed without merging, confirms nothing. A record with no confirmed finding is not
+replayed.
+
+The proxy errs in known directions. A cited line can change for an unrelated reason, which
+confirms a finding that was not real. A fix made in a different file, or a real defect the
+author chose not to fix, drops a real finding. The confirmed set is smaller than the truth,
+and what is in it is mostly right.
 
 **The dataset is not stored in this repository, and must not be.** This repository is
 public. The findings quote private source: roughly 226 distinct `file:line` anchors across
@@ -441,10 +459,13 @@ cannot be committed by accident before it's pushed there.
 ```
 scripts/gym/export_sol_findings.py       # Datadog LLM Obs spans -> that YAML
 scripts/gym/download_dataset_records.py  # Datadog LLM Obs dataset -> that YAML, once spans have expired
+scripts/gym/confirm_findings.py          # marks the findings each PR's author went on to fix
+scripts/gym/rescore_results.py           # re-scores saved gym results against those, without re-running
 scripts/gym/upload_gym_dataset.py        # that YAML -> a Datadog LLM Obs experiments dataset (for scoring)
 ```
 
-Refreshing or widening the set is: export, then push the file to `pi-gym-data` (`git add`,
+Refreshing or widening the set is: export, label it with `confirm_findings.py` (it needs an
+authenticated `gh` CLI that can read the reviewed repositories), then push the file to `pi-gym-data` (`git add`,
 commit, push — it's an ordinary private git repo) so the workflow's checkout picks it up, and
 separately upload it to Datadog so an experiment there stays in sync. The two destinations are
 independent: `pi-gym-data` is what this workflow reads, the Datadog dataset is a scoring/analysis
@@ -552,8 +573,8 @@ wrong. Keep new records structurally identical to their neighbours.
 #### Running a gym experiment
 
 `.github/workflows/gym-experiment.yml` (Actions → **Gym experiment** → Run workflow) replays
-the recorded reviews against **one** model and reports how much of what the recorded model
-found that model still finds.
+the recorded reviews against **one** model and reports how many of the confirmed findings
+that model also finds.
 
 **It needs its own secrets.** `biggiepockets-review.yml` is a `workflow_call` workflow, so the
 credentials it names resolve from the *calling* repo through `secrets: inherit` — they are not
@@ -614,20 +635,19 @@ Three things the harness controls for, each of which would otherwise quietly bia
 - **The conversation.** BiggiePockets posts its review back onto the pull request, so today's
   discussion usually contains the findings being tested for. Every comment is filtered to
   `created_at < reviewed_at`, so a candidate cannot read the answer off the page.
-- **The prompt version.** The findings in a record were produced by a specific first-pass
-  prompt. Of the 97 records, 73 were recorded under the prompt as it stands today and 24 under
-  earlier versions; replaying those 24 would measure the prompt edit and the model swap together
-  and report the sum as a model difference. The run is therefore scoped by default to records
-  the current prompt produced (`match_prompt_version`).
+- **What counts as a miss.** A replay is scored only against the findings the author fixed,
+  so a finding Sol made that was never acted on cannot count against the candidate. Because
+  those defects do not depend on the prompt that found them, every labeled record is replayed
+  under the current first-pass prompt, whichever version recorded it.
 
 Scoring is per-finding recall judged by a third model — the question is *did it report this
 defect*, not *did it phrase it the same way*, so string comparison is the wrong instrument.
 Severity weighting comes from the dataset, not the judge, so it cannot drift between runs.
-Findings the evaluated model reports that the recorded model missed are counted as `extra`
-and never penalised: the recorded findings are a previous model's output, not ground truth.
-Review output is also non-deterministic, so the recorded model would not reproduce its own
-findings at 100% either — read the recall as "how much of the recorded review this model
-recovers", not as a score out of a perfect 100.
+Findings the evaluated model reports beyond the confirmed ones are counted as `extra` and
+never penalised: the confirmed set holds only the defects Sol found, not every defect in the
+diff. Review output is also non-deterministic, so no model would recover every confirmed
+finding on every run — read the recall as "how many of the defects the authors fixed this
+model reports", not as a score out of a perfect 100.
 
 **Concurrency is bounded by credit, not throughput.** OpenRouter reserves credit against every
 in-flight request rather than charging only what a request finally costs, so running many

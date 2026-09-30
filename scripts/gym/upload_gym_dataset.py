@@ -21,10 +21,11 @@ Record shape is what an evaluator will destructure, so it is kept flat and ident
 across every row: `input` carries the repo/PR *and the commit* the candidate model must
 review — `head_sha` with its `base_ref`/`base_sha`, because the pull request itself has
 moved on since and replaying it by number would review the wrong code —
-`expected_output.findings` carries the prose the previous model wrote for that PR, and
+`expected_output.findings` carries the prose the previous model wrote for that PR,
+`expected_output.confirmed_findings` the part of it the author went on to fix, and
 `metadata` carries the severity and the Stage-2 verdict an evaluator can weight on. An
 experiment reads `input`, checks out `head_sha`, runs the candidate first pass, and
-scores its output against `expected_output.findings` — the question being asked is "did
+scores its output against `expected_output.confirmed_findings` — the question being asked is "did
 it report this defect", not "did it phrase it the same way", so the evaluator wants a
 judge, not string equality.
 
