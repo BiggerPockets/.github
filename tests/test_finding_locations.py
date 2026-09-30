@@ -37,7 +37,7 @@ class Structured(unittest.TestCase):
 
 class LocationMatches(unittest.TestCase):
     def matches(self, locations):
-        finding = {'category': 'correctness', 'locations': locations}
+        finding = {'categories': ['correctness'], 'locations': locations}
         return fl.location_matches(EXPECTED, report(json.dumps([finding])))
 
     def test_an_overlapping_range_in_the_same_file_matches(self):
@@ -83,8 +83,8 @@ class LocationScore(unittest.TestCase):
 class PromptCategories(unittest.TestCase):
     def test_the_prompt_offers_exactly_the_known_categories(self):
         prompt = (ROOT / 'prompts/first-pass.md').read_text()
-        section = prompt[prompt.index('`category`'):prompt.index('`locations`:')]
-        self.assertEqual(set(re.findall(r'`([a-z-]+)`', section)) - {'category'},
+        section = prompt[prompt.index('`categories`'):prompt.index('`locations`:')]
+        self.assertEqual(set(re.findall(r'`([a-z-]+)`', section)) - {'categories'},
                          fl.CATEGORIES)
 
 

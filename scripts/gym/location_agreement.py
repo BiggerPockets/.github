@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""How far matching findings by location, and by location and category, agrees with the judge.
+"""How far matching findings by location, and by location and a shared category, agrees with the judge.
 
 For every saved result the judge scored, and for every confirmed finding in its record,
 this compares the judge's verdict with two machine matches against the review's
-structured findings: same file at overlapping lines, and that plus the same category. The
+structured findings: same file at overlapping lines, and that plus at least one category in common. The
 recorded findings' structured form comes from `structure_findings.py`; the review's comes
 from its findings block, or from `structure_findings.py` for a review written before the
 block existed.

@@ -350,7 +350,7 @@ prompts/
   that rubric's output format is not, since Stage 1 owes Stage 2 a markdown report and
   leaves the verdict to it.
 - **Stage 1's findings block.** The Stage 1 report ends with a fenced `findings` block of
-  JSON listing each finding's severity, category and locations (file plus line range, every
+  JSON listing each finding's severity, one or two categories and locations (file plus line range, every
   place the defect lives). Stage 2 reads the report as prose; the block is there so a
   finding can be compared by machine, which is how the gym matches findings by location.
   The categories are the review's own: one per rule the prompt enforces (`completeness`,
@@ -661,7 +661,7 @@ finding on every run — read the recall as "how many of the defects the authors
 model reports", not as a score out of a perfect 100.
 
 **Each replay is also matched by location.** The first-pass prompt ends every report with a
-fenced `findings` block of JSON: each finding's severity, category and every file and line range
+fenced `findings` block of JSON: each finding's severity, one or two categories and every file and line range
 it lives at. `scripts/gym/finding_locations.py` counts a confirmed finding as found when a
 candidate finding names the same file at an overlapping line range (within 3 lines), and the
 result carries this as `location_score` beside the judge's `score`, with the number of findings
@@ -672,7 +672,7 @@ from their `path:line` citations. `structure_findings.py` restates prose finding
 form once, with a model told to take locations only from each finding's own text, and writes
 them to the dataset as `expected_output.structured_findings` and to saved results as
 `structured_findings`. `location_agreement.py` then reports, over every saved result, how often
-a match by location, and by location and category, gives the judge's verdict.
+a match by location, and by location and a shared category, gives the judge's verdict.
 
 **Concurrency is bounded by credit, not throughput.** OpenRouter reserves credit against every
 in-flight request rather than charging only what a request finally costs, so running many

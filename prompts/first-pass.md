@@ -60,14 +60,16 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
 
    ```findings
    [{"severity": "blocking",
-     "category": "correctness",
+     "categories": ["correctness"],
      "locations": [{"path": "app/models/user.rb", "start_line": 42, "end_line": 48}],
      "summary": "One sentence naming the defect."}]
    ```
 
    - `severity`: `blocker`, `blocking` or `non-blocking`.
-   - `category`: the one that names the defect. When a numbered step above is the reason
-     for the finding, use that step's category:
+   - `categories`: one or two. The first names the defect; add a second only when the
+     finding is just as much the other kind, such as a member-data leak that is both
+     `privacy` and `security`. When a numbered step above is the reason for the finding,
+     its category comes first:
      - `completeness` (step 3), `privacy` (4), `email` (5), `data` (6), `performance`
        (7 and 8), `parsing` (9), `navigation` (10), `compatibility` (11), `configuration`
        (12), `routing` (13), `tests` (14).

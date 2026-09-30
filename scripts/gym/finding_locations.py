@@ -2,7 +2,7 @@
 """Match a replayed review's findings to the recorded ones by where they point.
 
 The first-pass prompt ends every report with a fenced `findings` block of JSON: one entry
-per finding, with its severity, category and every file and line range it lives at. That
+per finding, with its severity, one or two categories and every file and line range it lives at. That
 makes a candidate's findings machine-comparable. A recorded finding counts as found by
 location when some candidate finding names the same file at a line range that overlaps
 one it cites, allowing `SLOP` lines either way. A citation or location with no line
@@ -72,12 +72,18 @@ def overlaps(cited, pointed):
     return False
 
 
+def categories(finding):
+    """The finding's categories, as a set of known ones."""
+    listed = finding.get("categories") if isinstance(finding, dict) else None
+    return {c for c in listed if c in CATEGORIES} if isinstance(listed, list) else set()
+
+
 def found(recorded, candidates, same_category=False):
     """Whether any structured candidate finding points at the structured `recorded` one,
-    and, with `same_category`, gives it the same category."""
+    and, with `same_category`, shares a category with it."""
     cited = locations(recorded)
     return any(overlaps(cited, locations(c))
-               and (not same_category or c.get("category") == recorded.get("category"))
+               and (not same_category or categories(c) & categories(recorded))
                for c in candidates if isinstance(c, dict))
 
 

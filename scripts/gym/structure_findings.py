@@ -4,7 +4,7 @@
 The first-pass prompt now ends every report with a fenced `findings` block (see
 `finding_locations.py`). The recorded findings in the gym dataset, and the reviews saved
 by earlier gym runs, are prose only. This asks a model, once per report (by default the gym judge), to restate each
-prose finding in the block's form: severity, category, locations, summary. It is
+prose finding in the block's form: severity, categories, locations, summary. It is
 extraction, not judgement: the model is told to take locations only from the finding's
 own text, and any location whose path the finding does not mention is dropped.
 
@@ -18,7 +18,7 @@ use exactly the categories a live first pass is given.
   `structured_findings`, one entry per top-level finding in the review.
 
 A report is skipped when it already has its structured form, so an interrupted run can
-be restarted. Needs OPENROUTER_API_KEY. Prints counts only: the findings quote private
+be restarted. `--redo` restates those too, for when the block's fields change. Needs OPENROUTER_API_KEY. Prints counts only: the findings quote private
 source.
 
 Usage:
@@ -104,6 +104,15 @@ def parse(text, findings):
     return [clean(entry, prose) for entry, prose in zip(restated, findings)]
 
 
+def known_categories(listed):
+    """Up to two known categories, in order, without repeats."""
+    kept = []
+    for category in listed if isinstance(listed, list) else []:
+        if category in CATEGORIES and category not in kept:
+            kept.append(category)
+    return kept[:2]
+
+
 def clean(entry, prose):
     """One restated finding with its fields normalised, and every location whose path the
     prose does not mention dropped."""
@@ -120,7 +129,7 @@ def clean(entry, prose):
                          if isinstance(location.get(k), int)} | {"path": path})
     return {
         "severity": entry.get("severity") if entry.get("severity") in SEVERITIES else None,
-        "category": entry.get("category") if entry.get("category") in CATEGORIES else None,
+        "categories": known_categories(entry.get("categories")),
         "locations": kept,
         "summary": entry.get("summary") if isinstance(entry.get("summary"), str) else "",
     }
@@ -144,14 +153,14 @@ def save_dataset(path, document):
         yaml.dump(document, stream, sort_keys=False, allow_unicode=True, width=100)
 
 
-def structure_dataset(path, model, api_key, today):
+def structure_dataset(path, model, api_key, today, redo=False):
     """Restate each record, saving after every one so an interrupted run keeps its work."""
     with open(path) as stream:
         document = yaml.safe_load(stream)
     tally = {"restated": 0, "skipped": 0, "failed": 0, "findings": 0, "unlocated": 0}
     for record in document.get("records") or []:
         expected = record["expected_output"]
-        if "structured_findings" in expected:
+        if "structured_findings" in expected and not redo:
             tally["skipped"] += 1
             continue
         try:
@@ -170,13 +179,14 @@ def structure_dataset(path, model, api_key, today):
     return tally
 
 
-def structure_results(directory, model, api_key):
+def structure_results(directory, model, api_key, redo=False):
     tally = {"restated": 0, "skipped": 0, "failed": 0, "findings": 0, "unlocated": 0}
     for path in sorted(glob.glob(os.path.join(directory, "*", "*.json"))):
         with open(path) as stream:
             result = json.load(stream)
         review = result.get("findings")
-        if not review or "structured_findings" in result or structured(review) is not None:
+        if (not review or structured(review) is not None
+                or ("structured_findings" in result and not redo)):
             tally["skipped"] += 1
             continue
         try:
@@ -200,6 +210,8 @@ def main(argv=None):
     parser.add_argument("--dataset", help="the gym dataset YAML, restated in place")
     parser.add_argument("--results", help="a results directory, one subdirectory per run")
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--redo", action="store_true",
+                        help="restate reports that already have a structured form")
     args = parser.parse_args(argv)
     if not (args.dataset or args.results):
         parser.error("give --dataset, --results or both")
@@ -212,9 +224,10 @@ def main(argv=None):
     tallies = []
     if args.dataset:
         tallies.append(("dataset", structure_dataset(args.dataset, args.model, api_key,
-                                                      datetime.date.today())))
+                                                      datetime.date.today(), args.redo)))
     if args.results:
-        tallies.append(("results", structure_results(args.results, args.model, api_key)))
+        tallies.append(("results", structure_results(args.results, args.model, api_key,
+                                                          args.redo)))
     for name, t in tallies:
         print(f"{name}: restated {t['restated']} reports ({t['findings']} findings, "
               f"{t['unlocated']} with no location), skipped {t['skipped']}, "

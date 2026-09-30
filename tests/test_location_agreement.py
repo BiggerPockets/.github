@@ -6,8 +6,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts/gym'))
 import location_agreement as la  # noqa: E402
 
 
-def finding(path, category='correctness'):
-    return {'category': category, 'locations': [{'path': path, 'start_line': 10}]}
+def finding(path, *categories):
+    return {'categories': list(categories or ['correctness']), 'locations': [{'path': path, 'start_line': 10}]}
 
 
 RECORD = {'id': 'r1',
@@ -29,6 +29,11 @@ class Tally(unittest.TestCase):
         self.assertEqual(counts['location'], {(True, True): 1, (False, False): 1})
         self.assertEqual(counts['location and category'],
                          {(True, False): 1, (False, False): 1})
+
+    def test_a_second_category_in_common_counts(self):
+        counts = la.tally({'r1': RECORD}, [result([True, False, False],
+                                                  [finding('a.rb', 'data', 'correctness')])])
+        self.assertEqual(counts['location and category'][(True, True)], 1)
 
     def test_pairs_verdicts_given_for_the_confirmed_findings_only(self):
         counts = la.tally({'r1': RECORD}, [result([False, True], [finding('c.rb')])])
