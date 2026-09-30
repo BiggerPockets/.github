@@ -75,6 +75,18 @@ class RoutingTest(unittest.TestCase):
             routing = openrouter.routing_for('some/model')
         self.assertEqual(routing['max_price'], {'prompt': 0.15, 'completion': 0.4})
 
+    def test_denies_data_collection(self):
+        field = [_endpoint('a', 0.1, 0.4, 'fp8')]
+        with mock.patch.object(openrouter, '_get', return_value={'data': {'endpoints': field}}):
+            routing = openrouter.routing_for('some/model')
+        self.assertEqual(routing['data_collection'], 'deny')
+
+    def test_denies_data_collection_when_the_rest_of_the_routing_fails(self):
+        with mock.patch.object(openrouter, '_get', side_effect=OSError):
+            self.assertEqual(openrouter.routing_for('some/model'), {'data_collection': 'deny'})
+        with mock.patch.object(openrouter, '_get', return_value={'data': {'endpoints': []}}):
+            self.assertEqual(openrouter.routing_for('some/model'), {'data_collection': 'deny'})
+
     def test_tells_openrouter_never_to_route_to_fp4(self):
         field = [_endpoint('a', 0.1, 0.4, 'fp8')]
         with mock.patch.object(openrouter, '_get', return_value={'data': {'endpoints': field}}):

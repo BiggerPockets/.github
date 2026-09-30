@@ -211,6 +211,13 @@ moving off it mid-run is the entire point of ranking endpoints in the first plac
 left out of the field before the ceiling is set, and the preference carries a
 `quantizations` allowlist without `fp4`, which OpenRouter enforces on fallbacks too.
 
+*No provider may store or train on a request.* Every request carries private source, so every
+OpenRouter call sends `data_collection: "deny"`, and OpenRouter routes only to providers that
+neither store nor train on prompts. It is not a preference: pi's config adds it to every model
+whether or not the rest of the routing could be built, and the gym's judge and
+`structure_findings.py` send it on their own calls. It holds whatever the OpenRouter account's
+own privacy setting is.
+
 **After a pass exits**, the workflow reports which endpoints actually served it. pi
 records `responseId` on every completed assistant turn, and on OpenRouter that is the
 generation id, so the ids are already in `pi-output.jsonl` with no change to pi. Each

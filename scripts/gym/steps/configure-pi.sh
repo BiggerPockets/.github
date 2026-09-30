@@ -17,7 +17,8 @@ if ! grep -qxF "$MODEL" <<<"$pinned"; then
 fi
 
 # Routing is a preference, not a requirement: without it pi still runs, on whichever
-# endpoint OpenRouter picks.
+# endpoint OpenRouter picks. data_collection deny is a requirement and is added to
+# every model below either way: replays carry private source.
 routing=$(python3 "$root/scripts/pi/openrouter.py" routing "$MODEL") || routing=""
 if ! jq -e 'type == "object"' <<<"$routing" > /dev/null 2>&1; then
   echo "::warning::no OpenRouter routing for $MODEL; OpenRouter will choose the endpoint"
@@ -31,8 +32,8 @@ jq --argjson routing "$routing" --arg model "$MODEL" \
       | {baseUrl, apiKey, api,
          models: [.models[]
            | del(.stages)
-           | if .id == $model and ($routing | length) > 0
-             then .compat = ((.compat // {}) + {openRouterRouting: $routing})
-             else . end]})}}' \
+           | .compat = ((.compat // {}) + {openRouterRouting:
+               ((if .id == $model then $routing else {} end)
+                + {data_collection: "deny"})})]})}}' \
   "$models" > "$config/models.json"
 echo "PI_CODING_AGENT_DIR=$config" >> "$GITHUB_ENV"

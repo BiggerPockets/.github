@@ -80,6 +80,9 @@ def call_judge(model, expected, actual, api_key, timeout=180):
     body = json.dumps({
         "model": model,
         "temperature": 0,
+        # The reports quote private source: route only to providers that neither store
+        # nor train on prompts.
+        "provider": {"data_collection": "deny"},
         "messages": [
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content":

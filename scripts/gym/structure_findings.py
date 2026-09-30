@@ -78,6 +78,9 @@ def call_model(model, findings, api_key, timeout=180):
     body = json.dumps({
         "model": model,
         "temperature": 0,
+        # The reports quote private source: route only to providers that neither store
+        # nor train on prompts.
+        "provider": {"data_collection": "deny"},
         "messages": [
             {"role": "system", "content": SYSTEM.format(fields=block_instructions())},
             {"role": "user", "content": numbered},
