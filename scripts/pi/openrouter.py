@@ -150,24 +150,33 @@ def price_ceiling(endpoints):
     }
 
 
-def routing_for(slug, timeout=30):
-    """The `provider` object to send for this model, or {} if it can't be built.
+# Private source is in every request. OpenRouter routes only to providers that neither
+# store nor train on prompts when a request says so; this is sent on every request pi
+# makes, whether or not the rest of the routing could be built.
+DATA_POLICY = {"data_collection": "deny"}
 
-    An empty result is a working review under OpenRouter's default routing, which is
-    the behaviour this replaces. Routing preferences are an improvement on the
-    default, not a precondition for running, so nothing here is worth failing over.
+
+def routing_for(slug, timeout=30):
+    """The `provider` object to send for this model, or DATA_POLICY alone if the rest of
+    it can't be built.
+
+    DATA_POLICY alone is a working review under OpenRouter's default endpoint choice.
+    Routing preferences are an improvement on the default, not a precondition for
+    running, so nothing here is worth failing over. The data policy is not a
+    preference, so it is in every result.
     """
     url = ENDPOINTS_URL.format(slug=urllib.parse.quote(slug, safe="/"))
     try:
         payload = _get(url, timeout=timeout)
     except (urllib.error.URLError, ValueError, TimeoutError, OSError):
-        return {}
+        return dict(DATA_POLICY)
 
     endpoints = eligible_endpoints(payload)
     if not endpoints:
-        return {}
+        return dict(DATA_POLICY)
 
     routing = {
+        **DATA_POLICY,
         "sort": SORT,
         # Drop endpoints that do not accept what pi sends, rather than discovering
         # mid-review that one of them silently ignored the tool definitions.

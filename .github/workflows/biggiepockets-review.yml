@@ -282,17 +282,19 @@ jobs:
           [ -n "$routing" ] || routing='{}'
           # compat.openRouterRouting is pi's OpenRouter provider-selection field; pi
           # sends it as the request's `provider` object. It is applied to the copy pi
-          # reads, for this run only -- scripts/pi/models.json is unchanged -- and only
-          # to the model this pass runs, since the ceiling was derived from that model's
-          # own field and would strand a differently-priced one.
+          # reads, for this run only -- scripts/pi/models.json is unchanged. The routing
+          # goes only to the model this pass runs, since the ceiling was derived from that
+          # model's own field and would strand a differently-priced one. Every model gets
+          # data_collection deny, routing or not: requests carry private source, and it
+          # keeps them off providers that store or train on prompts.
           jq --argjson routing "$routing" --arg model "$FIRST_PASS_MODEL" \
             '{providers: {openrouter: (.providers.openrouter
                 | {baseUrl, apiKey, api,
                    models: [.models[]
                      | del(.stages)
-                     | if .id == $model and ($routing | length) > 0
-                       then .compat = ((.compat // {}) + {openRouterRouting: $routing})
-                       else . end]})}}' \
+                     | .compat = ((.compat // {}) + {openRouterRouting:
+                         ((if .id == $model then $routing else {} end)
+                          + {data_collection: "deny"})})]})}}' \
             registry/scripts/pi/models.json > "$RUNNER_TEMP/pi-config/models.json"
           echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-config" >> "$GITHUB_ENV"
 
@@ -511,17 +513,19 @@ jobs:
           [ -n "$routing" ] || routing='{}'
           # compat.openRouterRouting is pi's OpenRouter provider-selection field; pi
           # sends it as the request's `provider` object. It is applied to the copy pi
-          # reads, for this run only -- scripts/pi/models.json is unchanged -- and only
-          # to the model this pass runs, since the ceiling was derived from that model's
-          # own field and would strand a differently-priced one.
+          # reads, for this run only -- scripts/pi/models.json is unchanged. The routing
+          # goes only to the model this pass runs, since the ceiling was derived from that
+          # model's own field and would strand a differently-priced one. Every model gets
+          # data_collection deny, routing or not: requests carry private source, and it
+          # keeps them off providers that store or train on prompts.
           jq --argjson routing "$routing" --arg model "$SYNTHESIS_MODEL" \
             '{providers: {openrouter: (.providers.openrouter
                 | {baseUrl, apiKey, api,
                    models: [.models[]
                      | del(.stages)
-                     | if .id == $model and ($routing | length) > 0
-                       then .compat = ((.compat // {}) + {openRouterRouting: $routing})
-                       else . end]})}}' \
+                     | .compat = ((.compat // {}) + {openRouterRouting:
+                         ((if .id == $model then $routing else {} end)
+                          + {data_collection: "deny"})})]})}}' \
             registry/scripts/pi/models.json > "$RUNNER_TEMP/pi-config/models.json"
           echo "PI_CODING_AGENT_DIR=$RUNNER_TEMP/pi-config" >> "$GITHUB_ENV"
 
