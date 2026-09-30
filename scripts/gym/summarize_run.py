@@ -19,8 +19,12 @@ Records where the replay failed are reported separately and excluded from recall
 an infrastructure failure into a model's score would make a flaky checkout look like a
 worse reviewer.
 
-Each replay's artifact holds a `score.json` (the judge's counts, when the replay was
-scored) and a `FAILED` marker holding the record id (when it was not). Those are the only
+A replay whose review ends with a findings block is also matched by location (see
+`finding_locations.py`), and the report shows that recall and how often it agrees with the
+judge, finding by finding.
+
+Each replay's artifact holds a `score.json` (the judge's counts and the location match,
+when the replay was scored) and a `FAILED` marker holding the record id (when it was not). Those are the only
 files read.
 
 Usage:
@@ -73,6 +77,8 @@ def aggregate(results):
         "label": labels[0],
         "records": 0, "sought": 0, "matched": 0, "missed": 0, "extra": 0,
         "weighted_total": 0.0, "weighted_matched": 0.0, "empty_candidates": 0,
+        "unstructured": 0, "location_sought": 0, "location_matched": 0,
+        "paired": 0, "agreed": 0,
     }
     by_severity = collections.defaultdict(lambda: {"sought": 0, "matched": 0})
     for payload in results.values():
@@ -85,6 +91,15 @@ def aggregate(results):
         totals["weighted_total"] += score.get("weighted_total", 0.0)
         totals["weighted_matched"] += score.get("weighted_matched", 0.0)
         totals["empty_candidates"] += 1 if score.get("empty_candidate") else 0
+        location = payload.get("location_score") or {}
+        if location.get("structured"):
+            totals["location_sought"] += location.get("baseline_count", 0)
+            totals["location_matched"] += location.get("matched_count", 0)
+            if location.get("agrees_with_judge") is not None:
+                totals["paired"] += location.get("baseline_count", 0)
+                totals["agreed"] += location["agrees_with_judge"]
+        elif location:
+            totals["unstructured"] += 1
         severity = payload.get("severity", "blocking")
         by_severity[severity]["sought"] += score.get("baseline_count", 0)
         by_severity[severity]["matched"] += score.get("matched_count", 0)
@@ -118,6 +133,14 @@ def render(summary, failures=None):
                      else f"{stats['matched']}/{stats['sought']}")
     lines += ["| " + " | ".join(cells) + " |", ""]
 
+    if s["location_sought"]:
+        lines += ["## Matched by location", "",
+                  f"Recall by location: {s['location_matched']}/{s['location_sought']} "
+                  f"({pct(s['location_matched'] / s['location_sought'])}). "
+                  + (f"Agrees with the judge on {s['agreed']}/{s['paired']} findings "
+                     f"({pct(s['agreed'] / s['paired'])})." if s["paired"] else ""), ""]
+    if s["unstructured"]:
+        lines += [f"Replays whose review had no findings block: {s['unstructured']}", ""]
     if s["empty_candidates"]:
         lines += [f"Replays that produced no findings at all: {s['empty_candidates']}", ""]
     if failures:

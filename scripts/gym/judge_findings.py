@@ -47,6 +47,8 @@ import sys
 import urllib.error
 import urllib.request
 
+from finding_locations import location_score
+
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_JUDGE = "anthropic/claude-haiku-4.5"
 # Severity weights for the headline number. A missed blocker is the failure this whole
@@ -180,6 +182,10 @@ def main(argv=None):
         result = {"record": args.record, "label": args.label, "severity": args.severity,
                   "judge_model": args.model, "verdict": verdict,
                   "score": score(verdict, args.severity)}
+
+    # Recorded beside the judge's score, not in place of it, so each run shows how far a
+    # match by location agrees with the judge's reading.
+    result["location_score"] = location_score(expected, actual, result["verdict"])
 
     with open(args.out, "w") as stream:
         stream.write(json.dumps(result, indent=2) + "\n")

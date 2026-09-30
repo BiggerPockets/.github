@@ -1,10 +1,13 @@
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+# judge_findings imports its sibling modules, as it does when run as a script.
+sys.path.insert(0, str(ROOT / 'scripts/gym'))
 
 
 def load(name, relative):
@@ -212,6 +215,22 @@ class Aggregate(unittest.TestCase):
                                                              (2, 2, 'non-blocking')]))
         self.assertAlmostEqual(summary['recall'], 0.5)
         self.assertLess(summary['weighted_recall'], summary['recall'])
+
+    def test_totals_the_location_match_and_its_agreement_with_the_judge(self):
+        results = self.verdicts('luna', [(2, 1, 'blocking'), (3, 3, 'blocking'),
+                                         (1, 0, 'blocking')])
+        results[('luna', 'r0')]['location_score'] = {
+            'structured': True, 'baseline_count': 2, 'matched_count': 1,
+            'agrees_with_judge': 2}
+        results[('luna', 'r1')]['location_score'] = {
+            'structured': True, 'baseline_count': 3, 'matched_count': 1,
+            'agrees_with_judge': None}
+        results[('luna', 'r2')]['location_score'] = {'structured': False}
+        summary = summarize.aggregate(results)
+        self.assertEqual((summary['location_matched'], summary['location_sought']), (2, 5))
+        self.assertEqual((summary['agreed'], summary['paired']), (2, 2))
+        self.assertEqual(summary['unstructured'], 1)
+        self.assertIn('Agrees with the judge on 2/2', summarize.render(summary))
 
     def test_rejects_verdicts_from_more_than_one_model(self):
         mixed = {**self.verdicts('luna', [(1, 1, 'blocking')]),

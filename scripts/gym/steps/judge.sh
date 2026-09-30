@@ -19,5 +19,5 @@ python3 "$gym/judge_findings.py" \
   --out "$REPLAY_DIR/verdict.json"
 
 mkdir -p "$OUT_DIR"
-jq '{record, label, severity, judge_model, score}' "$REPLAY_DIR/verdict.json" \
+jq '{record, label, severity, judge_model, score, location_score}' "$REPLAY_DIR/verdict.json" \
   > "$OUT_DIR/score.json"
