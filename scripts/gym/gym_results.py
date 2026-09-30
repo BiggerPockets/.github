@@ -118,6 +118,7 @@ def result_row(dataset_name, record, model, judge_model, run, prompt, replay, di
         "duration_s": (ended - started) / 1e9 if started and ended else None,
         "score": score or None,
         "judge_verdict": (verdict or {}).get("verdict"),
+        "location_score": (verdict or {}).get("location_score"),
         "findings": replay["findings"],
         "expected": replay["expected"],
         "attribution": replay["attribution"],

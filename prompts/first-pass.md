@@ -54,3 +54,30 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
    fail usefully, and genuine misses of the ticket's intent or clear scope creep — each with
    a file/line reference and a brief rationale. Do not list "doesn't match acceptance criteria" as an issue by itself; only
    raise it when the deviation harms the intent. If nothing is blocking, say so briefly.
+16. End the report with every finding listed again as one fenced `findings` block of JSON, in
+   the same order as the prose. It is read by machine, so it must parse and hold exactly the
+   findings above:
+
+   ```findings
+   [{"severity": "blocking",
+     "category": "correctness",
+     "locations": [{"path": "app/models/user.rb", "start_line": 42, "end_line": 48}],
+     "summary": "One sentence naming the defect."}]
+   ```
+
+   - `severity`: `blocker`, `blocking` or `non-blocking`.
+   - `category`: the one that names the defect. When a numbered step above is the reason
+     for the finding, use that step's category:
+     - `completeness` (step 3), `privacy` (4), `email` (5), `data` (6), `performance`
+       (7 and 8), `parsing` (9), `navigation` (10), `compatibility` (11), `configuration`
+       (12), `routing` (13), `tests` (14).
+     - Otherwise `correctness` for a wrong result, crash or regression; `security` for a
+       vulnerability; `intent` for a miss of the ticket's intent or scope creep;
+       `maintainability` for code that works but will mislead or trap the next change.
+   - `locations`: every place the defect lives, as repository-relative paths and the line
+     numbers in the pull request's head. When the defect shows in one place and its cause
+     is in another, list both. Omit `start_line` and `end_line` only for a defect in a file
+     as a whole, such as a file that should exist and does not.
+   - `summary`: one sentence, no code.
+
+   With no findings, end with an empty block: `[]`.
