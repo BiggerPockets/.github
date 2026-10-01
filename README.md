@@ -90,7 +90,7 @@ jobs:
       # Set it to put this repo on a different model — the slug must be one of the models
       # pinned in `scripts/pi/models.json`. Reading it from a repository variable lets the
       # repo be moved between pinned models without a pull request.
-      synthesis_model: ${{ vars.SYNTHESIS_MODEL || 'deepseek/deepseek-v4.1-flash' }}
+      synthesis_model: ${{ vars.SYNTHESIS_MODEL || 'anthropic/claude-sonnet-5.5' }}
       # OpenRouter slug for the Stage 1 first pass. Omit it to review on the org default,
       # gpt-5.6-luna. Set it to put this repo on a stronger model; the slug must be one of
       # the models pinned in `scripts/pi/models.json` with `stage1` in its `stages` list.
