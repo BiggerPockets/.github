@@ -11,7 +11,7 @@
   "//": "inputs. A repo may point a stage at any id whose `stages` list names that stage;",
   "//": "the workflow fails early, by name, on a slug that is not listed for the stage",
   "//": "requesting it. The default for Stage 1 is openai/gpt-5.6-luna and for Stage 2",
-  "//": "deepseek/deepseek-v4.1-flash.",
+  "//": "anthropic/claude-sonnet-5.5.",
   "//": "",
   "//": "`stages` is ours, not pi's. The workflow strips it with jq when it seeds pi's config",
   "//": "dir, so pi only ever sees fields it defines. Keeping it here rather than in a sibling",
@@ -53,6 +53,12 @@
           "id": "deepseek/deepseek-v4.1-flash",
           "name": "DeepSeek V4.1 Flash",
           "stages": ["stage1", "stage2"],
+          "reasoning": true
+        },
+        {
+          "id": "anthropic/claude-sonnet-5.5",
+          "name": "Claude Sonnet 5.5",
+          "stages": ["stage2"],
           "reasoning": true
         },
         {

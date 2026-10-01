@@ -73,7 +73,7 @@ on:
           resolved and the run is failed early, by name, rather than dying mid-review.
           Adding a model is a one-line catalog entry plus its published OpenRouter rates.
         required: false
-        default: deepseek/deepseek-v4.1-flash
+        default: anthropic/claude-sonnet-5.5
         type: string
       first_pass_model:
         description: >-
