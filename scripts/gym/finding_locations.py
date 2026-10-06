@@ -22,8 +22,8 @@ from confirm_findings import SLOP, citations, split_findings
 # The categories the first-pass prompt offers, kept in step with it by the tests.
 CATEGORIES = {
     "completeness", "privacy", "email", "data", "performance", "parsing", "navigation",
-    "compatibility", "configuration", "routing", "interface", "tests", "correctness",
-    "security", "intent", "maintainability",
+    "compatibility", "configuration", "routing", "interface", "tests", "analytics",
+    "correctness", "security", "intent", "maintainability",
 }
 
 BLOCK = re.compile(r"^[ \t]*```findings[ \t]*\n(.*?)^[ \t]*```", re.M | re.S)
