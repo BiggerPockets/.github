@@ -335,7 +335,7 @@ prompts/
   first-pass-system.md                       # Stage 1 system prompt (not registry-versioned)
   claude-synthesize.md                       # Stage 2 control arm (template)
   claude-synthesize-thesis-first.md          # Stage 2 thesis-first arm (template)
-  _shared/{completeness,privacy,migration-data,perf,parsing,navigation,rename-compatibility,route-reachability,interface-contract,spec-value,env-var,analytics-tracking}-rules.md  # shared rule blocks
+  _shared/{completeness,privacy,migration-data,perf,parsing,navigation,rename-compatibility,route-reachability,interface-contract,spec-value,env-var,analytics-tracking,nullability-boundary}-rules.md  # shared rule blocks
 ```
 
 - **The Stage 1 system prompt.** `prompts/first-pass-system.md` replaces pi's stock system
