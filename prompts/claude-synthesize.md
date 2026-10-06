@@ -58,11 +58,14 @@ Synthesize a single review decision for pull request #{{PR}}.
 16. Judge the value of the specs the diff adds or changes, per these rules, and report a
    useless spec with a file/line reference and the assertion that would make it fail:
    {{@prompts/_shared/spec-value-rules.md}}
-17. Validate which of Codex's findings are real (discard false positives), add any genuine
+17. Check whether new feature-flag exposure tracking reinvents the existing shared mechanism,
+   per these rules:
+   {{@prompts/_shared/analytics-tracking-rules.md}}
+18. Validate which of Codex's findings are real (discard false positives), add any genuine
    issues Codex missed, and (when a ticket is available) judge genuine misses of the ticket's
    intent or clear scope creep — but give credit when the author went beyond the literal
    acceptance criteria in a sound way rather than flagging it as non-compliant.
-18. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
+19. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
    genuine, blocking issue (such as a bug, regression, privacy violation, half-finished task,
    placeholder, or deferred work); otherwise "approve". A useless spec is reported, never
    blocking. A change that exceeds the AC without breaking the ticket's intent is a reason
