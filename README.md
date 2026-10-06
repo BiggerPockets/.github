@@ -335,7 +335,7 @@ prompts/
   first-pass-system.md                       # Stage 1 system prompt (not registry-versioned)
   claude-synthesize.md                       # Stage 2 control arm (template)
   claude-synthesize-thesis-first.md          # Stage 2 thesis-first arm (template)
-  _shared/{completeness,privacy,migration-data,perf,parsing,navigation,rename-compatibility,route-reachability,spec-value,env-var}-rules.md  # shared rule blocks
+  _shared/{completeness,privacy,migration-data,perf,parsing,navigation,rename-compatibility,route-reachability,interface-contract,spec-value,env-var}-rules.md  # shared rule blocks
 ```
 
 - **The Stage 1 system prompt.** `prompts/first-pass-system.md` replaces pi's stock system
@@ -362,8 +362,8 @@ prompts/
   finding can be compared by machine, which is how the gym matches findings by location.
   The categories are the review's own: one per rule the prompt enforces (`completeness`,
   `privacy`, `email`, `data`, `performance`, `parsing`, `navigation`, `compatibility`,
-  `configuration`, `routing`, `tests`), and `correctness`, `security`, `intent` and
-  `maintainability` for everything else.
+  `configuration`, `routing`, `interface`, `tests`), and `correctness`, `security`, `intent`
+  and `maintainability` for everything else.
 - **Templates + shared blocks.** Each prompt references the shared rule blocks via
   `{{@prompts/_shared/<name>.md}}`, so the Stage 1 and Stage-2 prompts can never drift out of
   sync. Prompts resolve `{{PR}}`, `{{PROMPT_NAME}}`, `{{PROMPT_VERSION}}` too.

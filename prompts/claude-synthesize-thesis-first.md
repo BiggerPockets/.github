@@ -52,14 +52,17 @@ Synthesize a single review decision for pull request #{{PR}}.
 14. Check that every URL path the diff adds or changes is reachable through the layers in
    front of its handler — nginx, Rack middleware, route order — per these rules:
    {{@prompts/_shared/route-reachability-rules.md}}
-15. Judge the value of the specs the diff adds or changes, per these rules, and report a
+15. When the diff publishes or changes an interface an outside caller drives, check it
+   against these rules:
+   {{@prompts/_shared/interface-contract-rules.md}}
+16. Judge the value of the specs the diff adds or changes, per these rules, and report a
    useless spec with a file/line reference and the assertion that would make it fail:
    {{@prompts/_shared/spec-value-rules.md}}
-16. Validate which of Codex's findings are real (discard false positives), add any genuine
+17. Validate which of Codex's findings are real (discard false positives), add any genuine
    issues Codex missed, and (when a ticket is available) judge genuine misses of the ticket's
    intent or clear scope creep — but give credit when the author went beyond the literal
    acceptance criteria in a sound way rather than flagging it as non-compliant.
-17. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
+18. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
    genuine, blocking issue (such as a bug, regression, privacy violation, half-finished task,
    placeholder, or deferred work); otherwise "approve". A useless spec is reported, never
    blocking. A change that exceeds the AC without breaking the ticket's intent is a reason
