@@ -5,7 +5,16 @@ creates a missing record lazily the first time something reads it (on a GET, in 
 component or view render, in a serializer, in a `find_or_create_by` behind a read), since
 it ends up running once per record just like a backfill.
 
-For each one, trace what its writes actually trigger before judging it:
+For each one, trace what its writes actually trigger before judging it. Start by listing
+the callbacks mechanically, not from memory or a skim. For every model the path saves,
+run a grep like this over the model file and each concern it includes:
+
+    grep -nE '^\s*(before|after|around)_(validation|save|create|update|destroy|commit|create_commit|update_commit|save_commit|destroy_commit)\b' app/models/<model>.rb
+
+and in your finding, write out EVERY line the grep returns as `file:line callback-name —
+fires` or `— skipped by <guard>`. A callback with no `if:`/`unless:` fires. Don't drop a
+line because it looks unrelated, and don't stop after the first few: the callback that
+alerts followers is often an unguarded one-liner next to guarded ones. Then trace:
 - Model callbacks on every model it saves, including those from included concerns and
   `after_commit` / `after_create_commit` hooks, `touch: true` and counter caches on
   associations, and any `dependent:` option on a destroy.
