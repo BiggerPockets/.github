@@ -6,15 +6,36 @@ component or view render, in a serializer, in a `find_or_create_by` behind a rea
 it ends up running once per record just like a backfill.
 
 For each one, trace what its writes actually trigger before judging it. Start by listing
-the callbacks mechanically, not from memory or a skim. For every model the path saves,
-run a grep like this over the model file and each concern it includes:
+the callbacks mechanically, not from memory or a skim. Most callbacks that reach members
+are declared in a concern, not in the model file, so a grep of the model alone is not
+enough. For every model the path saves, run this from the repository root (set `m` to the
+model's file):
 
-    grep -nE '^\s*(before|after|around)_(validation|save|create|update|destroy|commit|create_commit|update_commit|save_commit|destroy_commit)\b' app/models/<model>.rb
+    m=app/models/<model>.rb
+    files="$m $(grep -oE '^\s*include [A-Z][A-Za-z0-9:]+' "$m" | awk '{print $2}' \
+      | sed -E 's/::/\//g; s/([a-z0-9])([A-Z])/\1_\2/g' | tr 'A-Z' 'a-z' \
+      | sed 's|^|app/models/concerns/|; s|$|.rb|' | while read -r f; do [ -f "$f" ] && echo "$f"; done)"
+    grep -nE '^\s*(before|after|around)_(validation|save|create|update|destroy|commit|touch|create_commit|update_commit|save_commit|destroy_commit)\b' $files
 
-and in your finding, write out EVERY line the grep returns as `file:line callback-name —
-fires` or `— skipped by <guard>`. A callback with no `if:`/`unless:` fires. Don't drop a
-line because it looks unrelated, and don't stop after the first few: the callback that
-alerts followers is often an unguarded one-liner next to guarded ones. Then trace:
+Read each concern file it lists; a callback declared inside `included do` or
+`base.class_eval` counts. In your finding, write out EVERY line the grep returns as
+`file:line callback-name — fires` or `— skipped by <guard>`. Don't drop a line because it
+looks unrelated, and don't stop after the first few: the callback that alerts members is
+often an unguarded one-liner in a concern, next to guarded ones in the model.
+
+Decide fires or skipped from the code that actually runs, not from the declaration alone:
+- A callback with no `if:`/`unless:` fires unless its method returns early. Read the
+  method body and any predicate it calls (e.g. `return unless scan_keyword?`).
+- A model can override a concern's method. Before calling a concern callback unguarded,
+  grep the model file for `def <method-name>` and for the predicate it calls; if the model
+  overrides either, judge by the override.
+
+For every callback that fires, follow what it starts until it reaches a member or ends:
+open each job, worker or mailer it enqueues (`perform_async`, `perform_in`,
+`perform_later`, `deliver_later`) and the methods those call, and keep going until you
+reach an email, push, in-app notification, alert, or nothing member-facing. A callback
+that enqueues a scan or matching job (keywords, saved searches, subscriptions) usually
+ends in a notification two or three calls later. Then trace:
 - Model callbacks on every model it saves, including those from included concerns and
   `after_commit` / `after_create_commit` hooks, `touch: true` and counter caches on
   associations, and any `dependent:` option on a destroy.
