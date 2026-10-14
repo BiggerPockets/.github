@@ -61,12 +61,15 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
 18. Check whether a backfill, import, or lazy create-if-missing path fires callbacks and
    side effects it never says it intends, per these rules:
    {{@prompts/_shared/backfill-side-effect-rules.md}}
-19. Report concrete issues — bugs, regressions, security problems, member-privacy
-   violations, incomplete tasks/half-measures/placeholders/deferred work, specs that cannot
-   fail usefully, and genuine misses of the ticket's intent or clear scope creep — each with
+19. Check whether the diff works around a defect that belongs upstream — in our API, a
+   shared library, or a service — instead of fixing it at its source, per these rules:
+   {{@prompts/_shared/upstream-fix-rules.md}}
+20. Report concrete issues — bugs, regressions, security problems, member-privacy
+   violations, incomplete tasks/half-measures/placeholders/deferred work, downstream
+   workarounds for a defect we own upstream, specs that cannot fail usefully, and genuine misses of the ticket's intent or clear scope creep — each with
    a file/line reference and a brief rationale. Do not list "doesn't match acceptance criteria" as an issue by itself; only
    raise it when the deviation harms the intent. If nothing is blocking, say so briefly.
-20. End the report with every finding listed again as one fenced `findings` block of JSON, in
+21. End the report with every finding listed again as one fenced `findings` block of JSON, in
    the same order as the prose. It is read by machine, so it must parse and hold exactly the
    findings above:
 
@@ -83,7 +86,7 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
      - `completeness` (step 3), `privacy` (4), `email` (5), `data` (6), `performance`
        (7 and 8), `parsing` (9), `navigation` (10), `compatibility` (11), `configuration`
        (12), `routing` (13), `interface` (14), `tests` (15),
-       `analytics` (16), `correctness` (17), `data` (18).
+       `analytics` (16), `correctness` (17), `data` (18), `intent` (19).
      - Otherwise `correctness` for a wrong result, crash or regression; `security` for a
        vulnerability; `intent` for a miss of the ticket's intent or scope creep;
        `maintainability` for code that works but will mislead or trap the next change.
