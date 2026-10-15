@@ -58,6 +58,9 @@ Synthesize a single review decision for pull request #{{PR}}.
 16. Judge the value of the specs the diff adds or changes, per these rules, and report a
    useless spec with a file/line reference and the assertion that would make it fail:
    {{@prompts/_shared/spec-value-rules.md}}
+   Then check whether a spec the diff adds or keeps covers behavior the diff deletes, per
+   these rules, and report each one as blocking:
+   {{@prompts/_shared/deleted-behavior-spec-rules.md}}
 17. Check whether new feature-flag exposure tracking reinvents the existing shared mechanism,
    per these rules:
    {{@prompts/_shared/analytics-tracking-rules.md}}
@@ -76,9 +79,9 @@ Synthesize a single review decision for pull request #{{PR}}.
    acceptance criteria in a sound way rather than flagging it as non-compliant.
 22. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
    genuine, blocking issue (such as a bug, regression, privacy violation, half-finished task,
-   placeholder, deferred work, or a downstream workaround for a defect we own upstream);
-   otherwise "approve". A useless spec is reported, never
-   blocking. A change that exceeds the AC without breaking the ticket's intent is a reason
+   placeholder, deferred work, a downstream workaround for a defect we own upstream, or a
+   spec that covers deleted behavior); otherwise "approve". A useless spec is reported,
+   never blocking; a spec that covers deleted behavior is not a useless spec and blocks. A change that exceeds the AC without breaking the ticket's intent is a reason
    to approve, not to block.
 
 Write a file named verdict.json in the current working directory with EXACTLY this shape:
