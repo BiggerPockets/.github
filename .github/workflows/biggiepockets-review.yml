@@ -63,29 +63,27 @@ on:
         type: string
       synthesis_model:
         description: >-
-          OpenRouter model slug for the Stage 2 verify-and-synthesize pass. Defaults to
-          the model the whole org reviews on; a caller overrides it to put one repo on a
-          different model — e.g. to route around a provider that is failing upstream, or
-          to trial a model on a low-traffic repo before rolling it everywhere.
+          OpenRouter model slug for the Stage 2 verify-and-synthesize pass. The
+          SYNTHESIS_MODEL Actions variable takes precedence when it is set (an
+          organization variable, or a repository one that overrides it for one repo); this
+          input applies when it is not.
 
           The slug MUST be one of the models pinned in scripts/pi/models.json. A fresh CI
           runner resolves models only from that file, so an unlisted slug cannot be
           resolved and the run is failed early, by name, rather than dying mid-review.
-          Adding a model is a one-line catalog entry plus its published OpenRouter rates.
+          Adding a model is a one-line catalog entry.
         required: false
         default: anthropic/claude-sonnet-5.5
         type: string
       first_pass_model:
         description: >-
-          OpenRouter model slug for the Stage 1 first pass. Defaults to gpt-5.6-luna: the
-          first pass is verified and rewritten by Stage 2, so it is the safest place in the
-          review to run a cheaper model, and luna is a tenth the price of sol on both input
-          and output. A caller overrides it to put one repo back on a stronger model, or to
-          trial one on a low-traffic repo before rolling it everywhere.
+          OpenRouter model slug for the Stage 1 first pass. The FIRST_PASS_MODEL Actions
+          variable takes precedence when it is set (an organization variable, or a
+          repository one that overrides it for one repo); this input applies when it is
+          not.
 
-          The slug MUST be one of the models pinned in scripts/pi/models.json with "stage1"
-          in its `stages` list, so the run fails early and by name on an unlisted slug
-          rather than dying mid-review.
+          The slug MUST be one of the models listed in scripts/pi/models.json, so the run
+          fails early and by name on an unlisted slug rather than dying mid-review.
         required: false
         default: openai/gpt-5.6-luna
         type: string
@@ -116,11 +114,13 @@ jobs:
       # specific model pinned and reliably visible in telemetry — e.g. when a stage is
       # pointed at a non-default model — instead of an implicit, untracked default.
       # Both stages resolve their model from scripts/pi/models.json, so each slug must
-      # be pinned there for that stage. They come from the first_pass_model and
+      # be listed there. They come from the first_pass_model and
       # synthesis_model inputs, so a repo can pick its own and the telemetry names the
-      # model that actually ran.
-      FIRST_PASS_MODEL: ${{ inputs.first_pass_model }}
-      SYNTHESIS_MODEL: ${{ inputs.synthesis_model }}
+      # model that actually ran. A reusable workflow reads the caller's `vars`, so the
+      # FIRST_PASS_MODEL and SYNTHESIS_MODEL variables, when set, pick each stage's model
+      # for every caller.
+      FIRST_PASS_MODEL: ${{ vars.FIRST_PASS_MODEL || inputs.first_pass_model }}
+      SYNTHESIS_MODEL: ${{ vars.SYNTHESIS_MODEL || inputs.synthesis_model }}
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
@@ -279,8 +279,7 @@ jobs:
           echo "Stage 1 routing for $FIRST_PASS_MODEL: $routing"
 
       # pi resolves its models from a config dir (PI_CODING_AGENT_DIR), seeded from the
-      # pinned OpenRouter provider in scripts/pi/models.json. `stages` is ours, not pi's,
-      # so it is stripped here — pi only ever sees fields it defines.
+      # pinned OpenRouter provider in scripts/pi/models.json.
       - name: Configure pi
         run: |
           mkdir -p "$RUNNER_TEMP/pi-config"
@@ -297,7 +296,6 @@ jobs:
             '{providers: {openrouter: (.providers.openrouter
                 | {baseUrl, apiKey, api,
                    models: [.models[]
-                     | del(.stages)
                      | .compat = ((.compat // {}) + {openRouterRouting:
                          ((if .id == $model then $routing else {} end)
                           + {data_collection: "deny"})})]})}}' \
@@ -306,12 +304,12 @@ jobs:
 
           if ! jq -e --arg m "$FIRST_PASS_MODEL" \
             '.providers.openrouter.models[]
-               | select(.id == $m) | select((.stages // ["stage1"]) | index("stage1"))' \
+               | select(.id == $m)' \
             registry/scripts/pi/models.json > /dev/null; then
             known=$(jq -r '.providers.openrouter.models[]
-                             | select((.stages // ["stage1"]) | index("stage1")) | .id' \
+                             | .id' \
                     registry/scripts/pi/models.json | paste -sd, -)
-            echo "::error::first_pass_model '$FIRST_PASS_MODEL' is not pinned for stage1 in scripts/pi/models.json (have: $known). Add it there with its published OpenRouter rates and \"stage1\" in its stages list before pointing a repo at it." >&2
+            echo "::error::first_pass_model '$FIRST_PASS_MODEL' is not listed in scripts/pi/models.json (have: $known). Add it there before pointing a repo at it." >&2
             exit 1
           fi
 
@@ -436,8 +434,8 @@ jobs:
       pull-requests: read
     env:
       PR: ${{ inputs.pr }}
-      FIRST_PASS_MODEL: ${{ inputs.first_pass_model }}
-      SYNTHESIS_MODEL: ${{ inputs.synthesis_model }}
+      FIRST_PASS_MODEL: ${{ vars.FIRST_PASS_MODEL || inputs.first_pass_model }}
+      SYNTHESIS_MODEL: ${{ vars.SYNTHESIS_MODEL || inputs.synthesis_model }}
     steps:
       - name: Checkout reviewed PR head
         uses: actions/checkout@v4
@@ -514,7 +512,6 @@ jobs:
       - name: Configure pi
         run: |
           mkdir -p "$RUNNER_TEMP/pi-config"
-          # `stages` is ours, not pi's — strip it so pi only sees fields it defines.
           routing="${OPENROUTER_ROUTING:-}"
           [ -n "$routing" ] || routing='{}'
           # compat.openRouterRouting is pi's OpenRouter provider-selection field; pi
@@ -528,7 +525,6 @@ jobs:
             '{providers: {openrouter: (.providers.openrouter
                 | {baseUrl, apiKey, api,
                    models: [.models[]
-                     | del(.stages)
                      | .compat = ((.compat // {}) + {openRouterRouting:
                          ((if .id == $model then $routing else {} end)
                           + {data_collection: "deny"})})]})}}' \
@@ -537,12 +533,12 @@ jobs:
 
           if ! jq -e --arg m "$SYNTHESIS_MODEL" \
             '.providers.openrouter.models[]
-               | select(.id == $m) | select((.stages // ["stage2"]) | index("stage2"))' \
+               | select(.id == $m)' \
             registry/scripts/pi/models.json > /dev/null; then
             known=$(jq -r '.providers.openrouter.models[]
-                             | select((.stages // ["stage2"]) | index("stage2")) | .id' \
+                             | .id' \
                     registry/scripts/pi/models.json | paste -sd, -)
-            echo "::error::synthesis_model '$SYNTHESIS_MODEL' is not pinned for stage2 in scripts/pi/models.json (have: $known). Add it there with its published OpenRouter rates and \"stage2\" in its stages list before pointing a repo at it." >&2
+            echo "::error::synthesis_model '$SYNTHESIS_MODEL' is not listed in scripts/pi/models.json (have: $known). Add it there before pointing a repo at it." >&2
             exit 1
           fi
 

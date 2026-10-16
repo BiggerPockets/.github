@@ -13,9 +13,8 @@ two-stage AI code review on a pull request:
    checks the change against the ticket's acceptance criteria, and decides a single verdict.
 
 Both stages run on [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-against models pinned in `scripts/pi/models.json`, each entry listing the stages allowed
-to run it. One harness means one allowlist, one set of published rates behind the cost
-telemetry, and the same early failure on an unpinned slug for either stage.
+against models listed in `scripts/pi/models.json`; either stage can run any of them. An
+unlisted slug fails the run early, by name, because pi could not resolve it.
 
 The **BiggiePockets** service account then submits the resulting `approve` /
 `request_changes` review on the PR. If the PR has no `BIG-XXXXX` key in its title (or the
@@ -86,15 +85,16 @@ jobs:
       # so callers tracking `@main` can omit it. If you pin the `uses:` ref above to a tag
       # or SHA, pass the matching ref here too — otherwise prompts silently track main.
       registry_ref: main
-      # OpenRouter slug for the Stage 2 (pi) pass. Omit it to review on the org default.
-      # Set it to put this repo on a different model — the slug must be one of the models
-      # pinned in `scripts/pi/models.json`. Reading it from a repository variable lets the
-      # repo be moved between pinned models without a pull request.
-      synthesis_model: ${{ vars.SYNTHESIS_MODEL || 'anthropic/claude-sonnet-5.5' }}
-      # OpenRouter slug for the Stage 1 first pass. Omit it to review on the org default,
-      # gpt-5.6-luna. Set it to put this repo on a stronger model; the slug must be one of
-      # the models pinned in `scripts/pi/models.json` with `stage1` in its `stages` list.
-      first_pass_model: ${{ vars.FIRST_PASS_MODEL || 'openai/gpt-5.6-luna' }}
+      # OpenRouter slug for the Stage 2 (pi) pass, used when the SYNTHESIS_MODEL Actions
+      # variable is unset (the reusable workflow reads that variable itself, and it wins
+      # when set). Omit it to fall back to claude-sonnet-5.5; the slug must be one of the
+      # models listed in `scripts/pi/models.json`.
+      # synthesis_model: anthropic/claude-sonnet-5.5
+      # OpenRouter slug for the Stage 1 first pass, used when the FIRST_PASS_MODEL Actions
+      # variable is unset (the reusable workflow reads that variable itself, and it wins
+      # when set). Omit it to fall back to gpt-5.6-luna; the slug must be one of the models
+      # listed in `scripts/pi/models.json`.
+      # first_pass_model: openai/gpt-5.6-luna
     secrets: inherit
 ```
 
@@ -111,8 +111,9 @@ It also reports per-review traces to the `biggiepockets-review` app in Datadog L
 Observability via `secrets.DATADOG_API_KEY`: verdict, timing, prompt template and version
 (tracked as prompts, see below), the model each
 stage ran (`FIRST_PASS_MODEL`/`SYNTHESIS_MODEL` env vars in the workflow — both are
-OpenRouter model slugs and must be set; each comes from its input, `first_pass_model` and
-`synthesis_model`, so a repo's models are visible in its own traces), and the actual
+OpenRouter model slugs and must be set; each comes from its Actions variable when set and
+otherwise from its input, `first_pass_model` and `synthesis_model`, so a repo's models are
+visible in its own traces), and the actual
 findings text from the
 first pass and the summary Stage 2 wrote,
 so review quality is inspectable, not just counted. This secret is optional — reviews still
