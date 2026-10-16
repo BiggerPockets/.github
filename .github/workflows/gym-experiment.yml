@@ -23,6 +23,12 @@ name: Gym experiment (first-pass model recall)
 # is public, so none of it is printed to a log or uploaded as an artifact here. GitHub
 # keeps only the counts.
 #
+# ONE PROMPT FOREVER. Every run replays the first-pass prompt at GYM_PROMPT_SHA, version
+# GYM_PROMPT_VERSION, whichever branch the workflow is dispatched from and whatever the
+# prompt on main says today. A recall number is only comparable to another made with the
+# same prompt, so a model is always measured against the same text. Each job checks out
+# prompts/ at that commit and fails unless it resolves to that version.
+#
 # Each step's logic lives in scripts/gym/steps/, one script per step, taking its inputs
 # from the step's `env:`.
 #
@@ -67,6 +73,10 @@ on:
 permissions:
   contents: read
 
+env:
+  GYM_PROMPT_SHA: 2fb5d97a4ca095a312357be7da16522231fc75f3
+  GYM_PROMPT_VERSION: a0b44117a10c
+
 jobs:
   plan:
     runs-on: ubuntu-latest
@@ -104,12 +114,25 @@ jobs:
           scripts/gym/steps/check-secrets.sh
           OPENROUTER_API_KEY GYM_REPO_TOKEN GYM_RESULTS_TOKEN JIRA_EMAIL JIRA_API_TOKEN
 
-      - name: Resolve the current first-pass prompt version
+      - name: Checkout the gym's first-pass prompt
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.GYM_PROMPT_SHA }}
+          path: gym-prompt
+          sparse-checkout: prompts
+          persist-credentials: false
+
+      - name: Resolve the gym's first-pass prompt version
         id: prompt
         env:
-          REGISTRY_DIR: .
+          REGISTRY_DIR: gym-prompt
           PR: '0'
         run: scripts/resolve-prompts.sh
+
+      - name: Check the gym's first-pass prompt
+        env:
+          RESOLVED_VERSION: ${{ steps.prompt.outputs.first_pass_prompt_version }}
+        run: scripts/gym/steps/check-prompt.sh
 
       # The dataset is private-repo-derived content and must never land in this public
       # repository, so it is checked out read-only from BiggerPockets/pi-gym-data.
@@ -121,10 +144,6 @@ jobs:
           persist-credentials: false
           path: gym-data
 
-      # A record's findings were produced by a specific first-pass prompt. Replaying it
-      # under a changed prompt measures the prompt edit and the model together and reports
-      # the sum as the model, so by default the run is scoped to records the current prompt
-      # produced.
       - name: Plan the replays
         id: plan
         env:
@@ -163,10 +182,18 @@ jobs:
       REPLAY_DIR: ${{ github.workspace }}/replay
       OUT_DIR: ${{ github.workspace }}/out
     steps:
-      - name: Checkout registry (prompts + scripts)
+      - name: Checkout registry (scripts)
         uses: actions/checkout@v4
         with:
           path: registry
+
+      - name: Checkout the gym's first-pass prompt
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.GYM_PROMPT_SHA }}
+          path: gym-prompt
+          sparse-checkout: prompts
+          persist-credentials: false
 
       - name: Checkout gym dataset (BiggerPockets/pi-gym-data)
         uses: actions/checkout@v4
@@ -207,10 +234,15 @@ jobs:
       - name: Resolve review prompts
         id: resolve
         env:
-          REGISTRY_DIR: registry
+          REGISTRY_DIR: gym-prompt
           PR: ${{ matrix.pr }}
           GITHUB_REPOSITORY: ${{ matrix.repo }}
         run: registry/scripts/resolve-prompts.sh
+
+      - name: Check the gym's first-pass prompt
+        env:
+          RESOLVED_VERSION: ${{ steps.resolve.outputs.first_pass_prompt_version }}
+        run: registry/scripts/gym/steps/check-prompt.sh
 
       - name: Install pi
         run: registry/scripts/gym/steps/install-pi.sh
@@ -224,6 +256,7 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           FIRST_PASS_PROMPT: ${{ steps.resolve.outputs.first_pass_prompt }}
+          SYSTEM_PROMPT_FILE: ${{ github.workspace }}/gym-prompt/prompts/first-pass-system.md
         run: registry/scripts/gym/steps/replay.sh
 
       - name: Mark the replay failed
