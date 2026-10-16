@@ -12,7 +12,7 @@
 # and on failure failure.txt. pi's error log can quote the model's partial output, so it
 # goes to failure.txt, which is posted to Datadog, and never to this public job log.
 #
-# Env: OPENROUTER_API_KEY, FIRST_PASS_PROMPT, MODEL, REPLAY_DIR.
+# Env: OPENROUTER_API_KEY, FIRST_PASS_PROMPT, SYSTEM_PROMPT_FILE, MODEL, REPLAY_DIR.
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$REPLAY_DIR/repo" || exit 1
@@ -29,7 +29,7 @@ while :; do
   attempt=$((attempt + 1))
   timeout 900 pi --mode json \
     --model "$MODEL" \
-    --system-prompt "$(cat "$root/prompts/first-pass-system.md")" \
+    --system-prompt "$(cat "$SYSTEM_PROMPT_FILE")" \
     --thinking medium \
     --tools read,grep,glob,bash \
     --no-context-files --no-skills --no-extensions \

@@ -657,7 +657,12 @@ Three things the harness controls for, each of which would otherwise quietly bia
 - **What counts as a miss.** A replay is scored only against the findings the author fixed,
   so a finding Sol made that was never acted on cannot count against the candidate. Because
   those defects do not depend on the prompt that found them, every labeled record is replayed
-  under the current first-pass prompt, whichever version recorded it.
+  under the gym's one first-pass prompt, whichever version recorded it.
+- **The prompt.** Every run replays the same first-pass prompt: `prompts/` as of the commit in
+  `GYM_PROMPT_SHA` in `gym-experiment.yml`, which resolves to version `GYM_PROMPT_VERSION`
+  (`a0b44117a10c`). It does not follow `main` or the branch the workflow is dispatched from, so
+  two runs always differ only in the model. Each job fails unless the prompt it resolved is that
+  version, and `tests/test_gym_prompt_pin.py` fails if any job reads prompts from anywhere else.
 
 Scoring is per-finding recall judged by a third model — the question is *did it report this
 defect*, not *did it phrase it the same way*, so string comparison is the wrong instrument.
@@ -700,9 +705,9 @@ not, writes one JSON file to `results/<dataset name>/<run id>-<attempt>-<model l
 in the private dataset repo (`scripts/gym/gym_results.py`). The file holds the record's
 repository, pull request and commits; the size of the reviewed diff (files, added and deleted
 lines, counted from the `pr.diff` the model reviewed); the model and judge; the prompt
-(`replay_prompt_version` and `registry_sha`, the commit of this repo the replay ran from, which
-recovers the exact prompt text, plus `recorded_prompt_version`, the version that produced the
-recorded findings); the judge's scores
+(`replay_prompt_version`, always the gym's pinned version, and `registry_sha`, the commit of
+this repo the replay's scripts ran from, plus `recorded_prompt_version`, the version that
+produced the recorded findings); the judge's scores
 and per-finding verdict; the model's review; the recorded findings; the OpenRouter attribution;
 and, for a failed replay, why it failed. This is the durable per-record copy of every run, so a
 run can be analysed at any time, for example recall by diff size, without depending on how long
