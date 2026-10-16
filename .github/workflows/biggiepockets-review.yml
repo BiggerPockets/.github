@@ -77,15 +77,15 @@ on:
         type: string
       first_pass_model:
         description: >-
-          OpenRouter model slug for the Stage 1 first pass. Left empty, it comes from the
-          FIRST_PASS_MODEL Actions variable (an organization variable, or a repository one
-          that overrides it), and from openai/gpt-5.6-luna when that is unset. A caller
-          passes it to pin one repo to a model regardless of the variable.
+          OpenRouter model slug for the Stage 1 first pass. The FIRST_PASS_MODEL Actions
+          variable takes precedence when it is set (an organization variable, or a
+          repository one that overrides it for one repo); this input applies when it is
+          not.
 
           The slug MUST be one of the models listed in scripts/pi/models.json, so the run
           fails early and by name on an unlisted slug rather than dying mid-review.
         required: false
-        default: ''
+        default: openai/gpt-5.6-luna
         type: string
 
 # A re-request starts a second run for the same PR; cancel the older one so it can't
@@ -117,9 +117,8 @@ jobs:
       # be listed there. They come from the first_pass_model and
       # synthesis_model inputs, so a repo can pick its own and the telemetry names the
       # model that actually ran. A reusable workflow reads the caller's `vars`, so the
-      # FIRST_PASS_MODEL variable picks Stage 1's model for every caller that leaves the
-      # input empty.
-      FIRST_PASS_MODEL: ${{ inputs.first_pass_model || vars.FIRST_PASS_MODEL || 'openai/gpt-5.6-luna' }}
+      # FIRST_PASS_MODEL variable, when set, picks Stage 1's model for every caller.
+      FIRST_PASS_MODEL: ${{ vars.FIRST_PASS_MODEL || inputs.first_pass_model }}
       SYNTHESIS_MODEL: ${{ inputs.synthesis_model }}
     steps:
       - name: Checkout PR head
@@ -434,7 +433,7 @@ jobs:
       pull-requests: read
     env:
       PR: ${{ inputs.pr }}
-      FIRST_PASS_MODEL: ${{ inputs.first_pass_model || vars.FIRST_PASS_MODEL || 'openai/gpt-5.6-luna' }}
+      FIRST_PASS_MODEL: ${{ vars.FIRST_PASS_MODEL || inputs.first_pass_model }}
       SYNTHESIS_MODEL: ${{ inputs.synthesis_model }}
     steps:
       - name: Checkout reviewed PR head

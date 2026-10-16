@@ -90,10 +90,10 @@ jobs:
       # pinned in `scripts/pi/models.json`. Reading it from a repository variable lets the
       # repo be moved between pinned models without a pull request.
       synthesis_model: ${{ vars.SYNTHESIS_MODEL || 'anthropic/claude-sonnet-5.5' }}
-      # OpenRouter slug for the Stage 1 first pass. Omit it to use the FIRST_PASS_MODEL
-      # Actions variable, which the reusable workflow reads itself (falling back to
-      # gpt-5.6-luna). Set it only to pin this repo to one model regardless of the variable;
-      # the slug must be one of the models listed in `scripts/pi/models.json`.
+      # OpenRouter slug for the Stage 1 first pass, used when the FIRST_PASS_MODEL Actions
+      # variable is unset (the reusable workflow reads that variable itself, and it wins
+      # when set). Omit it to fall back to gpt-5.6-luna; the slug must be one of the models
+      # listed in `scripts/pi/models.json`.
       # first_pass_model: openai/gpt-5.6-sol
     secrets: inherit
 ```
