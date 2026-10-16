@@ -63,15 +63,15 @@ on:
         type: string
       synthesis_model:
         description: >-
-          OpenRouter model slug for the Stage 2 verify-and-synthesize pass. Defaults to
-          the model the whole org reviews on; a caller overrides it to put one repo on a
-          different model — e.g. to route around a provider that is failing upstream, or
-          to trial a model on a low-traffic repo before rolling it everywhere.
+          OpenRouter model slug for the Stage 2 verify-and-synthesize pass. The
+          SYNTHESIS_MODEL Actions variable takes precedence when it is set (an
+          organization variable, or a repository one that overrides it for one repo); this
+          input applies when it is not.
 
           The slug MUST be one of the models pinned in scripts/pi/models.json. A fresh CI
           runner resolves models only from that file, so an unlisted slug cannot be
           resolved and the run is failed early, by name, rather than dying mid-review.
-          Adding a model is a one-line catalog entry plus its published OpenRouter rates.
+          Adding a model is a one-line catalog entry.
         required: false
         default: anthropic/claude-sonnet-5.5
         type: string
@@ -117,9 +117,10 @@ jobs:
       # be listed there. They come from the first_pass_model and
       # synthesis_model inputs, so a repo can pick its own and the telemetry names the
       # model that actually ran. A reusable workflow reads the caller's `vars`, so the
-      # FIRST_PASS_MODEL variable, when set, picks Stage 1's model for every caller.
+      # FIRST_PASS_MODEL and SYNTHESIS_MODEL variables, when set, pick each stage's model
+      # for every caller.
       FIRST_PASS_MODEL: ${{ vars.FIRST_PASS_MODEL || inputs.first_pass_model }}
-      SYNTHESIS_MODEL: ${{ inputs.synthesis_model }}
+      SYNTHESIS_MODEL: ${{ vars.SYNTHESIS_MODEL || inputs.synthesis_model }}
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
@@ -434,7 +435,7 @@ jobs:
     env:
       PR: ${{ inputs.pr }}
       FIRST_PASS_MODEL: ${{ vars.FIRST_PASS_MODEL || inputs.first_pass_model }}
-      SYNTHESIS_MODEL: ${{ inputs.synthesis_model }}
+      SYNTHESIS_MODEL: ${{ vars.SYNTHESIS_MODEL || inputs.synthesis_model }}
     steps:
       - name: Checkout reviewed PR head
         uses: actions/checkout@v4

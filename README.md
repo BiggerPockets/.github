@@ -85,16 +85,16 @@ jobs:
       # so callers tracking `@main` can omit it. If you pin the `uses:` ref above to a tag
       # or SHA, pass the matching ref here too — otherwise prompts silently track main.
       registry_ref: main
-      # OpenRouter slug for the Stage 2 (pi) pass. Omit it to review on the org default.
-      # Set it to put this repo on a different model — the slug must be one of the models
-      # pinned in `scripts/pi/models.json`. Reading it from a repository variable lets the
-      # repo be moved between pinned models without a pull request.
-      synthesis_model: ${{ vars.SYNTHESIS_MODEL || 'anthropic/claude-sonnet-5.5' }}
+      # OpenRouter slug for the Stage 2 (pi) pass, used when the SYNTHESIS_MODEL Actions
+      # variable is unset (the reusable workflow reads that variable itself, and it wins
+      # when set). Omit it to fall back to claude-sonnet-5.5; the slug must be one of the
+      # models listed in `scripts/pi/models.json`.
+      # synthesis_model: anthropic/claude-sonnet-5.5
       # OpenRouter slug for the Stage 1 first pass, used when the FIRST_PASS_MODEL Actions
       # variable is unset (the reusable workflow reads that variable itself, and it wins
       # when set). Omit it to fall back to gpt-5.6-luna; the slug must be one of the models
       # listed in `scripts/pi/models.json`.
-      # first_pass_model: openai/gpt-5.6-sol
+      # first_pass_model: openai/gpt-5.6-luna
     secrets: inherit
 ```
 
@@ -111,8 +111,9 @@ It also reports per-review traces to the `biggiepockets-review` app in Datadog L
 Observability via `secrets.DATADOG_API_KEY`: verdict, timing, prompt template and version
 (tracked as prompts, see below), the model each
 stage ran (`FIRST_PASS_MODEL`/`SYNTHESIS_MODEL` env vars in the workflow — both are
-OpenRouter model slugs and must be set; each comes from its input, `first_pass_model` and
-`synthesis_model`, so a repo's models are visible in its own traces), and the actual
+OpenRouter model slugs and must be set; each comes from its Actions variable when set and
+otherwise from its input, `first_pass_model` and `synthesis_model`, so a repo's models are
+visible in its own traces), and the actual
 findings text from the
 first pass and the summary Stage 2 wrote,
 so review quality is inspectable, not just counted. This secret is optional — reviews still
