@@ -13,9 +13,8 @@ two-stage AI code review on a pull request:
    checks the change against the ticket's acceptance criteria, and decides a single verdict.
 
 Both stages run on [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-against models pinned in `scripts/pi/models.json`, each entry listing the stages allowed
-to run it. One harness means one allowlist, one set of published rates behind the cost
-telemetry, and the same early failure on an unpinned slug for either stage.
+against models listed in `scripts/pi/models.json`; either stage can run any of them. An
+unlisted slug fails the run early, by name, because pi could not resolve it.
 
 The **BiggiePockets** service account then submits the resulting `approve` /
 `request_changes` review on the PR. If the PR has no `BIG-XXXXX` key in its title (or the
@@ -91,10 +90,11 @@ jobs:
       # pinned in `scripts/pi/models.json`. Reading it from a repository variable lets the
       # repo be moved between pinned models without a pull request.
       synthesis_model: ${{ vars.SYNTHESIS_MODEL || 'anthropic/claude-sonnet-5.5' }}
-      # OpenRouter slug for the Stage 1 first pass. Omit it to review on the org default,
-      # gpt-5.6-luna. Set it to put this repo on a stronger model; the slug must be one of
-      # the models pinned in `scripts/pi/models.json` with `stage1` in its `stages` list.
-      first_pass_model: ${{ vars.FIRST_PASS_MODEL || 'openai/gpt-5.6-luna' }}
+      # OpenRouter slug for the Stage 1 first pass. Omit it to use the FIRST_PASS_MODEL
+      # Actions variable, which the reusable workflow reads itself (falling back to
+      # gpt-5.6-luna). Set it only to pin this repo to one model regardless of the variable;
+      # the slug must be one of the models listed in `scripts/pi/models.json`.
+      # first_pass_model: openai/gpt-5.6-sol
     secrets: inherit
 ```
 

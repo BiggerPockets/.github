@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # Configure pi the way the production first-pass job does: scripts/pi/models.json with
 # OpenRouter's routing preference for MODEL applied. Fails, by name, when MODEL is not
-# pinned for stage1 there.
+# listed there.
 #
 # Env: MODEL. Exports PI_CODING_AGENT_DIR through GITHUB_ENV.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 models="$root/scripts/pi/models.json"
 
-pinned=$(jq -r '.providers.openrouter.models[]
-                  | select((.stages // ["stage1"]) | index("stage1")) | .id' "$models")
+pinned=$(jq -r '.providers.openrouter.models[].id' "$models")
 if ! grep -qxF "$MODEL" <<<"$pinned"; then
-  echo "::error::'$MODEL' is not pinned for stage1 in scripts/pi/models.json" \
+  echo "::error::'$MODEL' is not listed in scripts/pi/models.json" \
        "(have: $(paste -sd, - <<<"$pinned"))." >&2
   exit 1
 fi
@@ -31,7 +30,6 @@ jq --argjson routing "$routing" --arg model "$MODEL" \
   '{providers: {openrouter: (.providers.openrouter
       | {baseUrl, apiKey, api,
          models: [.models[]
-           | del(.stages)
            | .compat = ((.compat // {}) + {openRouterRouting:
                ((if .id == $model then $routing else {} end)
                 + {data_collection: "deny"})})]})}}' \

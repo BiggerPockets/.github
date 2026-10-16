@@ -7,15 +7,10 @@
   "//": "and the live catalog refresh is a background fetch, not a startup step we can rely",
   "//": "on.",
   "//": "",
-  "//": "This is the allowlist behind the workflow's first_pass_model and synthesis_model",
-  "//": "inputs. A repo may point a stage at any id whose `stages` list names that stage;",
-  "//": "the workflow fails early, by name, on a slug that is not listed for the stage",
-  "//": "requesting it. The default for Stage 1 is openai/gpt-5.6-luna and for Stage 2",
-  "//": "anthropic/claude-sonnet-5.5.",
-  "//": "",
-  "//": "`stages` is ours, not pi's. The workflow strips it with jq when it seeds pi's config",
-  "//": "dir, so pi only ever sees fields it defines. Keeping it here rather than in a sibling",
-  "//": "file means a model and the stages allowed to run it cannot drift apart.",
+  "//": "Either stage can run any model listed here. Stage 1 runs the FIRST_PASS_MODEL",
+  "//": "Actions variable, falling back to openai/gpt-5.6-luna; Stage 2 defaults to",
+  "//": "anthropic/claude-sonnet-5.5. The workflow fails early, by name, on a slug that is",
+  "//": "not listed, since pi could not resolve it.",
   "//": "",
   "//": "Context: every model here except Claude Haiku 4.5 (200k) carries ~1M tokens. Stage 1",
   "//": "explores the repo over many turns and Stage 2 reads a diff plus the Stage 1 handoff,",
@@ -40,31 +35,26 @@
         {
           "id": "openai/gpt-5.6-luna",
           "name": "GPT-5.6 Luna",
-          "stages": ["stage1"],
           "reasoning": true
         },
         {
           "id": "openai/gpt-5.6-sol",
           "name": "GPT-5.6 Sol",
-          "stages": ["stage1"],
           "reasoning": true
         },
         {
           "id": "deepseek/deepseek-v4.1-flash",
           "name": "DeepSeek V4.1 Flash",
-          "stages": ["stage1", "stage2"],
           "reasoning": true
         },
         {
           "id": "anthropic/claude-sonnet-5.5",
           "name": "Claude Sonnet 5.5",
-          "stages": ["stage2"],
           "reasoning": true
         },
         {
           "id": "anthropic/claude-haiku-4.5",
           "name": "Claude Haiku 4.5",
-          "stages": ["stage2"],
           "reasoning": true
         }
       ]
