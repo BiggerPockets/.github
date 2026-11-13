@@ -900,6 +900,24 @@ class MainTest(unittest.TestCase):
         self.assertEqual(result["default_model"], "a/default")
         self.assertEqual([c["id"] for c in result["candidates"]], ["c/middle"])
 
+    def test_prices_the_default_even_when_its_uptime_is_unknown(self):
+        def live(prompt):
+            return {"pricing": {"prompt": prompt}, "supported_parameters": ["reasoning"],
+                    "context_length": 1_000_000}
+        models_path = write_models([{"id": "a/default"}, {"id": "b/cheap"}])
+        freshness.fetch_catalog = lambda: ({"a/default": live("0.000002"),
+                                            "b/cheap": live("0.0000001"),
+                                            "c/middle": live("0.000001")}, None)
+        freshness.fetch_uptime = lambda model_id: None if model_id == "a/default" else 99.9
+        original_default = freshness.stage_default_model
+        freshness.stage_default_model = lambda input_name: "a/default"
+        try:
+            result, _ = self.run_main(models_path)
+        finally:
+            freshness.stage_default_model = original_default
+
+        self.assertEqual([c["id"] for c in result["candidates"]], ["c/middle"])
+
     def test_result_carries_the_token_mix_used(self):
         models_path = write_models([PINNED])
         live_entry = {"pricing": {"prompt": "0.00000009", "completion": "0.0000003",

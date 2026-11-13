@@ -69,6 +69,14 @@ class FindSuccessorsTest(unittest.TestCase):
             ["openai/gpt-5.6-luna", "deepseek/deepseek-v4.1-flash"], catalog)
         self.assertEqual(found, [])
 
+    def test_a_pinned_snapshot_is_not_offered_a_later_snapshot(self):
+        catalog = {"deepseek/deepseek-v4-flash-0731": entry("DeepSeek: V4 Flash 0731"),
+                   "deepseek/deepseek-v4-flash-1017": entry("DeepSeek: V4 Flash 1017"),
+                   "a/model-2-2025-07-31": entry("A: Model 2 (2025-07-31)"),
+                   "a/model-2-2025-10-17": entry("A: Model 2 (2025-10-17)")}
+        self.assertEqual(successors.find_successors(
+            ["deepseek/deepseek-v4-flash-0731", "a/model-2-2025-07-31"], catalog), [])
+
     def test_nothing_when_the_newest_release_is_already_pinned(self):
         catalog = {"openai/gpt-5.6-luna": entry("OpenAI: GPT-5.6 Luna"),
                    "openai/gpt-6-luna": entry("OpenAI: GPT-6 Luna")}

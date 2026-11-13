@@ -823,15 +823,20 @@ def main(argv):
     # than its default model and no weaker at coding. The cheapest and weakest model
     # anywhere in the catalog is the fallback, used only when the default can't be
     # read or priced.
+    # Priced straight from the catalog rather than from pinned_points, which leave out a
+    # model whose uptime couldn't be read.
     default_id = stage_default_model(STAGES[stage]["default_input"])
     result["default_model"] = default_id
-    default_point = next((p for p in pinned_points if p["id"] == default_id), None)
     max_effective_rate = cheapest_pinned_effective_rate
     min_coding_score = min_pinned_coding_score
-    if default_point is not None:
-        max_effective_rate = default_point["effective_rate_per_million"]
-        if default_point.get("coding_score") is not None:
-            min_coding_score = default_point["coding_score"]
+    default_entry = catalog.get(default_id) if default_id in pinned_ids else None
+    if default_entry is not None:
+        default_rate = effective_rate_per_million(live_rates(default_entry), token_mix)
+        if default_rate is not None:
+            max_effective_rate = default_rate
+        default_score_entry = coding_score_for(default_id, coding_score_index)
+        if default_score_entry and default_score_entry.get("index_code") is not None:
+            min_coding_score = default_score_entry["index_code"]
 
     result["candidates"] = find_candidates(
         catalog, pinned_ids, max_effective_rate, token_mix,

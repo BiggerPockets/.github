@@ -35,12 +35,16 @@ import urllib.request
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 VERSION = re.compile(r"\d+(?:\.\d+)*")
+# A trailing release date marks a snapshot of a model: -0731, -20250731, -2025-07-31,
+# -07-2025. Its digits are a date, not a version.
+SNAPSHOT = re.compile(r"-(?:\d{4}|\d{8}|\d{4}-\d{2}-\d{2}|\d{2}-\d{4})$")
 
 
 def family(model_id):
-    """The id with each version number replaced by '#', or None for an id that is
-    never a pin: a batch variant or a moving alias."""
-    if ":" in model_id or model_id.startswith("~"):
+    """The id with each version number replaced by '#', or None for an id that has
+    no successors here: a batch variant, a moving alias or a dated snapshot. A pinned
+    snapshot is kept on purpose, and a later snapshot isn't a new release."""
+    if ":" in model_id or model_id.startswith("~") or SNAPSHOT.search(model_id):
         return None
     return VERSION.sub("#", model_id)
 
