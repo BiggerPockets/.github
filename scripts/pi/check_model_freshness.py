@@ -15,9 +15,11 @@ the things that ARE checkable automatically:
   1. Pinned models missing from OpenRouter's catalog.
   2. Cheaper same-tier candidates: reasoning-capable models with >=100k context
      and at least MIN_UPTIME_PCT uptime that currently cost less than the
-     cheapest pinned model on an *effective* $/1M basis (see below) AND score no
-     worse on coding than the weakest pinned model, so there's something concrete
-     to look at when deciding whether to roll the default forward. A cheaper
+     stage's default model on an *effective* $/1M basis (see below) AND score no
+     worse on coding than it, so there's something concrete to look at when
+     deciding whether to roll the default forward. The default is the review
+     workflow input named in STAGES; if it can't be read or priced, the
+     cheapest and weakest pinned models stand in for it. A cheaper
      model that's down 5%+ of the time isn't actually a saving, and one that
      reviews worse is a downgrade rather than a candidate.
   3. Unreliable pinned models: any currently-pinned model whose uptime has
@@ -52,9 +54,10 @@ doesn't expose throughput/latency (always null), and after the >=95% filter
 the remaining uptime spread is too small to be a useful axis, so it stays a
 table-only reliability gate instead.
 
-Prints one JSON object to stdout: {"stage": str, "missing": [...],
-"candidates": [...], "unreliable_pinned": [...], "token_mix": {...} | null,
-"notable": bool}. Never raises and always exits 0 — this is a weekly
+Prints one JSON object to stdout: {"stage": str, "default_model": str | null,
+"missing": [...], "candidates": [...], "unreliable_pinned": [...],
+"token_mix": {...} | null, "notable": bool}. Why a token mix couldn't be
+fetched is written to stderr. Never raises and always exits 0 — this is a weekly
 nudge-to-look, not a check that should ever fail CI.
 
 Usage: check_model_freshness.py [--stage=stage1|stage2] <path-to-models.json>
@@ -65,8 +68,10 @@ are used; it defaults to stage2. See STAGES.
 import io
 import json
 import os
+from pathlib import Path
 import re
 import sys
+import urllib.error
 import urllib.request
 
 import matplotlib
@@ -108,18 +113,25 @@ DEFAULT_STAGE = "stage2"
 # Stage 1 lists both names because it is mid-migration from the Codex harness to pi:
 # a trailing window straddles the rename, so both are queried and each is read with
 # its own convention. The Codex entry ages out of the window on its own.
+#
+# `default_input` names the review workflow input whose default is the model the stage
+# runs when no Actions variable overrides it. Candidates are measured against that
+# model, since it is what a candidate would replace.
 STAGES = {
     "stage1": {
         "label": "Stage 1 first pass",
         "chart_path": "docs/model-freshness/stage1.svg",
         "spans": [("pi.first_pass", "disjoint"), ("codex.review", "nested")],
+        "default_input": "first_pass_model",
     },
     "stage2": {
         "label": "Stage 2 synthesis",
         "chart_path": "docs/model-freshness/stage2.svg",
         "spans": [("pi.synthesize", "disjoint")],
+        "default_input": "synthesis_model",
     },
 }
+REVIEW_WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/biggiepockets-review.yml"
 PLOT_PADDING_FRACTION = 0.08  # headroom inside the axes so extreme points aren't flush against them
 NO_SCORE_GAP_FRACTION = 0.22  # how far left of the real coding-score domain the "no score" column sits
 PINNED_COLOR = "#1f77b4"
@@ -252,6 +264,7 @@ def fetch_token_mix(stage):
     api_key = os.environ.get("DD_API_KEY")
     app_key = os.environ.get("DD_APP_KEY")
     if not api_key or not app_key:
+        print("token mix: DD_API_KEY or DD_APP_KEY is not set", file=sys.stderr)
         return None
 
     fresh_input = cache_read_total = output_total = sample_count = 0
@@ -281,7 +294,18 @@ def fetch_token_mix(stage):
             try:
                 with urllib.request.urlopen(request, timeout=30) as response:
                     payload = json.load(response)
-            except Exception:
+            except Exception as error:
+                # The reason goes to the log (stderr; stdout is the JSON result) so a
+                # missing token mix can be told apart from missing credentials. An
+                # HTTP error's body is Datadog's own message and never echoes the keys.
+                detail = ""
+                if isinstance(error, urllib.error.HTTPError):
+                    try:
+                        detail = ": " + error.read().decode(errors="replace")[:300]
+                    except Exception:
+                        pass
+                print(f"token mix: Datadog span search for {span_name} failed: {error}{detail}",
+                      file=sys.stderr)
                 break
 
             spans = payload.get("data") or []
@@ -452,6 +476,23 @@ def load_pinned(path, stage):
     return [m for m in models if stage in (m.get("stages") or [stage])]
 
 
+def stage_default_model(input_name, workflow_path=REVIEW_WORKFLOW):
+    """The `default:` of a workflow_call input in the review workflow, or None if the
+    file or the input can't be read. Read as text rather than YAML so the check needs
+    nothing beyond matplotlib: the input is the key on its own line, and its default is
+    the first `default:` nested under it."""
+    try:
+        text = Path(workflow_path).read_text()
+    except OSError:
+        return None
+    match = re.search(
+        rf"^(?P<indent> +){re.escape(input_name)}:\s*\n"
+        rf"(?:(?P=indent) +.*\n|\s*\n)*?"
+        rf"(?P=indent) +default:\s*['\"]?(?P<model>[^'\"\s#]+)",
+        text, re.MULTILINE)
+    return match.group("model") if match else None
+
+
 def live_rates(entry):
     """A catalog entry's input/cacheRead/output rates in $/1M, as OpenRouter lists them
     today. Every price this check uses comes from here: models.json pins no rates,
@@ -469,12 +510,12 @@ def is_reasoning_capable(entry):
     return "reasoning" in params or "include_reasoning" in params
 
 
-def find_candidates(catalog, pinned_ids, cheapest_pinned_effective_rate, token_mix,
-                    coding_score_index=None, min_pinned_coding_score=None):
-    """Models worth looking at instead of what is pinned: reasoning-capable, enough
-    context, healthy uptime, cheaper than the cheapest pinned model on the effective
-    rate, and — when both scores are known — no weaker at coding than the weakest
-    pinned model.
+def find_candidates(catalog, pinned_ids, max_effective_rate, token_mix,
+                    coding_score_index=None, min_coding_score=None):
+    """Models worth looking at instead of the stage's default: reasoning-capable,
+    enough context, healthy uptime, cheaper than `max_effective_rate` (the default's
+    effective rate) and — when both scores are known — no weaker at coding than
+    `min_coding_score` (the default's score).
 
     The capability floor is what makes this a shortlist rather than a price list.
     Ranking on cost alone fills the five slots with whatever is cheapest, which is
@@ -504,14 +545,14 @@ def find_candidates(catalog, pinned_ids, cheapest_pinned_effective_rate, token_m
         if input_rate is None or input_rate <= 0:
             continue
         effective_rate = effective_rate_per_million(rates, token_mix)
-        if cheapest_pinned_effective_rate is not None and effective_rate >= cheapest_pinned_effective_rate:
+        if max_effective_rate is not None and effective_rate >= max_effective_rate:
             continue
         score_entry = coding_score_for(model_id, coding_score_index) if coding_score_index else None
         coding_score = score_entry.get("index_code") if score_entry else None
         if coding_score_index:
             if coding_score is None:
                 continue
-            if min_pinned_coding_score is not None and coding_score < min_pinned_coding_score:
+            if min_coding_score is not None and coding_score < min_coding_score:
                 continue
         pool.append({
             "id": model_id,
@@ -778,9 +819,23 @@ def main(argv):
     pinned_scores = [p["coding_score"] for p in pinned_points if p.get("coding_score") is not None]
     min_pinned_coding_score = min(pinned_scores) if pinned_scores else None
 
+    # A candidate is worth a look when it beats what the stage actually runs: cheaper
+    # than its default model and no weaker at coding. The cheapest and weakest model
+    # anywhere in the catalog is the fallback, used only when the default can't be
+    # read or priced.
+    default_id = stage_default_model(STAGES[stage]["default_input"])
+    result["default_model"] = default_id
+    default_point = next((p for p in pinned_points if p["id"] == default_id), None)
+    max_effective_rate = cheapest_pinned_effective_rate
+    min_coding_score = min_pinned_coding_score
+    if default_point is not None:
+        max_effective_rate = default_point["effective_rate_per_million"]
+        if default_point.get("coding_score") is not None:
+            min_coding_score = default_point["coding_score"]
+
     result["candidates"] = find_candidates(
-        catalog, pinned_ids, cheapest_pinned_effective_rate, token_mix,
-        coding_score_index, min_pinned_coding_score)
+        catalog, pinned_ids, max_effective_rate, token_mix,
+        coding_score_index, min_coding_score)
     result["notable"] = bool(
         result["missing"] or result["candidates"] or result["unreliable_pinned"]
     )

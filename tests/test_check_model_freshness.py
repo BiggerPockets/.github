@@ -720,6 +720,44 @@ class FetchTokenMixStageTest(unittest.TestCase):
         self.assertIsNone(freshness.fetch_token_mix("stage1"))
 
 
+class StageDefaultModelTest(unittest.TestCase):
+    WORKFLOW = """on:
+  workflow_call:
+    inputs:
+      synthesis_model:
+        description: >-
+          Model for Stage 2.
+
+          The slug must be pinned.
+        required: false
+        default: anthropic/claude-sonnet-5.5
+        type: string
+      first_pass_model:
+        description: Model for Stage 1.
+        default: 'openai/gpt-6-luna'
+        type: string
+"""
+
+    def workflow(self):
+        path = Path(tempfile.mkdtemp()) / 'review.yml'
+        path.write_text(self.WORKFLOW)
+        return path
+
+    def test_reads_each_input_s_default(self):
+        path = self.workflow()
+        self.assertEqual(freshness.stage_default_model("synthesis_model", path),
+                         "anthropic/claude-sonnet-5.5")
+        self.assertEqual(freshness.stage_default_model("first_pass_model", path), "openai/gpt-6-luna")
+
+    def test_none_for_an_unknown_input_or_a_missing_file(self):
+        self.assertIsNone(freshness.stage_default_model("nope", self.workflow()))
+        self.assertIsNone(freshness.stage_default_model("synthesis_model", "/does/not/exist.yml"))
+
+    def test_every_stage_resolves_a_default_from_the_real_workflow(self):
+        for stage, config in freshness.STAGES.items():
+            self.assertIsNotNone(freshness.stage_default_model(config["default_input"]), stage)
+
+
 class MainStageTest(unittest.TestCase):
     def setUp(self):
         self.originals = (freshness.fetch_catalog, freshness.fetch_uptime,
@@ -840,6 +878,27 @@ class MainTest(unittest.TestCase):
 
         self.assertEqual(result["unreliable_pinned"], [{"id": "z-ai/glm-5.3-flash", "uptime_pct": 90.0}])
         self.assertTrue(result["notable"])
+
+    def test_measures_candidates_against_the_stage_default_not_the_cheapest_pin(self):
+        # The stage runs "a/default" ($2/1M); "b/cheap" ($0.10/1M) is pinned only so the
+        # catalog has something cheap in it. A $1/1M model is cheaper than what the
+        # stage runs, so it is a candidate even though b/cheap undercuts it.
+        def live(prompt):
+            return {"pricing": {"prompt": prompt}, "supported_parameters": ["reasoning"],
+                    "context_length": 1_000_000}
+        models_path = write_models([{"id": "a/default"}, {"id": "b/cheap"}])
+        freshness.fetch_catalog = lambda: ({"a/default": live("0.000002"),
+                                            "b/cheap": live("0.0000001"),
+                                            "c/middle": live("0.000001")}, None)
+        original_default = freshness.stage_default_model
+        freshness.stage_default_model = lambda input_name: "a/default"
+        try:
+            result, _ = self.run_main(models_path)
+        finally:
+            freshness.stage_default_model = original_default
+
+        self.assertEqual(result["default_model"], "a/default")
+        self.assertEqual([c["id"] for c in result["candidates"]], ["c/middle"])
 
     def test_result_carries_the_token_mix_used(self):
         models_path = write_models([PINNED])
