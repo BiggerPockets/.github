@@ -87,9 +87,9 @@ jobs:
       registry_ref: main
       # OpenRouter slug for the Stage 2 (pi) pass, used when the SYNTHESIS_MODEL Actions
       # variable is unset (the reusable workflow reads that variable itself, and it wins
-      # when set). Omit it to fall back to claude-sonnet-5.5; the slug must be one of the
+      # when set). Omit it to fall back to gpt-5.6-luna; the slug must be one of the
       # models listed in `scripts/pi/models.json`.
-      # synthesis_model: anthropic/claude-sonnet-5.5
+      # synthesis_model: openai/gpt-5.6-luna
       # OpenRouter slug for the Stage 1 first pass, used when the FIRST_PASS_MODEL Actions
       # variable is unset (the reusable workflow reads that variable itself, and it wins
       # when set). Omit it to fall back to gpt-5.6-luna; the slug must be one of the models

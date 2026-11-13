@@ -73,7 +73,7 @@ on:
           resolved and the run is failed early, by name, rather than dying mid-review.
           Adding a model is a one-line catalog entry.
         required: false
-        default: anthropic/claude-sonnet-5.5
+        default: openai/gpt-5.6-luna
         type: string
       first_pass_model:
         description: >-
