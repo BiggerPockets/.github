@@ -177,8 +177,12 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Checkout
+      # Always the default branch, whatever ref a manual run was dispatched from: the
+      # PR targets it, and its branch is force-pushed, so it must hold nothing else.
+      - name: Checkout the default branch
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Add newer releases of pinned models to the catalog
         run: python3 scripts/pi/model_successors.py --write scripts/pi/models.json > successors.json
