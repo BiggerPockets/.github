@@ -58,6 +58,11 @@
           "reasoning": true
         },
         {
+          "id": "google/gemini-4-hydrogen",
+          "name": "Gemini 4 Hydrogen",
+          "reasoning": true
+        },
+        {
           "id": "anthropic/claude-sonnet-5.5",
           "name": "Claude Sonnet 5.5",
           "reasoning": true
