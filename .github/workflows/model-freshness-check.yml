@@ -4,10 +4,14 @@ name: Weekly pi model freshness check
 # Uptime degrades and better/cheaper models ship on their own schedule, so this runs
 # weekly against OpenRouter's live catalog and prices, and opens an issue when a
 # pinned model has dropped out of the catalog or its uptime has slipped below 95%,
-# or a cheaper reasoning-capable model with comparable context and healthy uptime
-# has shown up. It never edits models.json itself — swapping a review model is a
-# judgment call on review quality that no API can make, so this only surfaces what
-# changed for a human to act on.
+# or a reasoning-capable model that is cheaper than a stage's default, no weaker at
+# coding and healthy has shown up. Swapping a stage's model is a judgment call on
+# review quality that no API can make, so that stays with a person.
+#
+# It also opens a pull request adding newer releases of pinned models to models.json
+# (gpt-5.6-sol -> gpt-6.1-sol, say), found by scripts/pi/model_successors.py. Listing a
+# model changes no review, since each stage runs the model its input or Actions
+# variable names, so the PR is safe to merge and leaves the switch to a person.
 #
 # Both stages are checked, separately. They pin different models, run different
 # workloads, and have very different token mixes, so a single blended verdict would
@@ -130,7 +134,7 @@ jobs:
 
             candidate_count=$(jq '.candidates | length' freshness.json)
             if [ "$candidate_count" -gt 0 ]; then
-              echo "### Cheaper reasoning-capable models (>=100k context, >=95% uptime) than the cheapest pinned model"
+              echo "### Cheaper reasoning-capable models (>=100k context, >=95% uptime, no weaker at coding) than this stage's default, \`$(jq -r '.default_model // "unknown"' freshness.json)\`"
               echo
               echo "| Model | Name | \$/1M effective | \$/1M input | Context | Uptime (24h) |"
               echo "| --- | --- | --- | --- | --- | --- |"
@@ -150,7 +154,7 @@ jobs:
                 echo "_No model is marked inadequate on context this run: no sampled span reported a turn count, and without one there is no way to tell a long agentic session from a single huge prompt. Spans recorded from now on carry \`turn_count\`._"
               fi
             else
-              echo "_Effective \$/1M falls back to the raw input rate this run — Datadog credentials weren't available to compute the real token mix._"
+              echo "_Effective \$/1M falls back to the raw input rate this run — the Datadog token mix couldn't be fetched. The \`Check model freshness\` step's log says why._"
             fi
             echo
 
@@ -164,3 +168,26 @@ jobs:
           else
             gh issue create --title "$title" --body-file "$body"
           fi
+
+  # Newer releases of the pinned models, offered as a pull request that lists them in
+  # models.json. One job for both stages, because the catalog is shared.
+  successors:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Always the default branch, whatever ref a manual run was dispatched from: the
+      # PR targets it, and its branch is force-pushed, so it must hold nothing else.
+      - name: Checkout the default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Add newer releases of pinned models to the catalog
+        run: python3 scripts/pi/model_successors.py --write scripts/pi/models.json > successors.json
+
+      - name: Open or update the catalog pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/pi/open-successors-pr.sh successors.json

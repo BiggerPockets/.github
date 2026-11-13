@@ -277,13 +277,23 @@ Once installed, trigger a review either way:
 ### Weekly model freshness check
 
 `.github/workflows/model-freshness-check.yml` runs every Monday and checks the models
-pinned in `scripts/pi/models.json` against OpenRouter's live catalog and prices. It never
-edits that file — choosing a review model is a judgment call on review quality that no API
-can make — it opens (or comments on) an issue when something is worth a look:
+pinned in `scripts/pi/models.json` against OpenRouter's live catalog and prices. It does two
+things.
+
+It opens (or comments on) an issue when something is worth a look:
 
 - a pinned model has dropped out of the catalog, or its uptime has slipped below 95%;
-- a cheaper reasoning-capable model with comparable context and healthy uptime has shipped,
-  **and** reviews no worse than the weakest pinned model.
+- a reasoning-capable model with comparable context and healthy uptime has shipped that is
+  cheaper than the stage's default model **and** reviews no worse than it. The default is
+  the review workflow's `first_pass_model` or `synthesis_model` input default.
+
+It also opens (or refreshes) a pull request adding **newer releases of pinned models** to
+`models.json`, such as `openai/gpt-6.1-sol` when `openai/gpt-5.6-sol` is pinned
+(`scripts/pi/model_successors.py`). A newer release is a model in the same family with a
+higher version; other tiers (`-pro`), dated snapshots, batch variants and `-latest` aliases
+don't count. Listing a model changes no review, so that PR is safe to merge. Moving a stage
+onto the new model is a judgment call on review quality that no API can make, and stays a
+separate change.
 
 **Each stage is checked separately** (`--stage=stage1|stage2`), because they pin different
 models and run very different workloads, and each gets its own chart and its own issue
@@ -292,10 +302,10 @@ leaderboard (`index_code`), so price is read against the capability that matters
 review rather than against raw context length.
 
 The shortlist is ranked **strongest first, not cheapest first**. Every candidate has already
-passed the "cheaper than what's pinned" filter, so ranking on price again just re-answers
+passed the "cheaper than the default" filter, so ranking on price again just re-answers
 "what is cheapest" — which fills all five slots with the bottom of the catalog and buries the
 model actually worth switching to. Two models are left off entirely: one that reviews worse
-than the weakest pinned model (a downgrade, not a candidate), and one the leaderboard doesn't
+than the default model (a downgrade, not a candidate), and one the leaderboard doesn't
 cover (no capability number to weigh its price against). A *pinned* model with no score is
 still charted, in a separate "no score" column — what is already running has to be shown
 either way. If the leaderboard is unreachable the check falls back to price ranking, since a
