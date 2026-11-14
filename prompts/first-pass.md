@@ -67,12 +67,13 @@ verbatim and handed to a second reviewer, so do not add conversational preamble.
 19. Check whether the diff works around a defect that belongs upstream — in our API, a
    shared library, or a service — instead of fixing it at its source, per these rules:
    {{@prompts/_shared/upstream-fix-rules.md}}
-20. Report concrete issues — bugs, regressions, security problems, member-privacy
+20. {{@prompts/_shared/rate-limiting-rules.md}}
+21. Report concrete issues — bugs, regressions, security problems, member-privacy
    violations, incomplete tasks/half-measures/placeholders/deferred work, downstream
    workarounds for a defect we own upstream, specs that cover deleted behavior, specs that cannot fail usefully, and genuine misses of the ticket's intent or clear scope creep — each with
    a file/line reference and a brief rationale. Do not list "doesn't match acceptance criteria" as an issue by itself; only
    raise it when the deviation harms the intent. If nothing is blocking, say so briefly.
-21. End the report with every finding listed again as one fenced `findings` block of JSON, in
+22. End the report with every finding listed again as one fenced `findings` block of JSON, in
    the same order as the prose. It is read by machine, so it must parse and hold exactly the
    findings above:
 
