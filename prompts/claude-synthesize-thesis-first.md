@@ -74,14 +74,17 @@ Synthesize a single review decision for pull request #{{PR}}.
    shared library, or a service — instead of fixing it at its source, per these rules:
    {{@prompts/_shared/upstream-fix-rules.md}}
 21. {{@prompts/_shared/rate-limiting-rules.md}}
-22. Validate which of Codex's findings are real (discard false positives), add any genuine
+22. Check every comment the diff adds or rewrites, per these rules, and treat the ones a
+   reader does not need as blocking:
+   {{@prompts/_shared/comment-rules.md}}
+23. Validate which of Codex's findings are real (discard false positives), add any genuine
    issues Codex missed, and (when a ticket is available) judge genuine misses of the ticket's
    intent or clear scope creep — but give credit when the author went beyond the literal
    acceptance criteria in a sound way rather than flagging it as non-compliant.
-23. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
+24. Decide ONE verdict. Be pragmatic: use "request_changes" only when there is at least one
    genuine, blocking issue (such as a bug, regression, privacy violation, half-finished task,
-   placeholder, deferred work, a downstream workaround for a defect we own upstream, or a
-   spec that covers deleted behavior); otherwise "approve". A useless spec is reported,
+   placeholder, deferred work, a downstream workaround for a defect we own upstream, a
+   spec that covers deleted behavior, or a comment a reader does not need); otherwise "approve". A useless spec is reported,
    never blocking; a spec that covers deleted behavior is not a useless spec and blocks. A change that exceeds the AC without breaking the ticket's intent is a reason
    to approve, not to block.
 
