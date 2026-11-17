@@ -45,7 +45,9 @@ Do not report:
 - Comments the diff does not add or rewrite. Pre-existing noise is not this change's
   defect.
 
-Report all of a file's unneeded comments as one finding. Keep it compact: list the line
-numbers to delete, and give replacement wording only for an essay that should shrink to a
-line. Do not soften this to "consider trimming": a PR that adds comments of the kinds above
-gets `request_changes`.
+Report all of a file's unneeded comments as one finding: they share one remedy, so this is
+one defect, not several bundled together. Keep it compact: list the line numbers to
+delete, and give replacement wording only for an essay that should shrink to a line. A file
+already full of such comments does not excuse new ones; this rule holds a diff to its own
+standard, not the surrounding code's. Do not soften this to "consider trimming": a PR that
+adds comments of the kinds above gets `request_changes`.
