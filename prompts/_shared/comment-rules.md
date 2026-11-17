@@ -8,10 +8,10 @@ change tends to add a great deal of it.
 Report each of these as blocking, under category `maintainability`:
 
 - Restating the code. A comment that says in prose what the next lines or the name already
-  say: `# Adds Puerto Rico's row, unless it is already there.` above
-  `def self.add_puerto_rico` with a `find_or_create_by!`, `# The rows in the file at path`
-  above `def self.boundary_file_rows(path:)`, `# Writes every boundary in the file` above
-  a one-line loop, or a spec helper's comment describing what its name and body show.
+  say: `# Adds the default plan, unless it is already there.` above
+  `def self.add_default_plan` with a `find_or_create_by!`, `# The rows in the file at path`
+  above `def self.rows_in(path)`, `# Imports every row in the file` above a one-line loop,
+  or a spec helper's comment describing what its name and body show.
 - Narrating history, process, or the change itself. Where the data came from step by step,
   which ticket or deploy step runs it, what a previous version did, what was considered and
   dropped, what "now" happens, or which PR added it. That belongs in the commit message or
@@ -22,12 +22,11 @@ Report each of these as blocking, under category `maintainability`:
   it and why, a constant comment that re-documents what another file already documents, or
   a chain of "see X, which is loaded by Y" cross-references.
 - An essay where a line would do. A comment that carries a genuine reason but takes a
-  paragraph to say what one or two lines can: name the comment and give the short version,
-  e.g. a twelve-line account of why boundaries are segmentized becomes "Segmentizing keeps
-  long edges along a parallel (e.g. 49°N) from bowing toward the pole once they're
-  great-circle arcs."
+  paragraph to say what one or two lines can, such as a dozen lines on why a cache key
+  includes the locale where "Keyed on locale so a translated page never serves another
+  language's copy." says it all.
 - Repeating the obvious about a library or language. Explaining what `find_or_create_by!`,
-  `update_all`, `after_start`, `disable_ddl_transaction!`, or a standard React hook does.
+  `update_all`, `disable_ddl_transaction!`, or a standard React hook does.
 - Restating the type, the arguments, or the return value when the signature and the
   body already make them plain.
 
@@ -36,7 +35,7 @@ Do not report:
 - A comment that gives a non-obvious reason, a workaround and what it works around, a
   hazard the next editor would otherwise walk into, an ordering or concurrency constraint,
   or a unit or format the code cannot express, as long as it is about as short as that
-  reason allows. `# Too big to load with every state; read and written through SQL only.`
+  reason allows. `# Too big to load with every record; read and written through SQL only.`
   above an `ignored_columns` line is the kind of comment to keep.
 - A comment another rule in this review requires, such as a backfill stating whether it
   fires callbacks or a workaround naming the upstream defect. Those still have to be short.
@@ -46,7 +45,7 @@ Do not report:
 - Comments the diff does not add or rewrite. Pre-existing noise is not this change's
   defect.
 
-Report the comments of one kind in one file as a single finding, listing each one's line,
-rather than one finding per comment. For each, say whether to delete it or what the
-shorter comment should say, so the author can fix every one in one pass. Do not soften this
-to "consider trimming": a PR that adds comments of the kinds above gets `request_changes`.
+Report all of a file's unneeded comments as one finding. Keep it compact: list the line
+numbers to delete, and give replacement wording only for an essay that should shrink to a
+line. Do not soften this to "consider trimming": a PR that adds comments of the kinds above
+gets `request_changes`.
