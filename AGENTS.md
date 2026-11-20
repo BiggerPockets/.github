@@ -55,3 +55,7 @@ it to the minimum: read-only, and only the repositories the job actually needs.
 - A gym run (`gym-experiment.yml`) evaluates exactly one model. Evaluate only the model
   you were asked to evaluate. Do not add the recorded model, a "control", or any second
   model as a comparison run unless explicitly asked.
+- To show a screenshot or screen recording in a pull request, use `gh` 2.99+:
+  `gh pr create|edit|comment --attach shot.png`. Add alt text after `#`
+  (`--attach 'shot.png#Alt text'`). Only attach images that contain nothing private, since
+  this repository is public.
